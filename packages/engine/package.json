@@ -1,0 +1,58 @@
+{
+  "name": "@pokertools/engine",
+  "version": "1.0.0",
+  "description": "Enterprise-grade Texas Hold'em poker engine",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "NODE_OPTIONS='--no-warnings' jest"
+  },
+  "keywords": [
+    "poker",
+    "texas-holdem",
+    "engine",
+    "game-engine",
+    "redux",
+    "immutable"
+  ],
+  "author": "A.Aurelius",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aaurelions/pokertools.git",
+    "directory": "packages/engine"
+  },
+  "homepage": "https://github.com/aaurelions/pokertools/tree/main/packages/engine#readme",
+  "bugs": {
+    "url": "https://github.com/aaurelions/pokertools/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@pokertools/evaluator": "*",
+    "@pokertools/types": "*"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^24.10.1",
+    "fast-check": "^3.15.0",
+    "jest": "^30.2.0",
+    "ts-jest": "^29.4.5",
+    "typescript": "^5.9.3"
+  }
+}

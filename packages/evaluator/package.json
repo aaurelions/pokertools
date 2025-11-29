@@ -1,0 +1,62 @@
+{
+  "name": "@pokertools/evaluator",
+  "version": "1.0.0",
+  "description": "High-performance Poker Hand Evaluator (5, 6, and 7 cards)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "NODE_OPTIONS='--no-warnings' jest"
+  },
+  "keywords": [
+    "poker",
+    "hand",
+    "evaluator",
+    "texas",
+    "holdem",
+    "typescript",
+    "poker-hand",
+    "poker-evaluator",
+    "card-game",
+    "performance"
+  ],
+  "author": "A.Aurelius",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aaurelions/pokertools.git",
+    "directory": "packages/evaluator"
+  },
+  "homepage": "https://github.com/aaurelions/pokertools/tree/main/packages/evaluator#readme",
+  "bugs": {
+    "url": "https://github.com/aaurelions/pokertools/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^24.10.1",
+    "jest": "^30.2.0",
+    "ts-jest": "^29.4.5",
+    "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "glob": "^10.3.10",
+    "inflight": "^1.0.6",
+    "rimraf": "^5.0.5"
+  }
+}

@@ -1,0 +1,67 @@
+name: Publish to NPM
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Target to publish"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - types
+          - evaluator
+          - engine
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # Required for provenance
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build All
+        run: npm run build
+
+      - name: Run Tests
+        run: npm test
+
+      # 1. Publish Types (Base Dependency)
+      - name: Publish @pokertools/types
+        if: ${{ inputs.target == 'all' || inputs.target == 'types' || github.event_name == 'release' }}
+        run: npm publish --access public --provenance
+        working-directory: ./packages/types
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # 2. Publish Evaluator (Stand-alone / Dependency)
+      - name: Publish @pokertools/evaluator
+        if: ${{ inputs.target == 'all' || inputs.target == 'evaluator' || github.event_name == 'release' }}
+        run: npm publish --access public --provenance
+        working-directory: ./packages/evaluator
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # 3. Publish Engine (Depends on the above)
+      - name: Publish @pokertools/engine
+        if: ${{ success() && (inputs.target == 'all' || inputs.target == 'engine' || github.event_name == 'release') }}
+        run: npm publish --access public --provenance
+        working-directory: ./packages/engine
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

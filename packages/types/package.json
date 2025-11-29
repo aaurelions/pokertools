@@ -1,0 +1,48 @@
+{
+  "name": "@pokertools/types",
+  "version": "1.0.0",
+  "description": "TypeScript type definitions for poker game engine",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "test": "echo \"No tests for types package (types only)\" && exit 0"
+  },
+  "keywords": [
+    "poker",
+    "types",
+    "typescript",
+    "texas-holdem"
+  ],
+  "author": "A.Aurelius",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aaurelions/pokertools.git",
+    "directory": "packages/types"
+  },
+  "homepage": "https://github.com/aaurelions/pokertools/tree/main/packages/types#readme",
+  "bugs": {
+    "url": "https://github.com/aaurelions/pokertools/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

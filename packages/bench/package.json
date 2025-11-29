@@ -1,0 +1,42 @@
+{
+  "name": "@pokertools/bench",
+  "version": "1.0.0",
+  "description": "Performance benchmarks for poker hand evaluators",
+  "main": "index.js",
+  "private": true,
+  "scripts": {
+    "bench": "ts-node ./index.ts",
+    "test": "echo \"No tests for benchmark package\" && exit 0",
+    "build": "echo \"No build needed for benchmark package\" && exit 0"
+  },
+  "keywords": [
+    "poker",
+    "benchmark",
+    "performance",
+    "evaluator"
+  ],
+  "author": "A.Aurelius",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aaurelions/pokertools.git",
+    "directory": "packages/bench"
+  },
+  "homepage": "https://github.com/aaurelions/pokertools/tree/main/packages/bench#readme",
+  "bugs": {
+    "url": "https://github.com/aaurelions/pokertools/issues"
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "@pokertools/evaluator": "*",
+    "benchmark": "^2.1.4",
+    "microtime": "^3.1.1",
+    "phe": "^0.6.0",
+    "poker-evaluator": "^2.1.1",
+    "pokersolver": "^2.1.4"
+  },
+  "devDependencies": {
+    "@types/benchmark": "^2.1.5",
+    "ts-node": "^10.9.2"
+  }
+}
