@@ -8,6 +8,8 @@ import {
   StandAction,
   TimeoutAction,
   TimeBankAction,
+  AddChipsAction,
+  ReserveSeatAction,
 } from "@pokertools/types";
 import { IllegalActionError } from "../errors/IllegalActionError";
 import { ErrorCodes } from "../errors/ErrorCodes";
@@ -43,6 +45,14 @@ export function validateAction(state: GameState, action: Action): void {
     case ActionType.TIMEOUT:
     case ActionType.TIME_BANK:
       validateTimeAction(state, action);
+      break;
+
+    case ActionType.ADD_CHIPS:
+      validateAddChipsAction(state, action);
+      break;
+
+    case ActionType.RESERVE_SEAT:
+      validateReserveSeatAction(state, action);
       break;
 
     default:
@@ -236,12 +246,20 @@ function validateSitAction(state: GameState, action: SitAction): void {
     );
   }
 
-  if (state.players[action.seat] !== null) {
-    throw new IllegalActionError(
-      ErrorCodes.SEAT_OCCUPIED,
-      `Seat ${action.seat} is already occupied`,
-      { seat: action.seat }
-    );
+  const existingPlayer = state.players[action.seat];
+
+  if (existingPlayer !== null) {
+    // Allow claiming the seat if it is RESERVED by THIS player
+    const isMyReservation =
+      existingPlayer.status === PlayerStatus.RESERVED && existingPlayer.id === action.playerId;
+
+    if (!isMyReservation) {
+      throw new IllegalActionError(
+        ErrorCodes.SEAT_OCCUPIED,
+        `Seat ${action.seat} is already occupied`,
+        { seat: action.seat }
+      );
+    }
   }
 
   if (action.stack <= 0) {
@@ -283,6 +301,35 @@ function validateTimeAction(state: GameState, action: TimeoutAction | TimeBankAc
       ErrorCodes.NOT_YOUR_TURN,
       `Player ${action.playerId} cannot use time action when it's not their turn`,
       { playerId: action.playerId, actionTo: state.actionTo }
+    );
+  }
+}
+
+function validateAddChipsAction(state: GameState, action: AddChipsAction): void {
+  const result = getPlayerById(state, action.playerId);
+  if (!result) {
+    throw new IllegalActionError(
+      ErrorCodes.PLAYER_NOT_FOUND,
+      `Player ${action.playerId} not found`,
+      { playerId: action.playerId }
+    );
+  }
+}
+
+function validateReserveSeatAction(state: GameState, action: ReserveSeatAction): void {
+  if (action.seat < 0 || action.seat >= state.maxPlayers) {
+    throw new IllegalActionError(
+      ErrorCodes.INVALID_SEAT,
+      `Seat ${action.seat} is invalid (max: ${state.maxPlayers - 1})`,
+      { seat: action.seat, maxPlayers: state.maxPlayers }
+    );
+  }
+
+  if (state.players[action.seat] !== null) {
+    throw new IllegalActionError(
+      ErrorCodes.SEAT_OCCUPIED,
+      `Seat ${action.seat} is already occupied`,
+      { seat: action.seat }
     );
   }
 }

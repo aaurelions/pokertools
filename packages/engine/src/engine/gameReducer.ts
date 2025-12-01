@@ -2,7 +2,7 @@ import { GameState, Action, ActionType } from "@pokertools/types";
 import { validateAction } from "../actions/validation";
 import { handleDeal } from "../actions/dealing";
 import { handleFold, handleCheck, handleCall, handleBet, handleRaise } from "../actions/betting";
-import { handleSit, handleStand } from "../actions/management";
+import { handleSit, handleStand, handleAddChips, handleReserveSeat } from "../actions/management";
 import { handleShow, handleMuck } from "../actions/showdownActions";
 import { handleNextBlindLevel } from "../actions/tournament";
 import { handleTimeout, handleTimeBank } from "../actions/special";
@@ -35,6 +35,14 @@ export function gameReducer(state: GameState, action: Action): GameState {
 
     case ActionType.STAND:
       newState = handleStand(state, action);
+      break;
+
+    case ActionType.ADD_CHIPS:
+      newState = handleAddChips(state, action);
+      break;
+
+    case ActionType.RESERVE_SEAT:
+      newState = handleReserveSeat(state, action);
       break;
 
     // Dealing

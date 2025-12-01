@@ -1,3 +1,5 @@
+import { SitInOption } from "./Player";
+
 /**
  * Action types that can be performed in the game
  */
@@ -5,6 +7,8 @@ export const enum ActionType {
   // Management
   SIT = "SIT",
   STAND = "STAND",
+  ADD_CHIPS = "ADD_CHIPS",
+  RESERVE_SEAT = "RESERVE_SEAT",
 
   // Dealing
   DEAL = "DEAL",
@@ -46,6 +50,7 @@ export interface SitAction extends BaseAction {
   readonly playerName: string;
   readonly seat: number;
   readonly stack: number;
+  readonly sitInOption?: SitInOption; // When to sit in (default: IMMEDIATE)
 }
 
 /**
@@ -54,6 +59,29 @@ export interface SitAction extends BaseAction {
 export interface StandAction extends BaseAction {
   readonly type: ActionType.STAND;
   readonly playerId: string;
+}
+
+/**
+ * Add chips to player stack (rebuy/top-up)
+ * Chips are held in pendingAddOn and merged into stack at start of next hand
+ */
+export interface AddChipsAction extends BaseAction {
+  readonly type: ActionType.ADD_CHIPS;
+  readonly playerId: string;
+  readonly amount: number;
+}
+
+/**
+ * Reserve a seat at the table
+ * Marks seat as RESERVED with expiry timestamp
+ * API can use this to lock a seat while processing payment
+ */
+export interface ReserveSeatAction extends BaseAction {
+  readonly type: ActionType.RESERVE_SEAT;
+  readonly playerId: string;
+  readonly playerName: string;
+  readonly seat: number;
+  readonly expiryTimestamp: number; // Unix timestamp when reservation expires
 }
 
 /**
@@ -160,6 +188,8 @@ export interface NextBlindLevelAction extends BaseAction {
 export type Action =
   | SitAction
   | StandAction
+  | AddChipsAction
+  | ReserveSeatAction
   | DealAction
   | FoldAction
   | CheckAction

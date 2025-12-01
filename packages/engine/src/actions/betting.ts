@@ -332,10 +332,14 @@ function getTotalPot(state: GameState): number {
 
 /**
  * Award pots to remaining eligible players when hand ends by folds
- * Properly handles side pot eligibility and uncontested pots
+ * Properly handles side pot eligibility and uncalled bets
+ *
+ * Key principle: Uncalled bets are NOT raked and are returned to the bettor immediately.
+ * Only the contested portion of the pot (money actually at risk) is subject to rake.
  */
 function awardPotToLastPlayer(state: GameState, winningSeat: number): GameState {
   const newPlayers = [...state.players];
+  const newActionHistory = [...state.actionHistory];
   const winners: Winner[] = [];
 
   // Process each pot separately, checking eligibility
@@ -399,69 +403,96 @@ function awardPotToLastPlayer(state: GameState, winningSeat: number): GameState 
     }
   }
 
-  // Award current bets to last active player
-  // Note: We need to subtract the winner's own bet since that's just a refund, not winnings
-  let currentBetsTotal = 0;
-  for (const bet of state.currentBets.values()) {
-    currentBetsTotal += bet;
-  }
-
-  const newActionHistory = [...state.actionHistory];
-  let totalRake = 0;
-
-  if (currentBetsTotal > 0) {
-    const player = newPlayers[winningSeat]!;
+  // Handle current bets with proper uncalled bet logic
+  if (state.currentBets.size > 0) {
     const winnersBet = state.currentBets.get(winningSeat) ?? 0;
 
-    // Calculate rake on the pot (before awarding) - GLOBAL cap applied
-    const { rake } = calculateRake(state, currentBetsTotal, totalRakeFromPots);
-    totalRake = totalRakeFromPots + rake;
-    const potAfterRake = currentBetsTotal - rake;
+    // Find the second-highest bet (highest opponent bet)
+    // This determines how much of the winner's bet was actually "called"
+    let maxOpponentBet = 0;
+    for (const [seat, amount] of state.currentBets.entries()) {
+      if (seat !== winningSeat && amount > maxOpponentBet) {
+        maxOpponentBet = amount;
+      }
+    }
 
-    // Award the pot after rake deduction
-    newPlayers[winningSeat] = {
-      ...player,
-      stack: player.stack + potAfterRake,
-    };
+    // Calculate uncalled and called portions
+    let uncalledAmount = 0;
+    let calledPortion = 0;
 
-    // Record uncalled bet refund if winner had a bet
-    if (winnersBet > 0) {
-      const uncalledBetAction: ActionRecord = {
+    if (winnersBet > maxOpponentBet) {
+      uncalledAmount = winnersBet - maxOpponentBet;
+      calledPortion = maxOpponentBet;
+    } else {
+      calledPortion = winnersBet;
+    }
+
+    // Step 1: Return uncalled bet immediately (NO RAKE on uncalled bets)
+    if (uncalledAmount > 0) {
+      const player = newPlayers[winningSeat]!;
+      newPlayers[winningSeat] = {
+        ...player,
+        stack: player.stack + uncalledAmount,
+      };
+
+      // Record the uncalled bet return
+      newActionHistory.push({
         action: {
           type: ActionType.UNCALLED_BET_RETURNED,
           playerId: player.id,
-          amount: winnersBet,
+          amount: uncalledAmount,
           timestamp: state.timestamp,
         },
         seat: winningSeat,
-        resultingPot: 0, // Pot will be empty after this
-        resultingStack: player.stack + winnersBet,
+        resultingPot: getTotalPot(state) - uncalledAmount,
+        resultingStack: player.stack + uncalledAmount,
         street: state.street,
-      };
-      newActionHistory.push(uncalledBetAction);
+      });
     }
 
-    // Record only the actual winnings (opponents' bets, not their own bet refund, after rake)
-    // Winnings = potAfterRake - winnersBet (refund doesn't count as winnings)
-    const actualWinnings = potAfterRake - winnersBet;
-
-    if (actualWinnings > 0) {
-      // Add to winners if not already there, or update amount
-      const existingIndex = winners.findIndex((w) => w.seat === winningSeat);
-      if (existingIndex >= 0) {
-        // Update existing winner's amount
-        winners[existingIndex] = {
-          ...winners[existingIndex],
-          amount: winners[existingIndex].amount + actualWinnings,
-        };
-      } else {
-        winners.push({
-          seat: winningSeat,
-          amount: actualWinnings,
-          hand: null,
-          handRank: null,
-        });
+    // Step 2: Calculate contested pot (winner's called portion + all opponent bets)
+    let contestedPot = calledPortion;
+    for (const [seat, amount] of state.currentBets.entries()) {
+      if (seat !== winningSeat) {
+        contestedPot += amount;
       }
+    }
+
+    // Step 3: Rake and award the contested portion only
+    if (contestedPot > 0) {
+      const { rake } = calculateRake(state, contestedPot, totalRakeFromPots);
+      const totalRake = totalRakeFromPots + rake;
+      const winnings = contestedPot - rake;
+
+      const player = newPlayers[winningSeat]!;
+      newPlayers[winningSeat] = {
+        ...player,
+        stack: player.stack + winnings,
+      };
+
+      // Update winners array
+      // Only count actual winnings (contested pot after rake, minus winner's own contribution)
+      const actualWinnings = winnings - calledPortion;
+
+      if (actualWinnings > 0) {
+        const existingIndex = winners.findIndex((w) => w.seat === winningSeat);
+        if (existingIndex >= 0) {
+          winners[existingIndex] = {
+            ...winners[existingIndex],
+            amount: winners[existingIndex].amount + actualWinnings,
+          };
+        } else {
+          winners.push({
+            seat: winningSeat,
+            amount: actualWinnings,
+            hand: null,
+            handRank: null,
+          });
+        }
+      }
+
+      // Update total rake for the hand
+      totalRakeFromPots = totalRake;
     }
   }
 
@@ -477,6 +508,6 @@ function awardPotToLastPlayer(state: GameState, winningSeat: number): GameState 
     winners,
     actionTo: null,
     actionHistory: newActionHistory,
-    rakeThisHand: state.rakeThisHand + totalRake, // totalRake already includes rake from both pots and currentBets
+    rakeThisHand: state.rakeThisHand + totalRakeFromPots,
   };
 }

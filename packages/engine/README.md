@@ -1,9 +1,9 @@
 # @pokertools/engine
 
 [![npm version](https://img.shields.io/npm/v/@pokertools/engine.svg)](https://www.npmjs.com/package/@pokertools/engine)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/pokertools/engine/main.yml?branch=main)](https://github.com/pokertools/engine/actions)
-[![Coverage](https://img.shields.io/codecov/c/github/pokertools/engine)](https://codecov.io/gh/pokertools/engine)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/aaurelions/pokertools/ci.yml?branch=main)](https://github.com/aaurelions/pokertools/actions)
+[![Coverage](https://img.shields.io/codecov/c/github/aaurelions/pokertools)](https://codecov.io/gh/aaurelions/pokertools)
 [![Bundle Size](https://img.shields.io/bundlephobia/minzip/@pokertools/engine)](https://bundlephobia.com/package/@pokertools/engine)
 [![TypeScript](https://img.shields.io/badge/TypeScript-100%25-blue.svg)](https://www.typescriptlang.org/)
 

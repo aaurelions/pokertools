@@ -1,6 +1,6 @@
 {
   "name": "@pokertools/bench",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Performance benchmarks for poker hand evaluators",
   "main": "index.js",
   "private": true,
@@ -34,9 +34,5 @@
     "phe": "^0.6.0",
     "poker-evaluator": "^2.1.1",
     "pokersolver": "^2.1.4"
-  },
-  "devDependencies": {
-    "@types/benchmark": "^2.1.5",
-    "ts-node": "^10.9.2"
   }
 }

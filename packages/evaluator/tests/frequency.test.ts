@@ -1,6 +1,8 @@
 import { evaluate5Cards, evaluate6Cards, evaluate7Cards } from "../src/core/evaluator";
 import { getHandRank, HandRank } from "../src/models/hand-rank";
 
+const runHeavy = process.env.ENABLE_HEAVY_TESTS ? test : test.skip;
+
 /**
  * These tests loop through millions of hands.
  * 5-card is fast (~200ms).
@@ -70,7 +72,7 @@ describe("Frequency Analysis (Combinatorics)", () => {
   });
 
   // Mark as skipped to keep CI/Dev fast. Run manually when changing core logic.
-  test("7 Cards: 133,784,560 combinations (Takes ~15s)", () => {
+  runHeavy("7 Cards: 133,784,560 combinations (Takes ~15s)", () => {
     const freq = resetFreq();
 
     // 52C7

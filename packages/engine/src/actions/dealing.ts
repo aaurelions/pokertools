@@ -1,4 +1,4 @@
-import { GameState, Street, PlayerStatus, DealAction, Pot } from "@pokertools/types";
+import { GameState, Street, PlayerStatus, DealAction, Pot, SitInOption } from "@pokertools/types";
 import { createDeck, shuffle, dealCards } from "../utils/deck";
 import { cardCodesToStrings } from "../utils/cardUtils";
 import { getBlindPositions } from "../rules/blinds";
@@ -23,18 +23,92 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
   const rng = state.config.randomProvider ?? Math.random;
   const deck = shuffle(createDeck(), rng);
 
+  // Create a copy of timeBanks to modify
+  const newTimeBanks = new Map(state.timeBanks);
+
+  // First, merge pendingAddOn into stack for all players
+  const newPlayers = state.players.map((player) => {
+    if (!player) return null;
+
+    // Skip reserved players (they haven't confirmed yet)
+    if (player.status === PlayerStatus.RESERVED) {
+      // Check if reservation has expired
+      if (player.reservationExpiry && action.timestamp! >= player.reservationExpiry) {
+        // Reservation expired, remove player
+        newTimeBanks.delete(player.seat);
+        return null;
+      }
+      // Keep reserved player as-is
+      return player;
+    }
+
+    // Merge pendingAddOn into stack
+    const newStack = player.stack + player.pendingAddOn;
+
+    return {
+      ...player,
+      stack: newStack,
+      pendingAddOn: 0, // Clear pending add-on
+    };
+  });
+
+  // Get blind positions for this hand
+  const blindPositions = getBlindPositions({
+    ...state,
+    buttonSeat: newButtonSeat,
+    players: newPlayers,
+  });
+
   // Get players who will be dealt in
   const playersToReceive: number[] = [];
-  for (let seat = 0; seat < state.players.length; seat++) {
-    const player = state.players[seat];
-    if (player && player.stack > 0 && !player.isSittingOut) {
+
+  for (let seat = 0; seat < newPlayers.length; seat++) {
+    const player = newPlayers[seat];
+
+    // Basic eligibility checks
+    if (!player || player.stack <= 0 || player.status === PlayerStatus.RESERVED) {
+      continue;
+    }
+
+    // We check WAIT_FOR_BB *before* checking isSittingOut.
+    // This allows us to "unsit" a player if they hit the Big Blind.
+
+    let shouldPlay = true;
+
+    if (!isTournament && player.sitInOption === SitInOption.WAIT_FOR_BB) {
+      const isInBigBlind = blindPositions?.bigBlindSeat === seat;
+
+      if (isInBigBlind) {
+        // PLAYER RE-ENTRY: They are in the Big Blind. Force them active.
+        // We must update the player object in newPlayers to reflect they are back.
+        newPlayers[seat] = {
+          ...player,
+          isSittingOut: false,
+        };
+        shouldPlay = true;
+      } else {
+        // Not in BB yet. Force them to sit out.
+        // Only update if not already sitting out to avoid object churn
+        if (!player.isSittingOut) {
+          newPlayers[seat] = {
+            ...player,
+            isSittingOut: true,
+          };
+        }
+        shouldPlay = false;
+      }
+    } else if (player.isSittingOut) {
+      // Standard sitting out check
+      shouldPlay = false;
+    }
+
+    if (shouldPlay) {
       playersToReceive.push(seat);
     }
   }
 
   // Deal 2 cards to each player
   let remainingDeck = deck;
-  const newPlayers = [...state.players];
 
   // Initialize hands for receiving players (active, not sitting out)
   for (const seat of playersToReceive) {
@@ -86,7 +160,8 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
   }
 
   // Post blinds and antes
-  const blindPositions = getBlindPositions({
+  // Recalculate blind positions with the new button seat
+  const finalBlindPositions = getBlindPositions({
     ...state,
     buttonSeat: newButtonSeat,
     players: newPlayers,
@@ -94,8 +169,8 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
 
   const currentBets = new Map<number, number>();
 
-  if (blindPositions) {
-    const { smallBlindSeat, bigBlindSeat } = blindPositions;
+  if (finalBlindPositions) {
+    const { smallBlindSeat, bigBlindSeat } = finalBlindPositions;
 
     // Post small blind
     // In tournaments: sitting-out players MUST post to prevent "blinding off" exploit

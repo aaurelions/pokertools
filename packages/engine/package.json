@@ -1,6 +1,6 @@
 {
   "name": "@pokertools/engine",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Enterprise-grade Texas Hold'em poker engine",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -46,13 +46,5 @@
   "dependencies": {
     "@pokertools/evaluator": "*",
     "@pokertools/types": "*"
-  },
-  "devDependencies": {
-    "@types/jest": "^30.0.0",
-    "@types/node": "^24.10.1",
-    "fast-check": "^3.15.0",
-    "jest": "^30.2.0",
-    "ts-jest": "^29.4.5",
-    "typescript": "^5.9.3"
   }
 }

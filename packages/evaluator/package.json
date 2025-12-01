@@ -1,6 +1,6 @@
 {
   "name": "@pokertools/evaluator",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "High-performance Poker Hand Evaluator (5, 6, and 7 cards)",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -46,17 +46,5 @@
   },
   "publishConfig": {
     "access": "public"
-  },
-  "devDependencies": {
-    "@types/jest": "^30.0.0",
-    "@types/node": "^24.10.1",
-    "jest": "^30.2.0",
-    "ts-jest": "^29.4.5",
-    "typescript": "^5.9.3"
-  },
-  "overrides": {
-    "glob": "^10.3.10",
-    "inflight": "^1.0.6",
-    "rimraf": "^5.0.5"
   }
 }

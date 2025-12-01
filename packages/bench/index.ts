@@ -1,3 +1,4 @@
+// @ts-ignore
 import Benchmark from "benchmark";
 // @ts-ignore
 import * as PheOriginal from "phe";

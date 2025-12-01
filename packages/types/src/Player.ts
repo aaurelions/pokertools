@@ -8,6 +8,15 @@ export const enum PlayerStatus {
   SITTING_OUT = "SITTING_OUT", // Not playing
   WAITING = "WAITING", // At table but not in hand yet
   BUSTED = "BUSTED", // Stack = 0
+  RESERVED = "RESERVED", // Seat reserved, awaiting payment confirmation
+}
+
+/**
+ * Sit-in timing options for cash games
+ */
+export const enum SitInOption {
+  IMMEDIATE = "IMMEDIATE", // Sit in immediately
+  WAIT_FOR_BB = "WAIT_FOR_BB", // Wait until Big Blind position to sit in
 }
 
 /**
@@ -25,4 +34,7 @@ export interface Player {
   readonly totalInvestedThisHand: number; // Total invested this hand (for side pots)
   readonly isSittingOut: boolean; // Sitting out flag
   readonly timeBank: number; // Seconds of time bank remaining
+  readonly pendingAddOn: number; // Chips waiting to be added at start of next hand (rebuy/top-up)
+  readonly sitInOption: SitInOption; // When to sit in (cash games only)
+  readonly reservationExpiry: number | null; // Timestamp when seat reservation expires (null if not reserved)
 }
