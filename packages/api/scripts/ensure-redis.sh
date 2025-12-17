@@ -8,6 +8,13 @@ set -e
 RUNTIME_DIR="$PWD/.runtime"
 mkdir -p "$RUNTIME_DIR"
 
+# Check if Redis is already running (e.g., in CI as a service)
+if redis-cli ping &> /dev/null; then
+    echo "✅ Redis is already running"
+    exit 0
+fi
+
+# Redis is not running, so we need to start it ourselves
 # Check if redis-server is installed
 if ! command -v redis-server &> /dev/null; then
     echo "❌ redis-server is not installed!"
@@ -18,12 +25,6 @@ if ! command -v redis-server &> /dev/null; then
     echo "  Other:   https://redis.io/download"
     echo ""
     exit 1
-fi
-
-# Check if Redis is already running
-if redis-cli ping &> /dev/null; then
-    echo "✅ Redis is already running"
-    exit 0
 fi
 
 # Start Redis in the background
