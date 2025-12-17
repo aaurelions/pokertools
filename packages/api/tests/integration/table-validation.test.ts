@@ -62,7 +62,10 @@ describe("Table Action Validation Integration Test", () => {
       },
     });
     const jti2 = `jti_2_${randomId2}`;
-    const token2 = await app.jwt.sign({ userId: user2.id, address: user2.address, jti: jti2 }, { jti: jti2, expiresIn: "1h" });
+    const token2 = await app.jwt.sign(
+      { userId: user2.id, address: user2.address, jti: jti2 },
+      { jti: jti2, expiresIn: "1h" }
+    );
     await app.prisma.session.create({
       data: { userId: user2.id, jti: jti2, expiresAt: new Date(Date.now() + 3600000) },
     });

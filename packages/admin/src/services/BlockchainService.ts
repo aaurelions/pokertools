@@ -136,9 +136,7 @@ export class BlockchainService {
       throw new Error(`Cannot derive private key for index ${derivationIndex}`);
     }
 
-    const account = privateKeyToAccount(
-      `0x${Buffer.from(childKey.privateKey).toString("hex")}`
-    );
+    const account = privateKeyToAccount(`0x${Buffer.from(childKey.privateKey).toString("hex")}`);
 
     return account;
   }

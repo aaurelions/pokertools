@@ -173,10 +173,20 @@ describe("E2E: Deposit -> Game -> Sweep -> Withdraw", () => {
 
     // Mock Telegram bot
     const mockBot = {
-      sendMessage: async () => { /* mock */ },
-      on: () => { /* mock */ },
-      editMessageText: async () => { /* mock */ },
-      api: { sendMessage: async () => { /* mock */ } },
+      sendMessage: async () => {
+        /* mock */
+      },
+      on: () => {
+        /* mock */
+      },
+      editMessageText: async () => {
+        /* mock */
+      },
+      api: {
+        sendMessage: async () => {
+          /* mock */
+        },
+      },
     } as any;
 
     withdrawalBot = new WithdrawalBot(prisma, redis, blockchainService, logger);
@@ -193,7 +203,9 @@ describe("E2E: Deposit -> Game -> Sweep -> Withdraw", () => {
       await prisma.paymentTransaction.deleteMany({ where: { userId: winner.id } });
       await prisma.ledgerEntry.deleteMany({ where: { account: { userId: winner.id } } });
       await prisma.account.deleteMany({ where: { userId: winner.id } });
-      await prisma.user.delete({ where: { id: winner.id } }).catch(() => { /* ignore */ });
+      await prisma.user.delete({ where: { id: winner.id } }).catch(() => {
+        /* ignore */
+      });
     }
 
     if (loser) {
@@ -202,7 +214,9 @@ describe("E2E: Deposit -> Game -> Sweep -> Withdraw", () => {
       await prisma.paymentTransaction.deleteMany({ where: { userId: loser.id } });
       await prisma.ledgerEntry.deleteMany({ where: { account: { userId: loser.id } } });
       await prisma.account.deleteMany({ where: { userId: loser.id } });
-      await prisma.user.delete({ where: { id: loser.id } }).catch(() => { /* ignore */ });
+      await prisma.user.delete({ where: { id: loser.id } }).catch(() => {
+        /* ignore */
+      });
     }
 
     if (prisma) await prisma.$disconnect();

@@ -151,7 +151,7 @@ export class PokerEngine {
       // Ensure deck exists (empty for client/public state)
       deck: "deck" in serverState ? serverState.deck : [],
       // Ensure players map correctly (PublicPlayer.hand is compatible with Player.hand)
-      players: serverState.players as unknown as GameState['players'], // Type assertion needed due to deep readonly/mutable mismatch potential
+      players: serverState.players as unknown as GameState["players"], // Type assertion needed due to deep readonly/mutable mismatch potential
       // Ensure config carries isClient flag if set locally
       config: {
         ...serverState.config,

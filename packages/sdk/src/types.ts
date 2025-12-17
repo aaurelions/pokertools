@@ -203,16 +203,10 @@ export interface PokerSocketEvents {
   error: (error: Error) => void;
   stateUpdate: (tableId: string, state: import("@pokertools/types").PublicState) => void;
   snapshot: (tableId: string, state: import("@pokertools/types").PublicState) => void;
-  action: (
-    tableId: string,
-    playerId: string,
-    actionType: string,
-    amount?: number
-  ) => void;
+  action: (tableId: string, playerId: string, actionType: string, amount?: number) => void;
 }
 
 /**
  * Type-safe event listener
  */
 export type EventListener<T extends keyof PokerSocketEvents> = PokerSocketEvents[T];
-

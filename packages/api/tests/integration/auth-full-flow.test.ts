@@ -70,11 +70,11 @@ describe("Auth - Full SIWE Flow Integration Test", () => {
 
     expect(loginRes.statusCode).toBe(200);
     const body = JSON.parse(loginRes.body);
-    
+
     expect(body.token).toBeTruthy();
     expect(body.user).toBeTruthy();
     expect(body.user.username).toContain("player_");
-    
+
     // Verify token works
     const meRes = await app.inject({
       method: "GET",
@@ -83,7 +83,7 @@ describe("Auth - Full SIWE Flow Integration Test", () => {
         authorization: `Bearer ${body.token}`,
       },
     });
-    
+
     expect(meRes.statusCode).toBe(200);
     const me = JSON.parse(meRes.body);
     expect(me.address.toLowerCase()).toBe(address.toLowerCase());

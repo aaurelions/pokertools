@@ -136,10 +136,13 @@ export function createDepositMonitorWorker(
               // Filter in memory - check if 'to' is in our active wallet set
               for (const log of logs) {
                 const toAddress = log.args.to?.toLowerCase();
-                
+
                 // Debug logging
                 if (toAddress) {
-                   logger.info({ toAddress, isActive: walletToUserMap.has(toAddress) }, "Checking log address");
+                  logger.info(
+                    { toAddress, isActive: walletToUserMap.has(toAddress) },
+                    "Checking log address"
+                  );
                 }
 
                 if (!toAddress || !walletToUserMap.has(toAddress)) {

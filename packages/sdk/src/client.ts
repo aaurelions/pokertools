@@ -304,10 +304,7 @@ export class PokerClient {
    * Get hand history
    */
   async getHandHistory(): Promise<HandHistoryEntry[]> {
-    const response = await this.request<{ history: HandHistoryEntry[] }>(
-      "GET",
-      "/user/history"
-    );
+    const response = await this.request<{ history: HandHistoryEntry[] }>("GET", "/user/history");
     return response.history;
   }
 
@@ -358,10 +355,7 @@ export class PokerClient {
    * Get deposit address
    */
   async getDepositAddress(): Promise<string> {
-    const response = await this.request<{ address: string }>(
-      "GET",
-      "/finance/deposit/address"
-    );
+    const response = await this.request<{ address: string }>("GET", "/finance/deposit/address");
     return response.address;
   }
 
@@ -369,10 +363,7 @@ export class PokerClient {
    * Get deposit history
    */
   async getDeposits(): Promise<DepositRecord[]> {
-    const response = await this.request<{ deposits: DepositRecord[] }>(
-      "GET",
-      "/finance/deposits"
-    );
+    const response = await this.request<{ deposits: DepositRecord[] }>("GET", "/finance/deposits");
     return response.deposits;
   }
 
@@ -392,10 +383,7 @@ export class PokerClient {
    * Get note for specific player
    */
   async getNote(targetId: string): Promise<PlayerNote | null> {
-    const response = await this.request<{ note: PlayerNote | null }>(
-      "GET",
-      `/notes/${targetId}`
-    );
+    const response = await this.request<{ note: PlayerNote | null }>("GET", `/notes/${targetId}`);
     return response.note;
   }
 
@@ -436,11 +424,7 @@ export class PokerClient {
   /**
    * Make HTTP request with retry logic
    */
-  private async request<T>(
-    method: string,
-    path: string,
-    body?: unknown
-  ): Promise<T> {
+  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -482,7 +466,7 @@ export class PokerClient {
             error?: string;
             code?: string;
           };
-          
+
           throw new PokerSDKError(
             errorData.message ?? errorData.error ?? `HTTP ${response.status}`,
             errorData.code ?? errorData.error ?? "HTTP_ERROR",
@@ -515,7 +499,9 @@ export class PokerClient {
 
         // Don't retry on abort
         if (error instanceof Error && error.name === "AbortError") {
-          throw new PokerSDKError("Request timeout", "TIMEOUT", undefined, { timeout: this.timeout });
+          throw new PokerSDKError("Request timeout", "TIMEOUT", undefined, {
+            timeout: this.timeout,
+          });
         }
 
         // Retry with backoff
@@ -539,4 +525,3 @@ export class PokerClient {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
-

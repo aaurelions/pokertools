@@ -12,9 +12,7 @@ export function cardCodesToStrings(codes: readonly number[]): string[] {
  * Filters out null (masked) cards
  */
 export function cardStringsToCards(cards: ReadonlyArray<string | null>): number[] {
-  return cards
-    .filter((c): c is string => c !== null)
-    .map((card) => getCardCode(card));
+  return cards.filter((c): c is string => c !== null).map((card) => getCardCode(card));
 }
 
 /**

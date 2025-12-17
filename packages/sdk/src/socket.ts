@@ -94,13 +94,19 @@ export class PokerSocket {
   private connectionState: ConnectionState = "disconnected";
   private reconnectCount = 0;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-  private pendingRequests = new Map<string, {
-    resolve: (value: unknown) => void;
-    reject: (error: Error) => void;
-    timeout: ReturnType<typeof setTimeout>;
-  }>();
+  private pendingRequests = new Map<
+    string,
+    {
+      resolve: (value: unknown) => void;
+      reject: (error: Error) => void;
+      timeout: ReturnType<typeof setTimeout>;
+    }
+  >();
   private joinedTables = new Set<string>();
-  private listeners = new Map<keyof PokerSocketEvents, Set<EventListener<keyof PokerSocketEvents>>>();
+  private listeners = new Map<
+    keyof PokerSocketEvents,
+    Set<EventListener<keyof PokerSocketEvents>>
+  >();
   private shouldReconnect = true;
 
   // Latest state cache for each table
@@ -196,7 +202,6 @@ export class PokerSocket {
         this.ws.onerror = (event) => {
           this.log("WebSocket error:", event);
           if (this.connectionState === "connecting") {
-             
             reject(new PokerSDKError("Connection failed", "CONNECTION_FAILED"));
           }
         };
@@ -325,10 +330,7 @@ export class PokerSocket {
   /**
    * Subscribe to an event
    */
-  on<E extends keyof PokerSocketEvents>(
-    event: E,
-    listener: PokerSocketEvents[E]
-  ): () => void {
+  on<E extends keyof PokerSocketEvents>(event: E, listener: PokerSocketEvents[E]): () => void {
     if (!this.listeners.has(event)) {
       this.listeners.set(event, new Set());
     }
@@ -343,10 +345,7 @@ export class PokerSocket {
   /**
    * Unsubscribe from an event
    */
-  off<E extends keyof PokerSocketEvents>(
-    event: E,
-    listener: PokerSocketEvents[E]
-  ): void {
+  off<E extends keyof PokerSocketEvents>(event: E, listener: PokerSocketEvents[E]): void {
     const listeners = this.listeners.get(event);
     if (listeners) {
       listeners.delete(listener as EventListener<keyof PokerSocketEvents>);
@@ -356,10 +355,7 @@ export class PokerSocket {
   /**
    * Subscribe to an event (once)
    */
-  once<E extends keyof PokerSocketEvents>(
-    event: E,
-    listener: PokerSocketEvents[E]
-  ): () => void {
+  once<E extends keyof PokerSocketEvents>(event: E, listener: PokerSocketEvents[E]): () => void {
     const onceWrapper = ((...args: Parameters<PokerSocketEvents[E]>) => {
       this.off(event, onceWrapper);
       (listener as (...args: unknown[]) => void)(...args);
@@ -467,7 +463,13 @@ export class PokerSocket {
         }
 
         case "ACTION": {
-          this.emit("action", message.tableId, message.playerId, message.actionType, message.amount);
+          this.emit(
+            "action",
+            message.tableId,
+            message.playerId,
+            message.actionType,
+            message.amount
+          );
           break;
         }
 
@@ -542,7 +544,9 @@ export class PokerSocket {
       this.maxReconnectDelay
     );
 
-    this.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectCount}/${this.reconnectAttempts})`);
+    this.log(
+      `Reconnecting in ${delay}ms (attempt ${this.reconnectCount}/${this.reconnectAttempts})`
+    );
     this.emit("reconnect", this.reconnectCount);
 
     await this.sleep(delay);
@@ -602,7 +606,7 @@ export class PokerSocket {
   private clearPendingRequests(reason: string): void {
     for (const pending of this.pendingRequests.values()) {
       clearTimeout(pending.timeout);
-       
+
       pending.reject(new PokerSDKError(reason, "CONNECTION_CLOSED"));
     }
     this.pendingRequests.clear();
@@ -650,4 +654,3 @@ export class PokerSocket {
     }
   }
 }
-

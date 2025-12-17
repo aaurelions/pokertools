@@ -47,14 +47,14 @@ pnpm add @pokertools/evaluator
 ## 🚀 Quick Start
 
 ```typescript
-import { 
-  evaluate, 
-  evaluateStrings, 
+import {
+  evaluate,
+  evaluateStrings,
   evaluateBoard,
   rank,
   rankBoard,
   rankDescription,
-  HandRank 
+  HandRank,
 } from "@pokertools/evaluator";
 
 // Method 1: Evaluate card strings
@@ -66,8 +66,8 @@ const score2 = evaluateBoard("As Kh Qd Jc Ts");
 
 // Method 3: Get hand rank category
 const handRank = rankBoard("As Kh Qd Jc Ts");
-console.log(handRank);                    // 4 (Straight)
-console.log(rankDescription(handRank));   // "Straight"
+console.log(handRank); // 4 (Straight)
+console.log(rankDescription(handRank)); // "Straight"
 ```
 
 ---
@@ -85,11 +85,11 @@ import { evaluate, getCardCode } from "@pokertools/evaluator";
 
 // Convert cards to codes manually
 const codes = [
-  getCardCode("As"),  // 48
-  getCardCode("Kh"),  // 45
-  getCardCode("Qd"),  // 42
-  getCardCode("Jc"),  // 39
-  getCardCode("Ts"),  // 32
+  getCardCode("As"), // 48
+  getCardCode("Kh"), // 45
+  getCardCode("Qd"), // 42
+  getCardCode("Jc"), // 39
+  getCardCode("Ts"), // 32
 ];
 
 const score = evaluate(codes);
@@ -187,13 +187,14 @@ Converts a 2-character card string to an integer code.
 ```typescript
 import { getCardCode } from "@pokertools/evaluator";
 
-const aceOfSpades = getCardCode("As");   // 48
-const kingOfHearts = getCardCode("Kh");  // 45
+const aceOfSpades = getCardCode("As"); // 48
+const kingOfHearts = getCardCode("Kh"); // 45
 const tenOfDiamonds = getCardCode("Td"); // 34
-const twoOfClubs = getCardCode("2c");    // 3
+const twoOfClubs = getCardCode("2c"); // 3
 ```
 
 **Card Format:**
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                    CARD FORMAT: [Rank][Suit]                    │
@@ -228,9 +229,9 @@ Converts an integer code back to a card string.
 ```typescript
 import { stringifyCardCode } from "@pokertools/evaluator";
 
-stringifyCardCode(48);  // "As"
-stringifyCardCode(0);   // "2s"
-stringifyCardCode(51);  // "Ac"
+stringifyCardCode(48); // "As"
+stringifyCardCode(0); // "2s"
+stringifyCardCode(51); // "Ac"
 ```
 
 ---
@@ -243,7 +244,7 @@ stringifyCardCode(51);  // "Ac"
 import { HandRank } from "@pokertools/evaluator";
 
 const enum HandRank {
-  StraightFlush = 0,  // 🏆 Best
+  StraightFlush = 0, // 🏆 Best
   FourOfAKind = 1,
   FullHouse = 2,
   Flush = 3,
@@ -251,23 +252,23 @@ const enum HandRank {
   ThreeOfAKind = 5,
   TwoPair = 6,
   OnePair = 7,
-  HighCard = 8,       // Worst
+  HighCard = 8, // Worst
 }
 ```
 
 **Hand Rank Distribution (5-card hands):**
 
-| Rank | Name | Count | Probability |
-|------|------|-------|-------------|
-| 0 | Straight Flush | 40 | 0.00154% |
-| 1 | Four of a Kind | 624 | 0.02401% |
-| 2 | Full House | 3,744 | 0.14406% |
-| 3 | Flush | 5,108 | 0.19654% |
-| 4 | Straight | 10,200 | 0.39246% |
-| 5 | Three of a Kind | 54,912 | 2.11285% |
-| 6 | Two Pair | 123,552 | 4.75390% |
-| 7 | One Pair | 1,098,240 | 42.25690% |
-| 8 | High Card | 1,302,540 | 50.11774% |
+| Rank | Name            | Count     | Probability |
+| ---- | --------------- | --------- | ----------- |
+| 0    | Straight Flush  | 40        | 0.00154%    |
+| 1    | Four of a Kind  | 624       | 0.02401%    |
+| 2    | Full House      | 3,744     | 0.14406%    |
+| 3    | Flush           | 5,108     | 0.19654%    |
+| 4    | Straight        | 10,200    | 0.39246%    |
+| 5    | Three of a Kind | 54,912    | 2.11285%    |
+| 6    | Two Pair        | 123,552   | 4.75390%    |
+| 7    | One Pair        | 1,098,240 | 42.25690%   |
+| 8    | High Card       | 1,302,540 | 50.11774%   |
 
 ---
 
@@ -313,14 +314,14 @@ const fourOfAKind = evaluateStrings(["Ac", "Ah", "Ad", "As", "Kh"]);
 const fullHouse = evaluateStrings(["Kh", "Kd", "Ks", "Qh", "Qd"]);
 
 // Lower score wins
-console.log(royalFlush);     // 1
-console.log(straightFlush);  // 2-10
-console.log(fourOfAKind);    // 11-166
-console.log(fullHouse);      // 167-322
+console.log(royalFlush); // 1
+console.log(straightFlush); // 2-10
+console.log(fourOfAKind); // 11-166
+console.log(fullHouse); // 167-322
 
 // Comparison
-console.log(royalFlush < straightFlush);  // true (royal beats straight flush)
-console.log(fourOfAKind < fullHouse);     // true (quads beat boat)
+console.log(royalFlush < straightFlush); // true (royal beats straight flush)
+console.log(fourOfAKind < fullHouse); // true (quads beat boat)
 ```
 
 ---
@@ -340,17 +341,17 @@ function monteCarloEquity(
 ): number {
   let wins = 0;
   const deck = createDeck().filter(
-    c => !heroHand.includes(c) && !villainHand.includes(c) && !board.includes(c)
+    (c) => !heroHand.includes(c) && !villainHand.includes(c) && !board.includes(c)
   );
 
   for (let i = 0; i < simulations; i++) {
     const shuffled = shuffle(deck);
     const remainingCards = 5 - board.length;
     const runout = [...board, ...shuffled.slice(0, remainingCards)];
-    
+
     const heroScore = evaluate([...heroHand, ...runout]);
     const villainScore = evaluate([...villainHand, ...runout]);
-    
+
     if (heroScore < villainScore) wins++;
     else if (heroScore === villainScore) wins += 0.5;
   }
@@ -372,18 +373,20 @@ function analyzeRange(
   const heroCodes = getCardCodes(holeCards);
   const boardCodes = getCardCodes(board);
   const heroScore = evaluate([...heroCodes, ...boardCodes]);
-  
-  let wins = 0, ties = 0, losses = 0;
-  
+
+  let wins = 0,
+    ties = 0,
+    losses = 0;
+
   for (const hand of range) {
     const villainCodes = getCardCodes(hand);
     const villainScore = evaluate([...villainCodes, ...boardCodes]);
-    
+
     if (heroScore < villainScore) wins++;
     else if (heroScore === villainScore) ties++;
     else losses++;
   }
-  
+
   return { wins, ties, losses };
 }
 ```
@@ -477,14 +480,14 @@ Examples:
 
 ### Lookup Tables
 
-| Table | Size | Purpose |
-|-------|------|---------|
-| `FLUSH_LOOKUP` | 8,192 | Direct lookup for flush hands |
-| `NO_FLUSH_5` | 49,205 | 5-card non-flush hands |
-| `NO_FLUSH_6` | 246,520 | 6-card non-flush hands |
-| `NO_FLUSH_7` | 1,070,190 | 7-card non-flush hands |
-| `SUITS_HASH` | 8,192 | Suit hash detection |
-| `DP_MATRIX` | ~3,500 | Perfect hash calculation |
+| Table          | Size      | Purpose                       |
+| -------------- | --------- | ----------------------------- |
+| `FLUSH_LOOKUP` | 8,192     | Direct lookup for flush hands |
+| `NO_FLUSH_5`   | 49,205    | 5-card non-flush hands        |
+| `NO_FLUSH_6`   | 246,520   | 6-card non-flush hands        |
+| `NO_FLUSH_7`   | 1,070,190 | 7-card non-flush hands        |
+| `SUITS_HASH`   | 8,192     | Suit hash detection           |
+| `DP_MATRIX`    | ~3,500    | Perfect hash calculation      |
 
 ---
 
@@ -495,14 +498,14 @@ Examples:
 ```typescript
 /**
  * ⚠️ NOT THREAD-SAFE / NOT RE-ENTRANT
- * 
+ *
  * The evaluator uses static buffers for performance.
- * 
+ *
  * ✅ SAFE:
  *   - Sequential calls
  *   - Async/await (yields between calls)
  *   - Different JavaScript contexts
- * 
+ *
  * ❌ UNSAFE:
  *   - Recursive evaluate() calls
  *   - SharedArrayBuffer / Worker threads
@@ -550,15 +553,15 @@ function safeEvaluate(codes: number[]): number {
 
 ```typescript
 // ✅ Correct format
-getCardCode("As");  // Ace of spades
-getCardCode("Td");  // Ten of diamonds
-getCardCode("2c");  // Two of clubs
+getCardCode("As"); // Ace of spades
+getCardCode("Td"); // Ten of diamonds
+getCardCode("2c"); // Two of clubs
 
 // ❌ Wrong format
-getCardCode("as");  // Error: lowercase rank
-getCardCode("AS");  // Error: uppercase suit
+getCardCode("as"); // Error: lowercase rank
+getCardCode("AS"); // Error: uppercase suit
 getCardCode("10h"); // Error: use "T" for 10
-getCardCode("1s");  // Error: no "1" rank
+getCardCode("1s"); // Error: no "1" rank
 ```
 
 ---
@@ -568,10 +571,10 @@ getCardCode("1s");  // Error: no "1" rank
 The evaluator has been verified against all possible hand combinations:
 
 | Cards | Combinations | Verified |
-|-------|-------------|----------|
-| 5 | 2,598,960 | ✅ |
-| 6 | 20,358,520 | ✅ |
-| 7 | 133,784,560 | ✅ |
+| ----- | ------------ | -------- |
+| 5     | 2,598,960    | ✅       |
+| 6     | 20,358,520   | ✅       |
+| 7     | 133,784,560  | ✅       |
 
 All hand frequencies match mathematically proven distributions.
 
@@ -579,11 +582,11 @@ All hand frequencies match mathematically proven distributions.
 
 ## 🔗 Related Packages
 
-| Package | Description |
-|---------|-------------|
-| [@pokertools/types](../types) | Type definitions |
-| [@pokertools/engine](../engine) | Game state machine |
-| [@pokertools/bench](../bench) | Performance benchmarks |
+| Package                         | Description            |
+| ------------------------------- | ---------------------- |
+| [@pokertools/types](../types)   | Type definitions       |
+| [@pokertools/engine](../engine) | Game state machine     |
+| [@pokertools/bench](../bench)   | Performance benchmarks |
 
 ---
 
@@ -596,10 +599,9 @@ MIT © A.Aurelius
 ## 🙏 Credits
 
 Algorithm based on the perfect hash technique pioneered by:
+
 - Cactus Kev's Poker Hand Evaluator
 - Two Plus Two evaluator
 - Senzee's 5-card evaluator
 
 Optimized for TypeScript with lookup table compression and static buffer reuse.
-
-

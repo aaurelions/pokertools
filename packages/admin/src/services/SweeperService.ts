@@ -51,7 +51,12 @@ export class SweeperService {
   ) {}
 
   async startCron() {
-    setInterval(() => { void this.run(); }, 10 * 60 * 1000); // 10 mins
+    setInterval(
+      () => {
+        void this.run();
+      },
+      10 * 60 * 1000
+    ); // 10 mins
     await this.run();
   }
 
@@ -149,9 +154,7 @@ export class SweeperService {
         ...tokenContract,
         functionName: "name",
       }),
-      publicClient
-        .readContract({ ...tokenContract, functionName: "version" })
-        .catch(() => "1"),
+      publicClient.readContract({ ...tokenContract, functionName: "version" }).catch(() => "1"),
     ]);
 
     for (const [wallet, userAccount, balance] of candidates) {

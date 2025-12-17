@@ -26,7 +26,7 @@ class MockWebSocket {
 
   constructor(url: string) {
     this.url = url;
-    
+
     // Simulate connection based on URL
     setTimeout(() => {
       if (this.url.includes("fail")) {
@@ -35,7 +35,7 @@ class MockWebSocket {
           this.onerror(new Event("error"));
         }
         if (this.onclose) {
-           this.onclose({ code: 1006, reason: "Connection failed" });
+          this.onclose({ code: 1006, reason: "Connection failed" });
         }
       } else {
         this.readyState = MockWebSocket.OPEN;
@@ -99,9 +99,9 @@ describe("PokerSocket", () => {
       await socket.connect();
       const onDisconnect = vi.fn();
       socket.on("disconnect", onDisconnect);
-      
+
       socket.disconnect();
-      
+
       expect(socket.isConnected()).toBe(false);
       expect(socket.getState()).toBe("disconnected");
       expect(onDisconnect).toHaveBeenCalledWith("Client disconnect");
@@ -112,7 +112,7 @@ describe("PokerSocket", () => {
     it("sends JOIN message and waits for SNAPSHOT", async () => {
       await socket.connect();
       const ws = (socket as any).ws as MockWebSocket;
-      
+
       ws.send.mockImplementationOnce((data) => {
         const msg = JSON.parse(data);
         if (msg.type === "JOIN") {
@@ -143,15 +143,15 @@ describe("PokerSocket", () => {
 
     it("times out if no snapshot received", async () => {
       await socket.connect();
-      
+
       vi.useFakeTimers();
       const joinPromise = socket.join("table-1");
-      
+
       // Attach handler before advancing time to avoid unhandled rejection
       const expectPromise = expect(joinPromise).rejects.toThrow("Join timeout");
-      
+
       await vi.advanceTimersByTimeAsync(10001);
-      
+
       await expectPromise;
     });
   });
@@ -161,9 +161,9 @@ describe("PokerSocket", () => {
       await socket.connect();
       (socket as any).joinedTables.add("table-1");
       const ws = (socket as any).ws as MockWebSocket;
-      
+
       socket.leave("table-1");
-      
+
       expect(ws.send).toHaveBeenCalledWith(expect.stringContaining('"type":"LEAVE"'));
       expect(socket.getJoinedTables()).not.toContain("table-1");
     });
@@ -173,10 +173,10 @@ describe("PokerSocket", () => {
     it("emits stateUpdate", async () => {
       await socket.connect();
       const ws = (socket as any).ws as MockWebSocket;
-      
+
       const onStateUpdate = vi.fn();
       socket.on("stateUpdate", onStateUpdate);
-      
+
       if (ws.onmessage) {
         ws.onmessage({
           data: JSON.stringify({
@@ -187,8 +187,11 @@ describe("PokerSocket", () => {
           }),
         });
       }
-      
-      expect(onStateUpdate).toHaveBeenCalledWith("table-1", expect.objectContaining({ version: 2 }));
+
+      expect(onStateUpdate).toHaveBeenCalledWith(
+        "table-1",
+        expect.objectContaining({ version: 2 })
+      );
     });
 
     it("emits action", async () => {
@@ -196,7 +199,7 @@ describe("PokerSocket", () => {
       const ws = (socket as any).ws as MockWebSocket;
       const onAction = vi.fn();
       socket.on("action", onAction);
-      
+
       if (ws.onmessage) {
         ws.onmessage({
           data: JSON.stringify({
@@ -209,7 +212,7 @@ describe("PokerSocket", () => {
           }),
         });
       }
-      
+
       expect(onAction).toHaveBeenCalledWith("table-1", "p1", "BET", 100);
     });
 
@@ -218,7 +221,7 @@ describe("PokerSocket", () => {
       const ws = (socket as any).ws as MockWebSocket;
       const onError = vi.fn();
       socket.on("error", onError);
-      
+
       if (ws.onmessage) {
         ws.onmessage({
           data: JSON.stringify({
@@ -228,7 +231,7 @@ describe("PokerSocket", () => {
           }),
         });
       }
-      
+
       expect(onError).toHaveBeenCalledWith(expect.any(PokerSDKError));
     });
   });
@@ -236,26 +239,26 @@ describe("PokerSocket", () => {
   describe("reconnection", () => {
     it("attempts to reconnect on close", async () => {
       await socket.connect();
-      
+
       // Now use fake timers to control reconnection delay
       vi.useFakeTimers();
-      
+
       const ws = (socket as any).ws as MockWebSocket;
       const onReconnect = vi.fn();
       socket.on("reconnect", onReconnect);
-      
+
       // Simulate close
       ws.close();
-      
+
       // Wait for reconnect delay
       await vi.advanceTimersByTimeAsync(100);
       expect(onReconnect).toHaveBeenCalledWith(1);
-      
+
       // Reconnect happens async in next tick after timer
       // We need to wait for the connection promise inside reconnect() to resolve
       // Since connect() uses setTimeout(0), we advance a bit more
       await vi.advanceTimersByTimeAsync(10);
-      
+
       expect(socket.isConnected()).toBe(true);
     });
 
@@ -263,21 +266,21 @@ describe("PokerSocket", () => {
       await socket.connect();
       (socket as any).joinedTables.add("table-1");
       const ws = (socket as any).ws as MockWebSocket;
-      
+
       // Spy on join method
       const joinSpy = vi.spyOn(socket, "join").mockResolvedValue({} as any);
-      
+
       vi.useFakeTimers();
       ws.close();
-      
+
       // Trigger reconnection
       await vi.advanceTimersByTimeAsync(1000); // Wait for reconnect delay
-      await vi.advanceTimersByTimeAsync(100);  // Wait for connection
-      
+      await vi.advanceTimersByTimeAsync(100); // Wait for connection
+
       expect(joinSpy).toHaveBeenCalledWith("table-1");
     });
   });
-  
+
   describe("ping", () => {
     it("sends PING and resolves on PONG", async () => {
       await socket.connect();

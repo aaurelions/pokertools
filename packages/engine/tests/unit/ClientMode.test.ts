@@ -17,7 +17,7 @@ describe("Client Mode Engine", () => {
     const engine = new PokerEngine(config);
     engine.sit(0, "p1", "Player 1", 1000);
     engine.sit(1, "p2", "Player 2", 1000);
-    
+
     engine.deal();
 
     const p1 = engine.state.players[0];
@@ -34,14 +34,14 @@ describe("Client Mode Engine", () => {
     // Valid action
     const validResult = engine.validate({
       type: ActionType.FOLD,
-      playerId: "p1" // SB acts first
+      playerId: "p1", // SB acts first
     });
     expect(validResult.valid).toBe(true);
 
     // Invalid action (wrong turn)
     const invalidResult = engine.validate({
       type: ActionType.FOLD,
-      playerId: "p2"
+      playerId: "p2",
     });
     expect(invalidResult.valid).toBe(false);
     if (!invalidResult.valid) {
@@ -61,19 +61,19 @@ describe("Client Mode Engine", () => {
     // Optimistic fold
     const nextState = engine.optimisticAct({
       type: ActionType.FOLD,
-      playerId: "p1"
+      playerId: "p1",
     });
 
     // Engine state should NOT have changed
     expect(engine.state.timestamp).toBe(initialTimestamp);
-    
+
     // Returned state SHOULD be updated
     expect(nextState.players[0]?.status).toBe("FOLDED");
   });
 
   it("should reconcile server state", () => {
     const clientEngine = new PokerEngine(config);
-    
+
     // Simulate a server state (PublicState)
     // We create a server engine to generate it
     const serverEngine = new PokerEngine({ ...config, isClient: false });

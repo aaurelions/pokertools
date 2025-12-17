@@ -2,8 +2,6 @@
  * Utility functions for the PokerTools SDK
  */
 
- 
-
 import type { PublicState, PublicPlayer } from "@pokertools/types";
 
 /**
@@ -86,7 +84,7 @@ export function getCallAmount(state: PublicState, playerId: string): number {
   const currentBet = player.betThisStreet;
   const activePlayers = state.players.filter((p): p is PublicPlayer => p !== null);
   const bets = activePlayers.map((p) => p.betThisStreet);
-   
+
   const highestBet = Math.max(...bets);
 
   return Math.min(highestBet - currentBet, player.stack);
@@ -111,7 +109,7 @@ export function canCheck(state: PublicState, playerId: string): boolean {
   const currentBet = player.betThisStreet;
   const activePlayers = state.players.filter((p): p is PublicPlayer => p !== null);
   const bets = activePlayers.map((p) => p.betThisStreet);
-   
+
   const highestBet = Math.max(...bets);
 
   return currentBet >= highestBet;
@@ -128,7 +126,7 @@ export function canBet(state: PublicState, playerId: string): boolean {
 
   const activePlayers = state.players.filter((p): p is PublicPlayer => p !== null);
   const bets = activePlayers.map((p) => p.betThisStreet);
-   
+
   const highestBet = Math.max(...bets);
 
   return highestBet === 0 && player.stack > 0;
@@ -154,9 +152,7 @@ export function getActivePlayers(state: PublicState): PublicPlayer[] {
  * Get number of players in hand (not folded)
  */
 export function getPlayersInHand(state: PublicState): PublicPlayer[] {
-  return state.players.filter(
-    (p): p is PublicPlayer => p !== null && p.status !== "FOLDED"
-  );
+  return state.players.filter((p): p is PublicPlayer => p !== null && p.status !== "FOLDED");
 }
 
 /**
@@ -245,4 +241,3 @@ export function abbreviateNumber(num: number): string {
   }
   return num.toString();
 }
-
