@@ -55,6 +55,16 @@ jobs:
       - name: Build All Packages
         run: npm run build
 
+      - name: Setup Test Database
+        env:
+          DATABASE_URL: "file:./.runtime/test.db"
+          NODE_ENV: "test"
+        working-directory: packages/api
+        run: |
+          mkdir -p .runtime
+          npx prisma generate
+          npx prisma db push --skip-generate --accept-data-loss
+
       - name: Run Tests
         env:
           DATABASE_URL: "file:./packages/api/.runtime/test.db"

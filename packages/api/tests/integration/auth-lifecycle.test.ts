@@ -1,5 +1,6 @@
 /// <reference path="../../types/fastify.d.ts" />
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import crypto from "node:crypto";
 import { buildApp } from "../../src/app.js";
 import type { FastifyInstance } from "fastify";
 import { cleanupTestUser } from "../helpers/test-utils.js";
