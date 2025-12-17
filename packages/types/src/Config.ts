@@ -24,4 +24,5 @@ export interface TableConfig {
   readonly rakeCap?: number; // Maximum rake per pot (cash games only)
   readonly noFlopNoDrop?: boolean; // No rake if hand ends preflop (cash games, default: true)
   readonly validateIntegrity?: boolean; // Enable chip conservation and state validation (default: true)
+  readonly isClient?: boolean; // If true, runs in client/optimistic mode (deals masked cards, skips strict checks)
 }

@@ -3,4 +3,4 @@ export * from "./PokerEngineError";
 export * from "./CriticalStateError";
 export * from "./IllegalActionError";
 export * from "./ConfigError";
-export * from "./ErrorCodes";
+// ErrorCodes now exported from @pokertools/types

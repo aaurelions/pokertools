@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": ".",
+    "composite": true,
+    "types": ["node"],
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "target": "ES2022",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "baseUrl": "."
+  },
+  "include": ["src/**/*", "tests/**/*", "../api/generated/**/*", "vitest.config.ts"],
+  "exclude": ["node_modules", "dist", "contracts/**/*"],
+  "references": [{ "path": "../types" }, { "path": "../api" }]
+}

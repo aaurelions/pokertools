@@ -32,6 +32,10 @@ export function determineWinners(state: GameState): GameState {
   for (const pot of sortedPots) {
     const potWinners = evaluatePot(state, pot);
 
+    if (potWinners.length === 0) {
+      continue;
+    }
+
     // Calculate and deduct rake (cash games only)
     // Apply GLOBAL rake cap across all pots (per-hand, not per-pot)
     const { rake } = calculateRake(state, pot.amount, totalRake);
@@ -148,8 +152,13 @@ function evaluatePot(state: GameState, pot: Pot): HandEvaluation[] {
   for (const player of eligible) {
     if (!player?.hand) continue;
 
+    // Skip masked hands (client mode)
+    if (player.hand.some((c) => c === null)) {
+      continue;
+    }
+
     // Combine hole cards + board (7 cards total for river)
-    const allCards = [...player.hand, ...state.board];
+    const allCards = [...(player.hand as string[]), ...state.board];
 
     if (allCards.length < 5) {
       // Not enough cards (shouldn't happen)
@@ -165,9 +174,13 @@ function evaluatePot(state: GameState, pot: Pot): HandEvaluation[] {
     evaluations.push({
       seat: player.seat,
       score,
-      hand: [...player.hand], // Store hole cards (copy to mutable array)
+      hand: [...(player.hand as string[])], // Store hole cards (copy to mutable array)
       description,
     });
+  }
+
+  if (evaluations.length === 0) {
+    return [];
   }
 
   // Find best hand(s)

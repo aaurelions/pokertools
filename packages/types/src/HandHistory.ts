@@ -1,25 +1,77 @@
+import { Action } from "./Action";
+import { Street } from "./GameState";
+
 /**
- * Hand history data for export
+ * Hand history record
+ * Contains complete information about a single hand
  */
-export interface HandHistoryData {
+export interface HandHistory {
   readonly handId: string;
   readonly timestamp: number;
   readonly tableName: string;
+  readonly gameType: "Cash" | "Tournament";
+  readonly stakes: {
+    readonly smallBlind: number;
+    readonly bigBlind: number;
+    readonly ante: number;
+  };
+  readonly maxPlayers: number;
   readonly buttonSeat: number;
-  readonly smallBlind: number;
-  readonly bigBlind: number;
-  readonly ante: number;
-  readonly players: ReadonlyArray<{
-    readonly seat: number;
-    readonly name: string;
-    readonly startingStack: number;
-    readonly hand: readonly string[] | null;
-  }>;
+  readonly players: readonly HandHistoryPlayer[];
+  readonly streets: readonly StreetHistory[];
+  readonly winners: readonly WinnerRecord[];
+  readonly totalPot: number;
+}
+
+/**
+ * Player information in hand history
+ */
+export interface HandHistoryPlayer {
+  readonly seat: number;
+  readonly name: string;
+  readonly startingStack: number;
+  readonly endingStack: number;
+  readonly cards?: readonly string[]; // Hole cards (if shown)
+}
+
+/**
+ * History for a single street
+ */
+export interface StreetHistory {
+  readonly street: Street;
   readonly board: readonly string[];
-  readonly actions: readonly string[]; // Human-readable action strings
-  readonly winners: ReadonlyArray<{
-    readonly seat: number;
-    readonly amount: number;
-    readonly hand: readonly string[] | null;
-  }>;
+  readonly actions: readonly HandHistoryActionRecord[];
+  readonly pot: number;
+}
+
+/**
+ * Action record in history
+ */
+export interface HandHistoryActionRecord {
+  readonly seat: number;
+  readonly playerName: string;
+  readonly action: Action;
+  readonly amount?: number;
+  readonly isAllIn?: boolean;
+  readonly timestamp: number;
+}
+
+/**
+ * Winner record
+ */
+export interface WinnerRecord {
+  readonly seat: number;
+  readonly playerName: string;
+  readonly amount: number;
+  readonly hand?: readonly string[];
+  readonly handRank?: string;
+}
+
+/**
+ * Hand history format options
+ */
+export interface ExportOptions {
+  readonly format: "pokerstars" | "json" | "compact";
+  readonly includeHoleCards?: boolean; // Include all hole cards (for analysis)
+  readonly timezone?: string; // For timestamp formatting
 }

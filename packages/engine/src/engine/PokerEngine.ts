@@ -14,7 +14,7 @@ import { createPublicView } from "../utils/viewMasking";
 import { createSnapshot, restoreFromSnapshot, Snapshot } from "../utils/serialization";
 import { ConfigError } from "../errors/ConfigError";
 import { exportHandHistory, getHandHistory } from "../history/exporter";
-import { HandHistory, ExportOptions } from "../history/types";
+import { HandHistory, ExportOptions } from "@pokertools/types";
 import { validateChipAmount, validateTimestamp } from "../utils/validation";
 
 /**
@@ -119,6 +119,60 @@ export class PokerEngine {
   }
 
   /**
+   * Validate an action without executing it
+   * Useful for UI state (enabling/disabling buttons)
+   */
+  validate(action: Action): { valid: true } | { valid: false; error: string; code?: string } {
+    try {
+      // Dry-run the reducer
+      // We don't need to deep clone state because reducer is immutable
+      // and pure, and we discard the result.
+      gameReducer(this.currentState, action);
+      return { valid: true };
+    } catch (err: unknown) {
+      const message = (err as Error)?.message ?? "Invalid action";
+      const code = (err as { code?: string })?.code;
+      return {
+        valid: false,
+        error: message,
+        code,
+      };
+    }
+  }
+
+  /**
+   * Reconcile local state with server state
+   * Smoothly merges server updates into client engine
+   */
+  reconcile(serverState: PublicState | GameState): void {
+    // Hydrate PublicState into GameState if needed
+    const newState: GameState = {
+      ...serverState,
+      // Ensure deck exists (empty for client/public state)
+      deck: "deck" in serverState ? serverState.deck : [],
+      // Ensure players map correctly (PublicPlayer.hand is compatible with Player.hand)
+      players: serverState.players as unknown as GameState['players'], // Type assertion needed due to deep readonly/mutable mismatch potential
+      // Ensure config carries isClient flag if set locally
+      config: {
+        ...serverState.config,
+        isClient: this.currentState.config.isClient,
+      },
+    };
+
+    this.currentState = newState;
+  }
+
+  /**
+   * Optimistically execute an action and return the provisional state
+   * Does not modify the engine's actual state
+   */
+  optimisticAct(action: Action): GameState {
+    const timestamp = action.timestamp ?? this.timeProvider();
+    const actionWithTimestamp = { ...action, timestamp } as Action;
+    return gameReducer(this.currentState, actionWithTimestamp);
+  }
+
+  /**
    * Undo last action
    */
   undo(): boolean {
@@ -143,8 +197,8 @@ export class PokerEngine {
   /**
    * Get player view (masked)
    */
-  view(playerId?: string): PublicState {
-    return createPublicView(this.currentState, playerId ?? null);
+  view(playerId?: string, version?: number): PublicState {
+    return createPublicView(this.currentState, playerId ?? null, version ?? 0);
   }
 
   /**
@@ -298,6 +352,7 @@ export class PokerEngine {
       ante: initialBlinds?.ante ?? config.ante ?? 0,
       blindLevel: 0,
       timeBanks: new Map(),
+      timeBankActiveSeat: null,
       actionHistory: [],
       previousStates: [],
       timestamp: Date.now(),

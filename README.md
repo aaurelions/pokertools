@@ -1,227 +1,109 @@
-# 🃏 PokerTools
+# PokerTools Monorepo
 
-[![CI](https://github.com/aaurelions/pokertools/actions/workflows/ci.yml/badge.svg)](https://github.com/aaurelions/pokertools/actions/workflows/ci.yml)
-[![NPM Publish](https://github.com/aaurelions/pokertools/actions/workflows/publish.yml/badge.svg)](https://github.com/aaurelions/pokertools/actions/workflows/publish.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![CI](https://github.com/aaurelions/pokertools/actions/workflows/ci.yml/badge.svg)](https://github.com/aaurelions/pokertools/actions/workflows/ci.yml)
 
-A production-ready, high-performance poker toolkit for Node.js and the browser. Built with TypeScript, tested rigorously, and optimized for speed.
+**PokerTools** is an enterprise-grade platform for building, deploying, and managing real-time Texas Hold'em poker applications. This monorepo contains the complete ecosystem, from the core game engine and hand evaluator to a full-featured API, Admin dashboard service, and client-side SDK.
 
-## 📦 Packages
+## 🏗️ Architecture
 
-| Package                                       | Version                                                                                                               | Description                                          |
-| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| [@pokertools/types](./packages/types)         | [![npm](https://img.shields.io/npm/v/@pokertools/types.svg)](https://www.npmjs.com/package/@pokertools/types)         | TypeScript type definitions for poker game engine    |
-| [@pokertools/evaluator](./packages/evaluator) | [![npm](https://img.shields.io/npm/v/@pokertools/evaluator.svg)](https://www.npmjs.com/package/@pokertools/evaluator) | Lightning-fast poker hand evaluator (16M+ hands/sec) |
-| [@pokertools/engine](./packages/engine)       | [![npm](https://img.shields.io/npm/v/@pokertools/engine.svg)](https://www.npmjs.com/package/@pokertools/engine)       | Enterprise-grade Texas Hold'em poker engine          |
-| [@pokertools/bench](./packages/bench)         | -                                                                                                                     | Performance benchmarks (private package)             |
+The repository is organized into workspaces managed by NPM.
 
-## ✨ Features
+| Package                                           | Description                                                              | Version |
+| :------------------------------------------------ | :----------------------------------------------------------------------- | :------ |
+| **[@pokertools/engine](./packages/engine)**       | The immutable core logic for Texas Hold'em state management.             | `1.0.2` |
+| **[@pokertools/evaluator](./packages/evaluator)** | High-performance hand evaluation and win frequency calculation.          | `1.0.2` |
+| **[@pokertools/api](./packages/api)**             | Scalable REST & WebSocket API built with Fastify, Redis, and PostgreSQL. | `1.0.2` |
+| **[@pokertools/sdk](./packages/sdk)**             | TypeScript SDK with React hooks and real-time socket management.         | `1.0.2` |
+| **[@pokertools/admin](./packages/admin)**         | Financial sweeper service, withdrawal processing, and Telegram bot.      | `1.0.2` |
+| **[@pokertools/types](./packages/types)**         | Shared TypeScript definitions, Zod schemas, and DTOs.                    | `1.0.2` |
+| **[@pokertools/bench](./packages/bench)**         | Performance benchmarking suite for the engine and evaluator.             | `1.0.2` |
 
-### 🚀 Blazing Fast
+## ✨ Key Features
 
-- **16+ million** 7-card hand evaluations per second
-- Optimized Perfect Hash algorithm for V8 JavaScript engine
-- Zero dependencies for core packages
+- **Robust Game Engine**: Handles complex side pots, all-in scenarios, and exact rake calculations. Verified with property-based testing.
+- **High Performance**: Evaluator can process millions of hands per second.
+- **Scalable Infrastructure**: API designed for horizontal scaling with Redis Pub/Sub and atomic database transactions.
+- **Financial Integrity**: Double-entry ledger system for all chip movements.
+- **Blockchain Integration**: Built-in support for crypto deposits and withdrawals (USDC/ETH) with automatic sweeping (admin service).
+- **Developer Experience**: Fully typed SDK for rapid frontend development.
 
-### 🎯 Production Ready
-
-- **117/117 tests passing** (100% compliance)
-- Comprehensive test coverage including property-based testing
-- Fully compliant with TDA (Tournament Directors Association) rules
-- Chip conservation guaranteed - no chips created or destroyed
-
-### 🔒 Type Safe
-
-- Written in TypeScript with full type definitions
-- Immutable state management (Redux-style)
-- Strict null checking and type safety
-
-### 🎲 Feature Complete
-
-- No-Limit Texas Hold'em engine
-- Side pot calculation with iterative subtraction
-- Dead button rule implementation
-- Heads-up and multi-way support
-- Rake calculation (No Flop, No Drop)
-- Auto-runout for all-in scenarios
-- Incomplete raise handling
-
-## 🚀 Quick Start
-
-### Install Packages
-
-```bash
-# Install the hand evaluator
-npm install @pokertools/evaluator
-
-# Install the poker engine
-npm install @pokertools/engine
-
-# Install type definitions
-npm install @pokertools/types
-```
-
-### Evaluate a Poker Hand
-
-```typescript
-import { evaluate, rankDescription, rank, getCardCodes } from "@pokertools/evaluator";
-
-const cards = ["Ah", "Kh", "Qh", "Jh", "Th", "9c", "2d"];
-const cardCodes = getCardCodes(cards);
-const score = evaluate(cardCodes);
-const handRank = rank(cardCodes);
-const description = rankDescription(handRank);
-
-console.log(description); // "Royal Flush"
-```
-
-### Run a Poker Game
-
-```typescript
-import { PokerEngine } from "@pokertools/engine";
-import { ActionType } from "@pokertools/types";
-
-const engine = new PokerEngine({
-  smallBlind: 5,
-  bigBlind: 10,
-  maxPlayers: 6,
-});
-
-// Seat players
-engine.sit(0, "alice", "Alice", 1000);
-engine.sit(1, "bob", "Bob", 1000);
-
-// Deal cards
-engine.deal();
-
-// Player actions
-engine.act({ type: ActionType.CALL, playerId: "alice" });
-engine.act({ type: ActionType.CHECK, playerId: "bob" });
-
-// Access game state
-console.log(engine.state.street); // "FLOP"
-console.log(engine.state.board); // ["Ah", "Kd", "Qc"]
-```
-
-## 📚 Documentation
-
-- **[@pokertools/engine](./packages/engine/README.md)** - Complete engine documentation with examples
-- **[@pokertools/evaluator](./packages/evaluator/README.md)** - Hand evaluator API reference
-- **[@pokertools/types](./packages/types/README.md)** - TypeScript type definitions
-- **[@pokertools/bench](./packages/bench/README.md)** - Performance benchmarks
-
-## 🏗️ Development
-
-This is a monorepo managed with npm workspaces.
+## 🚀 Getting Started
 
 ### Prerequisites
 
-- Node.js 18.x or higher
-- npm 7.x or higher
+- **Node.js**: v20+
+- **NPM**: v10+
+- **Docker** (optional, for running Redis/Postgres locally)
 
-### Setup
+### Installation
+
+1.  **Clone the repository:**
+
+    ```bash
+    git clone https://github.com/aaurelions/pokertools.git
+    cd pokertools
+    ```
+
+2.  **Install dependencies:**
+
+    ```bash
+    npm install
+    ```
+
+3.  **Build all packages:**
+    ```bash
+    npm run build
+    ```
+
+### Development Workflow
+
+The monorepo provides root-level scripts to manage the lifecycle of all packages.
+
+- **Start API (Dev Mode):**
+  ```bash
+  npm run dev:api
+  ```
+- **Run All Tests:**
+  ```bash
+  npm test
+  ```
+- **Run Benchmarks:**
+  ```bash
+  npm run bench
+  ```
+- **Typecheck Entire Repo:**
+  ```bash
+  npm run typecheck
+  ```
+- **Format Code:**
+  ```bash
+  npm run format
+  ```
+
+## 🛠️ Configuration
+
+Most packages rely on environment variables. Copy the example files in each package to get started:
 
 ```bash
-# Clone the repository
-git clone https://github.com/aaurelions/pokertools.git
-cd pokertools
-
-# Install dependencies
-npm install
-
-# Build all packages
-npm run build
-
-# Run all tests
-npm test
-
-# Run benchmarks
-npm run bench
-
-# Clean build artifacts
-npm run clean
+cp packages/api/.env.example packages/api/.env
+cp packages/admin/.env.example packages/admin/.env
 ```
 
-### Package Scripts
+See individual package READMEs for specific configuration details.
 
-```bash
-# Build all packages
-npm run build
+## 🤝 Contributing
 
-# Test all packages
-npm test
+We welcome contributions! Please see [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines on how to submit pull requests, report issues, and setup your development environment.
 
-# Test specific package
-npm run engine  # Test engine only
-npm test -w @pokertools/evaluator  # Test evaluator only
+## 🔒 Security
 
-# Run benchmarks
-npm run bench
-```
+Security is a top priority.
 
-## 🧪 Testing
+- **Financials**: All transfers are atomic and recorded in a ledger.
+- **Game Integrity**: The engine is tested against millions of random scenarios.
+- **Vulnerabilities**: Please report security issues via [SECURITY.md](./SECURITY.md).
 
-All packages include comprehensive test suites:
+## 📄 License
 
-- **Unit Tests** - Testing individual functions and components
-- **Integration Tests** - Testing full gameplay scenarios
-- **Property Tests** - Random scenario testing with fast-check
-- **Compliance Tests** - Verification against TDA poker rules
-
-```bash
-# Run all tests
-npm test
-
-# Run tests for specific package
-npm test -w @pokertools/engine
-npm test -w @pokertools/evaluator
-
-# Run tests in watch mode
-npm test -- --watch
-```
-
-## 📊 Performance
-
-Benchmark results on Apple M1 Air (2020):
-
-| Evaluator                 | Hands/sec      | Speed vs @pokertools/evaluator |
-| ------------------------- | -------------- | ------------------------------ |
-| **@pokertools/evaluator** | **17,915,292** | **1.00x (baseline)**           |
-| phe (native C++)          | 16,574,257     | 0.93x                          |
-| poker-evaluator           | 1,375,495      | 0.08x                          |
-| pokersolver               | 70,980         | 0.004x                         |
-
-See [packages/bench](./packages/bench) for detailed benchmarks.
-
-## 🎯 Use Cases
-
-### Online Poker Platforms
-
-- Real-money poker games
-- Tournament management
-- Cash game tables
-- Play-money games
-
-### Game Development
-
-- Poker training apps
-- Mobile poker games
-- Browser-based poker
-- Discord/Telegram bots
-
-### Analytics & Tools
-
-- Hand history analysis
-- Equity calculators
-- Range analysis
-- Training software
-
-## 📝 License
-
-MIT © PokerTools
-
-All packages in this monorepo are licensed under the MIT License. See the [LICENSE](./LICENSE) file for details.
-
----
-
-Made with ❤️ by poker enthusiasts, for poker enthusiasts.
+This project is licensed under the MIT License - see the [LICENSE](./LICENSE) file for details.

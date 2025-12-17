@@ -1,0 +1,322 @@
+// Poker API Database Schema
+// Architected for SQLite (Testing) and PostgreSQL (Production)
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite" // Change to "postgresql" for production
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// IDENTITY & AUTHENTICATION
+// ============================================================================
+
+model User {
+  id       String @id @default(cuid())
+  username String @unique
+  address  String @unique // Ethereum address (lowercase)
+  role     Role   @default(PLAYER)
+
+  // Relations
+  accounts      Account[]
+  sessions      Session[]
+  wallets       UserWallet[]
+  paymentTx     PaymentTransaction[]
+  notesWritten  PlayerNote[]         @relation("NoteAuthor")
+  notesReceived PlayerNote[]         @relation("NoteTarget")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([address])
+}
+
+enum Role {
+  PLAYER
+  ADMIN
+  BOT
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jti       String   @unique // JWT ID
+  expiresAt DateTime
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([jti])
+}
+
+// ============================================================================
+// FINANCIAL LEDGER (Double-Entry Accounting)
+// ============================================================================
+
+model Account {
+  id       String      @id @default(cuid())
+  userId   String
+  user     User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currency String      @default("USDC")
+  type     AccountType
+
+  // Cached balance in cents (1 chip = 1 cent). Source of truth is sum(entries).
+  balance Int @default(0)
+
+  entries LedgerEntry[]
+
+  @@unique([userId, currency, type])
+  @@index([userId])
+}
+
+enum AccountType {
+  MAIN    // Available for withdrawal/transfer
+  IN_PLAY // Locked on tables
+}
+
+model LedgerEntry {
+  id        String   @id @default(cuid())
+  accountId String
+  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  amount    Int // Positive = Credit, Negative = Debit
+  type      TxType
+
+  // Polymorphic reference (TableID, HandID, or PaymentTransactionID)
+  referenceId String?
+  metadata    Json? // Changed from String to Json for DB flexibility
+
+  // Optional: direct link to external payment if this entry represents a deposit/withdraw
+  paymentTx PaymentTransaction?
+
+  createdAt DateTime @default(now())
+
+  @@index([accountId])
+  @@index([referenceId])
+  @@index([createdAt])
+}
+
+enum TxType {
+  DEPOSIT
+  WITHDRAWAL
+  BUY_IN
+  CASH_OUT
+  RAKE
+  REFUND
+  HAND_WIN
+  HAND_LOSS
+  UNCALLED_BET
+  SWEEP
+}
+
+// ============================================================================
+// EXTERNAL PAYMENTS (Crypto Bridge)
+// ============================================================================
+
+// Unified table for Money In (Deposit) and Money Out (Withdrawal)
+model PaymentTransaction {
+  id     String          @id @default(cuid())
+  userId String
+  user   User            @relation(fields: [userId], references: [id])
+  type   PaymentType // DEPOSIT or WITHDRAWAL
+
+  // Blockchain Data
+  blockchainId String
+  blockchain   Blockchain @relation(fields: [blockchainId], references: [id])
+  tokenId      String
+  token        Token      @relation(fields: [tokenId], references: [id])
+
+  // Transaction Details
+  txHash       String? // Nullable initially for withdrawals (until broadcast)
+  address      String // From address (Deposit) or To address (Withdrawal)
+  blockNumber  String? // BigInt string
+
+  // Amounts
+  amountRaw    String // BigInt from blockchain (wei/satoshi)
+  amountCredit Int // Converted game chips (cents)
+  fee          String? // Network fee used (BigInt string)
+
+  // Lifecycle
+  status PaymentStatus @default(PENDING)
+
+  // Accounting Link (Once confirmed, a LedgerEntry is created)
+  ledgerEntryId String?      @unique
+  ledgerEntry   LedgerEntry? @relation(fields: [ledgerEntryId], references: [id])
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  confirmedAt DateTime?
+
+  // Enforce uniqueness on inbound txHash to prevent replay attacks
+  @@unique([blockchainId, txHash])
+  @@index([userId, type])
+  @@index([status])
+}
+
+enum PaymentType {
+  DEPOSIT
+  WITHDRAWAL
+}
+
+enum PaymentStatus {
+  PENDING     // Detected/Requested
+  PROCESSING  // In Mempool/Broadcasting
+  CONFIRMED   // Finalized on chain & Ledger Credited
+  FAILED      // Reverted on chain
+  REJECTED    // Admin rejected withdrawal
+  CANCELLED   // User cancelled
+}
+
+// ============================================================================
+// GAME ENTITIES
+// ============================================================================
+
+model Table {
+  id     String      @id @default(cuid())
+  name   String
+  mode   GameMode
+  status TableStatus @default(WAITING)
+
+  // Configuration { smallBlind, bigBlind, etc }
+  config Json
+
+  // Engine State Snapshot
+  state Json?
+
+  handHistories HandHistory[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+}
+
+enum GameMode {
+  CASH
+  TOURNAMENT
+}
+
+enum TableStatus {
+  WAITING
+  ACTIVE
+  PAUSED
+  CLOSED
+}
+
+// ============================================================================
+// HISTORY & ANALYTICS
+// ============================================================================
+
+model HandHistory {
+  id        String   @id @default(cuid())
+  tableId   String
+  table     Table    @relation(fields: [tableId], references: [id], onDelete: Cascade)
+
+  // Full JSON export of the hand
+  data      Json
+
+  timestamp DateTime @default(now())
+
+  @@index([tableId, timestamp])
+}
+
+// ============================================================================
+// CRYPTO INFRASTRUCTURE
+// ============================================================================
+
+model Blockchain {
+  id               String   @id @default(cuid())
+  name             String   @unique
+  chainId          Int      @unique
+  rpcUrl           String
+  rpcUrlBackup     String?
+  explorerUrl      String
+  nativeCurrency   Json // { name, symbol, decimals }
+  isEnabled        Boolean  @default(true)
+  confirmations    Int      @default(12)
+  lastScannedBlock String? // BigInt string
+
+  tokens       Token[]
+  transactions PaymentTransaction[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Token {
+  id           String     @id @default(cuid())
+  blockchainId String
+  blockchain   Blockchain @relation(fields: [blockchainId], references: [id])
+
+  address    String
+  symbol     String
+  name       String
+  decimals   Int
+  minDeposit String // BigInt string
+  isEnabled  Boolean @default(true)
+
+  transactions PaymentTransaction[]
+
+  @@unique([blockchainId, address])
+}
+
+model AdminWallet {
+  id             String       @id @default(cuid())
+  label          String
+  xpub           String // Encrypted
+  derivationPath String       @default("m/44'/60'/0'/0")
+  currentIndex   Int          @default(0)
+  isActive       Boolean      @default(true)
+  users          UserWallet[]
+  createdAt      DateTime     @default(now())
+}
+
+model UserWallet {
+  id              String           @id @default(cuid())
+  userId          String
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  adminWalletId   String
+  adminWallet     AdminWallet      @relation(fields: [adminWalletId], references: [id])
+  derivationIndex Int
+  address         String
+
+  // Only track active listening sessions for deposits
+  depositSessions DepositSession[]
+
+  @@unique([userId, adminWalletId])
+  @@index([address])
+}
+
+model DepositSession {
+  id           String     @id @default(cuid())
+  userId       String
+  userWalletId String
+  userWallet   UserWallet @relation(fields: [userWalletId], references: [id])
+  expiresAt    DateTime
+  createdAt    DateTime   @default(now())
+
+  @@index([expiresAt])
+}
+
+// ============================================================================
+// SOCIAL & NOTES
+// ============================================================================
+
+model PlayerNote {
+  id        String   @id @default(cuid())
+  authorId  String
+  author    User     @relation("NoteAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  targetId  String
+  target    User     @relation("NoteTarget", fields: [targetId], references: [id], onDelete: Cascade)
+  content   String
+  label     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([authorId, targetId])
+  @@index([authorId])
+}

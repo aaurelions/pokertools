@@ -1,25 +1,61 @@
-# 🃏 Poker Evaluator Benchmarks
+# 🏎️ @pokertools/bench
 
-This repository measures the performance of the most popular JavaScript/TypeScript poker hand evaluators.
+> **Performance benchmarks for poker hand evaluators**
 
-The goal is to determine how many **7-card hands (River)** each library can evaluate per second. This is the most computationally expensive scenario in Texas Hold'em and is critical for Equity Calculators and AI solvers.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## 🚀 Results
+A benchmarking tool that compares `@pokertools/evaluator` against other popular poker hand evaluators to validate performance claims.
 
-Tests run on Node.js V8 Engine.
-**Higher is better.**
+---
 
-| Library                   | Input Type  | Speed (Hands/Sec) | Relative Speed |
-| :------------------------ | :---------- | :---------------- | :------------- |
-| **@pokertools/evaluator** | **Integer** | **~17,900,000**   | **100%**       |
-| phe                       | Integer     | ~16,550,000       | 92.5%          |
-| poker-evaluator           | String      | ~1,390,000        | 7.7%           |
-| pokersolver               | String      | ~73,000           | 0.4%           |
+## 📊 Benchmark Results
 
-### Raw Output
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      BENCHMARK RESULTS (7-card hands)                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  Library                    │  Performance        │  Input Type             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  🥇 @pokertools/evaluator   │  ~17M hands/sec     │  Integer codes          │
+│  🥈 phe                     │  ~16M hands/sec     │  Integer codes          │
+│  🥉 poker-evaluator         │  ~1.3M hands/sec    │  String arrays          │
+│  🥉 pokersolver             │  ~70K hands/sec     │  String arrays          │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
-```text
-🃏 Starting Benchmark: 1000 random 7-card hands per cycle
+**Performance comparison:**
+
+| Library                 | Speed          | vs @pokertools |
+| ----------------------- | -------------- | -------------- |
+| `@pokertools/evaluator` | 17M hands/sec  | **baseline**   |
+| `phe`                   | 16M hands/sec  | ~1x            |
+| `poker-evaluator`       | 1.3M hands/sec | ~13x slower    |
+| `pokersolver`           | 70K hands/sec  | ~240x slower   |
+
+> **Note:** Results may vary based on hardware and Node.js version. Run the benchmark on your own system for accurate measurements.
+
+---
+
+## 🚀 Running the Benchmark
+
+### From Monorepo Root
+
+```bash
+npm run bench
+```
+
+### From Package Directory
+
+```bash
+cd packages/bench
+npm run bench
+```
+
+### Sample Output
+
+```
+Generating 1000 hands...
+🔥 Warming up CPU and JIT...
 ----------------------------------------------------------------
 phe (Int)                 |      16,574,257 hands/sec | ±2.26%
 poker-evaluator (Str)     |       1,375,495 hands/sec | ±0.33%
@@ -29,45 +65,156 @@ pokersolver (Str)         |          70,980 hands/sec | ±0.70%
 🚀 WINNER: @pokertools (Int)
 ```
 
-## 💡 Analysis
+---
 
-### 1. The "String Tax"
+## 🔧 How It Works
 
-Libraries that accept strings (e.g., `'Ah'`, `'Ks'`) are significantly slower because they spend CPU cycles parsing text before calculating value.
+### Test Setup
 
-- **@pokertools** and **phe** use integers internally. By converting cards to integers _once_ at the start of a game, you achieve **12x performance** over string-based libraries.
+1. **Generates 1,000 random 7-card hands**
+2. **Warms up CPU and JIT compiler** (5,000 iterations)
+3. **Runs each evaluator** on all hands per benchmark cycle
+4. **Reports hands/second** with statistical margin of error
 
-### 2. Memory Optimization
+### Libraries Compared
 
-**@pokertools** beats **phe** slightly because of memory management.
+| Library                                                            | Type    | Description                                |
+| ------------------------------------------------------------------ | ------- | ------------------------------------------ |
+| [`@pokertools/evaluator`](../evaluator)                            | Integer | Our evaluator using perfect hash tables    |
+| [`phe`](https://www.npmjs.com/package/phe)                         | Integer | Popular integer-based evaluator            |
+| [`poker-evaluator`](https://www.npmjs.com/package/poker-evaluator) | String  | Traditional string-based evaluator         |
+| [`pokersolver`](https://www.npmjs.com/package/pokersolver)         | String  | Full-featured poker solver with comparison |
 
-- **phe** (the original library) allocates new arrays inside the evaluation function, triggering the Garbage Collector frequently.
-- **@pokertools** uses static memory buffers, preventing GC overhead during tight simulation loops.
+---
 
-### 3. Algorithm Differences
+## 📦 Dependencies
 
-- **@pokertools / phe:** Use a Perfect Hash algorithm (Cactus Kev variant). It is pure math and bitwise operations. Extremely fast.
-- **poker-evaluator:** Uses a large lookup table (Two-Plus-Two algorithm). While fast in C++, accessing large memory arrays in JavaScript can cause CPU cache misses.
-- **pokersolver:** Designed for logic and human-readable descriptions (e.g., "Full House, Kings full of Tens"). It creates complex objects, making it too slow for Monte Carlo simulations, but excellent for UI display.
+```json
+{
+  "@pokertools/evaluator": "*",
+  "benchmark": "^2.1.4",
+  "microtime": "^3.1.1",
+  "phe": "^0.6.0",
+  "poker-evaluator": "^2.1.1",
+  "pokersolver": "^2.1.4"
+}
+```
 
-## 🛠️ Methodology
+---
 
-1.  **Setup:** We generate 1,000 random 7-card hands.
-2.  **Warm-up:** We run the evaluator 5,000 times before measuring. This forces the V8 engine to JIT-compile the code and signals the CPU to ramp up clock speed.
-3.  **Measurement:** We use `benchmark.js` to run the suite until statistically significant results are found.
-4.  **Fairness:**
-    - For Integer libraries, inputs are pre-converted to integers (measuring raw calc speed).
-    - For String libraries, inputs are passed as strings (measuring parsing + calc speed, as intended by those libs).
+## 🏗️ Architecture
 
-## 📦 How to Run
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         BENCHMARK FLOW                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
 
-1.  Install dependencies:
+┌─────────────────┐
+│  Generate Deck  │  52 cards: ["2s", "3s", ..., "Ac"]
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  Shuffle & Deal │  1,000 random 7-card hands
+└────────┬────────┘
+         │
+    ┌────┴────┬────────────────┐
+    │         │                │
+    ▼         ▼                ▼
+┌───────┐ ┌───────┐      ┌───────────┐
+│String │ │ Int   │      │  Int PHE  │
+│Arrays │ │ Codes │      │  Format   │
+└───┬───┘ └───┬───┘      └─────┬─────┘
+    │         │                │
+    │    ┌────┴────┐           │
+    │    │         │           │
+    ▼    ▼         ▼           ▼
+┌──────────┐ ┌──────────┐ ┌──────────┐
+│poker-eval│ │@pokertools│ │   phe    │
+│pokersolvr│ │ evaluator │ │          │
+└────┬─────┘ └────┬─────┘ └────┬─────┘
+     │            │            │
+     └────────────┴────────────┘
+                  │
+                  ▼
+         ┌────────────────┐
+         │ Benchmark.js   │
+         │ Statistics     │
+         └────────────────┘
+                  │
+                  ▼
+         ┌────────────────┐
+         │  Results:      │
+         │  hands/sec ±%  │
+         └────────────────┘
+```
 
-    ```bash
-    npm install
-    ```
+---
 
-2.  Run the benchmark:
-    ```bash
-    npm run bench
-    ```
+## 🔬 Methodology
+
+### Why Integer-Based Evaluators Are Faster
+
+```
+String-based evaluation:
+  "As" → parse rank → parse suit → lookup → evaluate
+
+Integer-based evaluation:
+  48 → direct lookup → evaluate
+
+Overhead per card: ~10-20 nanoseconds for parsing
+For 7 cards × millions of hands = significant difference
+```
+
+### JIT Warm-up
+
+The benchmark includes a warm-up phase to ensure:
+
+- V8 JIT compiler has optimized hot paths
+- CPU frequency scaling has reached maximum
+- Garbage collection has stabilized
+
+### Statistical Validity
+
+- **Benchmark.js** runs multiple cycles automatically
+- **Reports margin of error (±%)** for each measurement
+- **Runs until statistically significant** results achieved
+
+---
+
+## 📈 Interpreting Results
+
+### What the Numbers Mean
+
+- **hands/sec**: Number of complete 7-card hand evaluations per second
+- **±X%**: Relative margin of error (95% confidence interval)
+
+### Factors Affecting Performance
+
+| Factor          | Impact                      |
+| --------------- | --------------------------- |
+| CPU Speed       | Linear correlation          |
+| Node.js Version | V8 optimizations vary       |
+| Memory Speed    | Affects lookup table access |
+| Other Processes | Can cause variance          |
+
+### Fair Comparison Notes
+
+1. **Integer vs String**: Integer-based evaluators have an inherent advantage due to no parsing overhead
+2. **Feature Set**: `pokersolver` offers more features (hand comparison, wildcards) which adds overhead
+3. **Memory Usage**: Lookup table evaluators trade memory for speed
+
+---
+
+## 🔗 Related Packages
+
+| Package                               | Description                     |
+| ------------------------------------- | ------------------------------- |
+| [@pokertools/evaluator](../evaluator) | The evaluator being benchmarked |
+| [@pokertools/engine](../engine)       | Uses the evaluator for showdown |
+
+---
+
+## 📄 License
+
+MIT © A.Aurelius

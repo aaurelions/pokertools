@@ -4,7 +4,7 @@
  * Machine-readable format for analysis and storage
  */
 
-import { HandHistory, ExportOptions } from "../types";
+import { HandHistory, ExportOptions } from "@pokertools/types";
 
 /**
  * Export hand history to JSON format

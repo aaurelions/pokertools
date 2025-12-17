@@ -1,0 +1,81 @@
+{
+  "name": "@pokertools/sdk",
+  "version": "1.0.2",
+  "description": "TypeScript SDK for PokerTools API - Real-time poker client for browser and Node.js",
+  "author": "A.Aurelius",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./react": {
+      "types": "./dist/react/index.d.ts",
+      "import": "./dist/react/index.mjs",
+      "require": "./dist/react/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup --tsconfig tsconfig.build.json",
+    "build:watch": "tsup --watch --tsconfig tsconfig.build.json",
+    "clean": "rm -rf dist coverage node_modules",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --ext .ts",
+    "lint:fix": "eslint . --ext .ts,.tsx --fix",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "poker",
+    "sdk",
+    "client",
+    "websocket",
+    "real-time",
+    "texas-holdem",
+    "react",
+    "react-native",
+    "typescript"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aaurelions/pokertools.git",
+    "directory": "packages/sdk"
+  },
+  "homepage": "https://github.com/aaurelions/pokertools/tree/main/packages/sdk#readme",
+  "bugs": {
+    "url": "https://github.com/aaurelions/pokertools/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@pokertools/types": "*"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.7",
+    "react": "^19.2.3",
+    "tsup": "^8.5.1"
+  },
+  "peerDependencies": {
+    "react": ">=19.2.3"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  }
+}

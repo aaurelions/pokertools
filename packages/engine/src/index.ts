@@ -14,4 +14,4 @@ export { calculateTotalChips, auditChipConservation } from "./utils/invariants";
 
 // Hand History
 export { exportHandHistory, getHandHistory, exportMultipleHands } from "./history/exporter";
-export type { HandHistory, HandHistoryPlayer, StreetHistory, ExportOptions } from "./history/types";
+export { HandHistory, HandHistoryPlayer, StreetHistory, ExportOptions } from "@pokertools/types";

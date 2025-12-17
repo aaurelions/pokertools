@@ -9,9 +9,12 @@ export function cardCodesToStrings(codes: readonly number[]): string[] {
 
 /**
  * Convert string card array to integer codes
+ * Filters out null (masked) cards
  */
-export function cardStringsToCards(cards: readonly string[]): number[] {
-  return cards.map((card) => getCardCode(card));
+export function cardStringsToCards(cards: ReadonlyArray<string | null>): number[] {
+  return cards
+    .filter((c): c is string => c !== null)
+    .map((card) => getCardCode(card));
 }
 
 /**

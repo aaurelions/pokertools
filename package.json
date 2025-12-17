@@ -1,19 +1,50 @@
 {
   "name": "pokertools-monorepo",
+  "version": "1.0.2",
   "private": true,
+  "description": "Enterprise-grade Texas Hold'em poker engine and API monorepo",
+  "author": "A.Aurelius",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aaurelions/pokertools.git"
+  },
+  "bugs": {
+    "url": "https://github.com/aaurelions/pokertools/issues"
+  },
+  "homepage": "https://github.com/aaurelions/pokertools#readme",
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  },
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
-    "postinstall": "npm run build",
-    "build": "tsc -b",
-    "clean": "tsc -b --clean && rm -rf node_modules packages/*/node_modules packages/*/dist",
-    "test": "npm run test --workspaces",
-    "bench": "npm run bench -w @pokertools/bench",
-    "lint": "eslint . --ext .ts",
+    "setup": "npm install",
+    "build": "npm run build --workspaces --if-present",
+    "build:watch": "tsc -b --watch",
+    "clean": "npm run clean --workspaces --if-present && rm -rf node_modules",
+    "test": "npm run test --workspaces --if-present",
+    "test:coverage": "npm run test:coverage --workspaces --if-present",
+    "test:watch": "npm run test:watch --workspaces --if-present",
+    "lint": "eslint . --ext .ts --max-warnings 30",
     "lint:fix": "eslint . --ext .ts --fix",
     "format": "prettier --write \"**/*.{ts,json,md}\"",
-    "format:check": "prettier --check \"**/*.{ts,json,md}\""
+    "format:check": "prettier --check \"**/*.{ts,json,md}\"",
+    "typecheck": "tsc -b",
+    "validate": "npm run format:check && npm run lint && npm test",
+    "prepare": "npm run db:generate -w @pokertools/api --if-present && tsc -b",
+    "dev:api": "npm run dev -w @pokertools/api",
+    "dev:workers": "npm run workers -w @pokertools/api",
+    "start:api": "npm start -w @pokertools/api",
+    "bench": "npm run bench -w @pokertools/bench",
+    "redis": "redis-server",
+    "db:migrate": "npm run db:migrate -w @pokertools/api",
+    "db:seed": "npm run db:seed -w @pokertools/api",
+    "db:studio": "npm run db:studio -w @pokertools/api",
+    "db:reset": "npm run db:reset -w @pokertools/api",
+    "ci": "npm run clean && npm run setup && npm run test"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.3",
@@ -22,16 +53,27 @@
     "@swc/jest": "^0.2.39",
     "@types/jest": "^30.0.0",
     "@types/node": "^24.10.1",
+    "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "^8.48.0",
     "@typescript-eslint/parser": "^8.48.0",
+    "@vitest/coverage-v8": "^4.0.14",
+    "dotenv": "^16.6.1",
     "eslint": "^9.39.1",
     "fast-check": "^4.3.0",
     "globals": "^16.5.0",
     "jest": "^30.2.0",
-    "prettier": "^3.7.2",
+    "pino": "^10.1.0",
+    "pino-pretty": "^13.1.3",
+    "prettier": "^3.7.4",
+    "prettier-plugin-solidity": "^2.2.0",
+    "prisma": "^6.19.0",
     "ts-node": "^10.9.2",
+    "tsx": "^4.20.6",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.48.0"
+    "typescript-eslint": "^8.48.0",
+    "vitest": "^4.0.14",
+    "ws": "^8.18.3",
+    "zod": "^3.25.76"
   },
   "overrides": {
     "test-exclude": "^7.0.1"

@@ -113,6 +113,7 @@ export interface CheckAction extends BaseAction {
 export interface CallAction extends BaseAction {
   readonly type: ActionType.CALL;
   readonly playerId: string;
+  readonly amount?: number; // Optional: Amount called (useful for history tracking and all-in scenarios)
 }
 
 /**

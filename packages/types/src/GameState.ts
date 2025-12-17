@@ -63,6 +63,7 @@ export interface GameState {
 
   // Time Bank (per-player resource)
   readonly timeBanks: ReadonlyMap<number, number>; // Seat -> seconds remaining
+  readonly timeBankActiveSeat: number | null; // Seat currently using time bank (null if none active)
 
   // History
   readonly actionHistory: readonly ActionRecord[];

@@ -7,8 +7,10 @@ import {
   Player,
   PlayerStatus,
   SitInOption,
+  ActionType,
 } from "@pokertools/types";
 import { getPlayerById } from "../utils/positioning";
+import { handleFold } from "./betting";
 
 /**
  * Handle SIT action - add player to table
@@ -55,19 +57,44 @@ export function handleStand(state: GameState, action: StandAction): GameState {
     return state;
   }
 
-  const { seat } = result;
-  const newPlayers = [...state.players];
+  let currentState = state;
+  const { player, seat } = result;
+
+  // 1. BEST PRACTICE: If the player is in a live hand, they must FOLD first.
+  // This resolves the "ActionTo" pointer, potential winners, and pot eligibility
+  // using the standard game rules defined in handleFold.
+  const isLiveHand =
+    currentState.handNumber > 0 &&
+    currentState.street !== "SHOWDOWN" && // Not needed if hand is over
+    (player.status === "ACTIVE" || player.status === "ALL_IN");
+
+  if (isLiveHand) {
+    // Execute a "Virtual Fold" to gracefully exit the hand
+    currentState = handleFold(currentState, {
+      type: ActionType.FOLD,
+      playerId: player.id,
+      timestamp: action.timestamp,
+    });
+
+    // NOTE: handleFold returns a new state where actionTo has already been
+    // advanced to the next player. The invariant check will now pass.
+  }
+
+  // 2. Remove player from table (Standard Stand Logic)
+  const newPlayers = [...currentState.players];
   newPlayers[seat] = null;
 
   // Remove from time banks
-  const newTimeBanks = new Map(state.timeBanks);
+  const newTimeBanks = new Map(currentState.timeBanks);
   newTimeBanks.delete(seat);
 
   // Remove from active players if present
-  const newActivePlayers = state.activePlayers.filter((s) => s !== seat);
+  // (Note: handleFold might have already moved them to FOLDED status,
+  // but we ensure they are fully removed from tracking here)
+  const newActivePlayers = currentState.activePlayers.filter((s) => s !== seat);
 
   return {
-    ...state,
+    ...currentState,
     players: newPlayers,
     activePlayers: newActivePlayers,
     timeBanks: newTimeBanks,

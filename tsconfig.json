@@ -1,8 +1,13 @@
 {
   "files": [],
+  "compilerOptions": {
+    "tsBuildInfoFile": "./.tsbuildinfo"
+  },
   "references": [
     { "path": "./packages/types" },
     { "path": "./packages/evaluator" },
-    { "path": "./packages/engine" }
+    { "path": "./packages/engine" },
+    { "path": "./packages/api" },
+    { "path": "./packages/sdk" }
   ]
 }

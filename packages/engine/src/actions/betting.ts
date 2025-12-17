@@ -51,6 +51,7 @@ export function handleFold(state: GameState, action: FoldAction): GameState {
     players: newPlayers,
     activePlayers: newActivePlayers,
     actionHistory: [...state.actionHistory, actionRecord],
+    timeBankActiveSeat: null, // Clear time bank flag on any action
     timestamp: action.timestamp!,
   };
 
@@ -101,6 +102,7 @@ export function handleCheck(state: GameState, action: CheckAction): GameState {
   const newState: GameState = {
     ...state,
     actionHistory: [...state.actionHistory, actionRecord],
+    timeBankActiveSeat: null, // Clear time bank flag on any action
     timestamp: action.timestamp!,
   };
 
@@ -147,9 +149,9 @@ export function handleCall(state: GameState, action: CallAction): GameState {
   const newCurrentBets = new Map(state.currentBets);
   newCurrentBets.set(seat, playerBet + callAmount);
 
-  // Add to action history
+  // Add to action history (include actual call amount in the action)
   const actionRecord: ActionRecord = {
-    action,
+    action: { ...action, amount: callAmount }, // Populate amount field for history
     seat,
     resultingPot: getTotalPot(state) + callAmount,
     resultingStack: newPlayers[seat].stack,
@@ -161,6 +163,7 @@ export function handleCall(state: GameState, action: CallAction): GameState {
     players: newPlayers,
     currentBets: newCurrentBets,
     actionHistory: [...state.actionHistory, actionRecord],
+    timeBankActiveSeat: null, // Clear time bank flag on any action
     timestamp: action.timestamp!,
   };
 
@@ -217,6 +220,7 @@ export function handleBet(state: GameState, action: BetAction): GameState {
     lastRaiseAmount: betAmount,
     lastAggressorSeat: seat,
     actionHistory: [...state.actionHistory, actionRecord],
+    timeBankActiveSeat: null, // Clear time bank flag on any action
     timestamp: action.timestamp!,
   };
 
@@ -291,6 +295,7 @@ export function handleRaise(state: GameState, action: RaiseAction): GameState {
     lastRaiseAmount: reopensBetting ? raiseIncrement : state.lastRaiseAmount,
     lastAggressorSeat: reopensBetting ? seat : state.lastAggressorSeat,
     actionHistory: [...state.actionHistory, actionRecord],
+    timeBankActiveSeat: null, // Clear time bank flag on any action
     timestamp: action.timestamp!,
   };
 

@@ -2,8 +2,17 @@
  * Build hand history from game state and action history
  */
 
-import { GameState, Street, Action, ActionType } from "@pokertools/types";
-import { HandHistory, HandHistoryPlayer, StreetHistory, ActionRecord, WinnerRecord } from "./types";
+import {
+  GameState,
+  Street,
+  Action,
+  ActionType,
+  HandHistory,
+  HandHistoryPlayer,
+  StreetHistory,
+  HandHistoryActionRecord,
+  WinnerRecord,
+} from "@pokertools/types";
 
 /**
  * Build complete hand history from final game state
@@ -51,12 +60,16 @@ function buildPlayerHistory(state: GameState): HandHistoryPlayer[] {
     // Calculate starting stack (current + invested)
     const startingStack = player.stack + player.totalInvestedThisHand;
 
+    // Only include cards if they are fully visible (no masked/null cards)
+    const hasMaskedCards = player.hand?.some((c) => c === null);
+    const cards = player.hand && !hasMaskedCards ? (player.hand as string[]) : undefined;
+
     players.push({
       seat: player.seat,
       name: player.name,
       startingStack,
       endingStack: player.stack,
-      cards: player.hand ? [...player.hand] : undefined,
+      cards,
     });
   }
 
@@ -89,8 +102,8 @@ function buildStreetHistory(state: GameState): StreetHistory[] {
 /**
  * Group actions by street
  */
-function groupActionsByStreet(state: GameState): Map<Street, ActionRecord[]> {
-  const grouped = new Map<Street, ActionRecord[]>();
+function groupActionsByStreet(state: GameState): Map<Street, HandHistoryActionRecord[]> {
+  const grouped = new Map<Street, HandHistoryActionRecord[]>();
 
   // Initialize with all streets
   grouped.set(Street.PREFLOP, []);
@@ -106,7 +119,7 @@ function groupActionsByStreet(state: GameState): Map<Street, ActionRecord[]> {
     const street = (record.street as Street) ?? state.street;
     const existing = grouped.get(street) ?? [];
 
-    const actionRecord: ActionRecord = {
+    const actionRecord: HandHistoryActionRecord = {
       seat: record.seat,
       playerName: state.players[record.seat]?.name ?? `Player ${record.seat}`,
       action: record.action,
@@ -151,7 +164,7 @@ function getBoardForStreet(state: GameState, street: Street): readonly string[] 
 /**
  * Calculate pot size at end of street actions
  */
-function calculatePotAtStreet(actions: ActionRecord[]): number {
+function calculatePotAtStreet(actions: HandHistoryActionRecord[]): number {
   let pot = 0;
 
   for (const action of actions) {

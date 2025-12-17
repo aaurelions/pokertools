@@ -1,7 +1,9 @@
 {
   "name": "@pokertools/types",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "TypeScript type definitions for poker game engine",
+  "author": "A.Aurelius",
+  "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -17,19 +19,26 @@
     "README.md",
     "LICENSE"
   ],
+  "sideEffects": false,
   "scripts": {
     "build": "tsc",
-    "clean": "rm -rf dist",
-    "test": "echo \"No tests for types package (types only)\" && exit 0"
+    "build:watch": "tsc --watch",
+    "clean": "rm -rf dist coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --ext .ts",
+    "lint:fix": "eslint . --ext .ts --fix",
+    "test": "NODE_OPTIONS='--no-warnings' jest",
+    "test:watch": "NODE_OPTIONS='--no-warnings' jest --watch",
+    "test:coverage": "NODE_OPTIONS='--no-warnings' jest --coverage"
   },
   "keywords": [
     "poker",
     "types",
     "typescript",
-    "texas-holdem"
+    "texas-holdem",
+    "game-engine",
+    "immutable"
   ],
-  "author": "A.Aurelius",
-  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/aaurelions/pokertools.git",
@@ -42,7 +51,10 @@
   "publishConfig": {
     "access": "public"
   },
-  "devDependencies": {
-    "typescript": "^5.9.3"
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "zod": "^3.25.76"
   }
 }

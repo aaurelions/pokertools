@@ -13,6 +13,7 @@ on:
         options:
           - all
           - types
+          - sdk
           - evaluator
           - engine
 
@@ -50,7 +51,15 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      # 2. Publish Evaluator (Stand-alone / Dependency)
+      # 2. Publish SDK (Depends on Types)
+      - name: Publish @pokertools/sdk
+        if: ${{ inputs.target == 'all' || inputs.target == 'sdk' || github.event_name == 'release' }}
+        run: npm publish --access public --provenance
+        working-directory: ./packages/sdk
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # 3. Publish Evaluator (Stand-alone / Dependency)
       - name: Publish @pokertools/evaluator
         if: ${{ inputs.target == 'all' || inputs.target == 'evaluator' || github.event_name == 'release' }}
         run: npm publish --access public --provenance

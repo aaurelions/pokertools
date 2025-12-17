@@ -1,40 +1,39 @@
 # Dependencies
 node_modules/
 
-# Build outputs
+# Build output
 dist/
-lib/
-*.tsbuildinfo
+generated/
+.tsbuildinfo
+
+# Runtime (temp files, logs, databases, Redis data)
+.runtime/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
 
 # Logs
+logs/
 *.log
 npm-debug.log*
-yarn-debug.log*
-
-# Mac OS / Finder Garbage
-.DS_Store
-.AppleDouble
-.LSOverride
-._*
-.DocumentRevisions-V100
-.fseventsd
-.Spotlight-V100
-.TemporaryItems
-.Trashes
-.VolumeIcon.icns
-.com.apple.timemachine.donotpresent
-
-# Editor/IDE
-.vscode/
-.idea/
-*.swp
-*.swo
 
 # Testing
 coverage/
 .nyc_output/
-junit.xml
 
-# Environment
-.env
-.env.*
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp

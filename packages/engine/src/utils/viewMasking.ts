@@ -7,9 +7,14 @@ import { GameState, Street, PublicState, Player, PlayerStatus } from "@pokertool
  *
  * @param state Full game state
  * @param playerId Player requesting view (null = spectator)
+ * @param version State version number (defaults to 0 if not provided)
  * @returns Masked public state
  */
-export function createPublicView(state: GameState, playerId: string | null = null): PublicState {
+export function createPublicView(
+  state: GameState,
+  playerId: string | null = null,
+  version = 0
+): PublicState {
   const maskedPlayers = state.players.map((player, _seat) => {
     if (!player) return null;
 
@@ -22,11 +27,19 @@ export function createPublicView(state: GameState, playerId: string | null = nul
     };
   });
 
+  // Convert Map to plain object for JSON serialization
+  const currentBetsObj: Record<number, number> = {};
+  for (const [seat, amount] of state.currentBets.entries()) {
+    currentBetsObj[seat] = amount;
+  }
+
   return {
     ...state,
     deck: [], // Always hide deck
     players: maskedPlayers,
+    currentBets: currentBetsObj as unknown as ReadonlyMap<number, number>, // Serializable record
     viewingPlayerId: playerId,
+    version,
   };
 }
 

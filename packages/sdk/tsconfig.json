@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "tsBuildInfoFile": "./dist/.tsbuildinfo",
+    "lib": ["ES2020", "DOM"],
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "noEmit": true
+  },
+  "include": ["src/**/*", "tsup.config.ts", "vitest.config.ts"],
+  "exclude": ["node_modules", "dist", "tests"],
+  "references": [{ "path": "../types" }]
+}

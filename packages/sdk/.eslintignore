@@ -1,0 +1,5 @@
+tsup.config.ts
+vitest.config.ts
+dist
+coverage
+node_modules

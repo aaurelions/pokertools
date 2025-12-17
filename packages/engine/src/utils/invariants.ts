@@ -118,6 +118,11 @@ export function getInitialChips(state: GameState): number {
  * Checks multiple invariants beyond just chip conservation
  */
 export function validateGameStateIntegrity(state: GameState): void {
+  // Skip strict integrity checks in client mode to prevent UI crashes on minor sync issues
+  if (state.config.isClient) {
+    return;
+  }
+
   // 1. Chip conservation
   const initialChips = getInitialChips(state);
   auditChipConservation(state, initialChips);

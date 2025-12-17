@@ -26,6 +26,7 @@ export interface Snapshot {
   readonly ante: number;
   readonly blindLevel: number;
   readonly timeBanks: Record<number, number>;
+  readonly timeBankActiveSeat: number | null;
   readonly actionHistory: ActionRecord[];
   readonly previousStates: Snapshot[]; // Truncated
   readonly timestamp: number;
@@ -74,6 +75,7 @@ export function createSnapshot(state: GameState): Snapshot {
     ante: state.ante,
     blindLevel: state.blindLevel,
     timeBanks,
+    timeBankActiveSeat: state.timeBankActiveSeat,
     actionHistory: Array.from(state.actionHistory),
     previousStates,
     timestamp: state.timestamp,
@@ -103,6 +105,7 @@ export function restoreFromSnapshot(snapshot: Snapshot): GameState {
     ...snapshot,
     currentBets,
     timeBanks,
+    timeBankActiveSeat: snapshot.timeBankActiveSeat ?? null, // Backward compatibility
     previousStates,
     rakeThisHand: snapshot.rakeThisHand || 0, // Add missing field with default
   } as GameState;

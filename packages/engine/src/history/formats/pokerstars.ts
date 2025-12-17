@@ -4,8 +4,14 @@
  * Format specification based on PokerStars hand history text format
  */
 
-import { HandHistory, StreetHistory, ActionRecord, ExportOptions } from "../types";
-import { Street, ActionType } from "@pokertools/types";
+import {
+  HandHistory,
+  StreetHistory,
+  HandHistoryActionRecord,
+  ExportOptions,
+  Street,
+  ActionType,
+} from "@pokertools/types";
 
 /**
  * Export hand history to PokerStars format
@@ -152,7 +158,7 @@ function buildStreetHeader(street: StreetHistory): string {
 /**
  * Build action line
  */
-function buildActionLine(action: ActionRecord, history: HandHistory): string {
+function buildActionLine(action: HandHistoryActionRecord, history: HandHistory): string {
   const player = history.players.find((p) => p.seat === action.seat);
   const name = player?.name ?? `Player ${action.seat + 1}`;
 

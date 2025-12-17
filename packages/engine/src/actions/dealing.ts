@@ -18,10 +18,12 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
 
   // Determine if this is a tournament
   const isTournament = !!state.config.blindStructure;
+  const isClient = !!state.config.isClient;
 
-  // Create and shuffle deck
+  // Create and shuffle deck (server only)
+  // In client mode, we use an empty deck and deal masked cards
   const rng = state.config.randomProvider ?? Math.random;
-  const deck = shuffle(createDeck(), rng);
+  const deck = isClient ? [] : shuffle(createDeck(), rng);
 
   // Create a copy of timeBanks to modify
   const newTimeBanks = new Map(state.timeBanks);
@@ -142,11 +144,17 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
   // Deal 2 cards, one by one, in circle (standard poker procedure)
   for (let round = 0; round < 2; round++) {
     for (const seat of playersToReceive) {
-      // Deal 1 card
-      const [cards, nextDeck] = dealCards(remainingDeck, 1);
-      remainingDeck = nextDeck;
+      let cardStrings: Array<string | null>;
 
-      const cardStrings = cardCodesToStrings(cards);
+      if (isClient) {
+        // Client mode: Deal masked cards
+        cardStrings = [null];
+      } else {
+        // Server mode: Deal from deck
+        const [cards, nextDeck] = dealCards(remainingDeck, 1);
+        remainingDeck = nextDeck;
+        cardStrings = cardCodesToStrings(cards);
+      }
 
       // Append to existing hand
       const currentPlayer = newPlayers[seat]!;
@@ -200,20 +208,26 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
     // Post big blind (Must exist for hand to start)
     const bbPlayer = newPlayers[bigBlindSeat];
     if (bbPlayer) {
-      const bbAmount = Math.min(bbPlayer.stack, state.bigBlind);
-      currentBets.set(bigBlindSeat, bbAmount);
-      newPlayers[bigBlindSeat] = {
-        ...bbPlayer,
-        stack: bbPlayer.stack - bbAmount,
-        betThisStreet: bbAmount,
-        totalInvestedThisHand: bbAmount,
-        status:
-          bbAmount === bbPlayer.stack
-            ? PlayerStatus.ALL_IN
-            : bbPlayer.isSittingOut
-              ? PlayerStatus.FOLDED // Sitting-out player posts blind then auto-folds
-              : PlayerStatus.ACTIVE,
-      };
+      // In Cash Games: sitting-out players should NEVER post blinds (they are skipped by getBlindPositions)
+      // In Tournaments: sitting-out players MUST post blinds to prevent "blinding off" exploit
+      const shouldPostBB = isTournament || !bbPlayer.isSittingOut;
+
+      if (shouldPostBB) {
+        const bbAmount = Math.min(bbPlayer.stack, state.bigBlind);
+        currentBets.set(bigBlindSeat, bbAmount);
+        newPlayers[bigBlindSeat] = {
+          ...bbPlayer,
+          stack: bbPlayer.stack - bbAmount,
+          betThisStreet: bbAmount,
+          totalInvestedThisHand: bbAmount,
+          status:
+            bbAmount === bbPlayer.stack
+              ? PlayerStatus.ALL_IN
+              : bbPlayer.isSittingOut
+                ? PlayerStatus.FOLDED // Sitting-out player posts blind then auto-folds
+                : PlayerStatus.ACTIVE,
+        };
+      }
     }
   }
 

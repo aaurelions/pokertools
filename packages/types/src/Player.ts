@@ -27,7 +27,7 @@ export interface Player {
   readonly name: string; // Player display name
   readonly seat: number; // 0-based seat index (0-9)
   readonly stack: number; // Current chips (integer only)
-  readonly hand: readonly string[] | null; // Hole cards ["As", "Kh"] or null (never destroyed, preserved for history)
+  readonly hand: ReadonlyArray<string | null> | null; // Hole cards ["As", "Kh"], [null, null] (masked), or null (no hand)
   readonly shownCards: readonly number[] | null; // Indices of cards shown at showdown [0, 1] or [0] or null if mucked
   readonly status: PlayerStatus; // Current status in hand
   readonly betThisStreet: number; // Amount bet this street

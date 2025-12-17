@@ -1,7 +1,9 @@
 {
   "name": "@pokertools/engine",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Enterprise-grade Texas Hold'em poker engine",
+  "author": "A.Aurelius",
+  "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -10,16 +12,32 @@
       "require": "./dist/index.js",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "browser": "./dist/browser.js",
+      "require": "./dist/browser.js",
+      "import": "./dist/browser.js",
+      "default": "./dist/browser.js"
     }
   },
+  "browser": "./dist/browser.js",
   "files": [
     "dist",
     "README.md",
     "LICENSE"
   ],
+  "sideEffects": false,
   "scripts": {
     "build": "tsc",
-    "test": "NODE_OPTIONS='--no-warnings' jest"
+    "build:watch": "tsc --watch",
+    "clean": "rm -rf dist coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --ext .ts",
+    "lint:fix": "eslint . --ext .ts --fix",
+    "test": "NODE_OPTIONS='--no-warnings' jest",
+    "test:watch": "NODE_OPTIONS='--no-warnings' jest --watch",
+    "test:coverage": "NODE_OPTIONS='--no-warnings' jest --coverage"
   },
   "keywords": [
     "poker",
@@ -27,10 +45,11 @@
     "engine",
     "game-engine",
     "redux",
-    "immutable"
+    "immutable",
+    "state-management",
+    "tournament",
+    "cash-game"
   ],
-  "author": "A.Aurelius",
-  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/aaurelions/pokertools.git",
@@ -43,7 +62,14 @@
   "publishConfig": {
     "access": "public"
   },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
+    "@pokertools/evaluator": "*",
+    "@pokertools/types": "*"
+  },
+  "peerDependencies": {
     "@pokertools/evaluator": "*",
     "@pokertools/types": "*"
   }

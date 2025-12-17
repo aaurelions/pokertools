@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+.tsbuildinfo
+
+# Foundry
+cache/
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+contracts/lib/
+
+# Environment
+.env
+.env.local
+
+# Logs
+*.log
+pino-*.log
+
+# OS
+.DS_Store

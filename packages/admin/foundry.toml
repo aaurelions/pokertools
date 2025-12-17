@@ -1,0 +1,23 @@
+[profile.default]
+src = "contracts/src"
+out = "contracts/out"
+libs = ["node_modules", "contracts/lib", "../../node_modules"]
+test = "contracts/test"
+script = "contracts/script"
+solc_version = "0.8.24"
+optimizer = true
+optimizer_runs = 200
+via_ir = true
+remappings = [
+    "@openzeppelin/contracts/=contracts/lib/openzeppelin-contracts/contracts/",
+    "forge-std/=contracts/lib/forge-std/src/"
+]
+
+[rpc_endpoints]
+mainnet = "${MAINNET_RPC_URL}"
+polygon = "${POLYGON_RPC_URL}"
+local = "http://localhost:8545"
+
+[etherscan]
+mainnet = { key = "${ETHERSCAN_API_KEY}" }
+polygon = { key = "${POLYGONSCAN_API_KEY}" }

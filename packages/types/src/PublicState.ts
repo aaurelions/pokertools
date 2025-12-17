@@ -22,4 +22,5 @@ export interface PublicState extends Omit<GameState, "deck" | "players"> {
   readonly deck: readonly number[]; // Always empty (hidden)
   readonly players: ReadonlyArray<PublicPlayer | null>; // Players with masked cards
   readonly viewingPlayerId: string | null; // null = spectator view
+  readonly version: number; // Monotonic counter for state synchronization
 }

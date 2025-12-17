@@ -9,6 +9,18 @@ import { Hand } from "pokersolver";
 
 import { evaluate, getCardCode } from "@pokertools/evaluator";
 
+/*
+~# npm run bench
+🃏 Starting Benchmark: 1000 random 7-card hands per cycle
+----------------------------------------------------------------
+phe (Int)                 |      16,574,257 hands/sec | ±2.26%
+poker-evaluator (Str)     |       1,375,495 hands/sec | ±0.33%
+pokersolver (Str)         |          70,980 hands/sec | ±0.70%
+@pokertools (Int)         |      17,915,292 hands/sec | ±1.56%
+----------------------------------------------------------------
+🚀 WINNER: @pokertools (Int)
+*/
+
 const suite = new Benchmark.Suite();
 
 // --- Data Setup ---

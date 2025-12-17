@@ -77,5 +77,7 @@ export function getBoardCodes(board: string): number[] {
 export function stringifyCardCode(code: number): string {
   const rank = code >> 2;
   const suit = code & 0b11;
-  return (RANK_CHARS[rank] || "?") + (SUIT_CHARS[suit] || "?");
+  const rankChar = RANK_CHARS[rank] || "?";
+  const suitChar = SUIT_CHARS[suit] || "?";
+  return rankChar + suitChar;
 }

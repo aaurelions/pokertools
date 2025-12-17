@@ -37,6 +37,27 @@ export function getHeadsUpActionOrder(state: GameState, street: Street): number[
 
   // Find the two seats
   const [seat1, seat2] = activePlayers.sort((a, b) => a - b);
+
+  // Check if button is one of the active players
+  const isButtonActive = activePlayers.includes(buttonSeat);
+
+  if (!isButtonActive) {
+    // Dead button scenario - button is not one of the active players
+    // In this case, the "button" for action purposes is the first active player
+    // after the actual button position
+    const effectiveButton = seat1 > buttonSeat || seat2 < buttonSeat ? seat1 : seat2;
+    const otherSeat = effectiveButton === seat1 ? seat2 : seat1;
+
+    if (street === Street.PREFLOP) {
+      // Effective button acts first preflop
+      return [effectiveButton, otherSeat];
+    } else {
+      // Effective button acts last postflop
+      return [otherSeat, effectiveButton];
+    }
+  }
+
+  // Normal case: button is one of the active players
   const otherSeat = seat1 === buttonSeat ? seat2 : seat1;
 
   if (street === Street.PREFLOP) {

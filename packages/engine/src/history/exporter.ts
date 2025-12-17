@@ -2,8 +2,7 @@
  * Main hand history exporter
  */
 
-import { GameState } from "@pokertools/types";
-import { HandHistory, ExportOptions } from "./types";
+import { GameState, HandHistory, ExportOptions } from "@pokertools/types";
 import { buildHandHistory } from "./handHistoryBuilder";
 import { exportToPokerStars } from "./formats/pokerstars";
 import { exportToJSON } from "./formats/json";

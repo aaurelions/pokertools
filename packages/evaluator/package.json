@@ -1,7 +1,9 @@
 {
   "name": "@pokertools/evaluator",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "High-performance Poker Hand Evaluator (5, 6, and 7 cards)",
+  "author": "A.Aurelius",
+  "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -17,9 +19,17 @@
     "README.md",
     "LICENSE"
   ],
+  "sideEffects": false,
   "scripts": {
     "build": "tsc",
-    "test": "NODE_OPTIONS='--no-warnings' jest"
+    "build:watch": "tsc --watch",
+    "clean": "rm -rf dist coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --ext .ts",
+    "lint:fix": "eslint . --ext .ts --fix",
+    "test": "NODE_OPTIONS='--no-warnings' jest",
+    "test:watch": "NODE_OPTIONS='--no-warnings' jest --watch",
+    "test:coverage": "NODE_OPTIONS='--no-warnings' jest --coverage"
   },
   "keywords": [
     "poker",
@@ -31,10 +41,10 @@
     "poker-hand",
     "poker-evaluator",
     "card-game",
-    "performance"
+    "performance",
+    "fast",
+    "algorithm"
   ],
-  "author": "A.Aurelius",
-  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/aaurelions/pokertools.git",
@@ -46,5 +56,8 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
