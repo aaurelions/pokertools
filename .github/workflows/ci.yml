@@ -55,22 +55,10 @@ jobs:
       - name: Build All Packages
         run: npm run build
 
-      - name: Setup Test Database
-        env:
-          DATABASE_URL: "file:./packages/api/.runtime/test.db"
-          NODE_ENV: "test"
-        run: |
-          mkdir -p packages/api/.runtime
-          # Remove existing database to ensure clean state
-          rm -f packages/api/.runtime/test.db
-          # Generate Prisma client and push schema
-          cd packages/api
-          npx prisma generate
-          npx prisma db push --skip-generate --accept-data-loss
-
       - name: Run Tests
         env:
           DATABASE_URL: "file:./packages/api/.runtime/test.db"
+          NODE_ENV: "test"
           REDIS_URL: "redis://localhost:6379"
           JWT_SECRET: "test-jwt-secret-key-for-ci-minimum-32-chars"
           COOKIE_SECRET: "test-cookie-secret-key-for-ci"
