@@ -304,7 +304,9 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
 
 /**
  * Move button to next seat
- * Dead Button Rule: Moves to next index regardless of player presence
+ *
+ * Dead Button Rule (3+ players): Moves to next index regardless of player presence.
+ * Heads-up (2 players): Button must land on an occupied seat.
  */
 function moveButton(state: GameState): number {
   if (state.buttonSeat === null) {
@@ -317,7 +319,26 @@ function moveButton(state: GameState): number {
     return 0;
   }
 
-  // Simply increment seat index (Dead Button)
-  // We do not skip empty seats here.
+  // Count seated players to determine button movement rule
+  const seatedCount = state.players.filter((p) => p !== null).length;
+
+  if (seatedCount <= 2) {
+    // Heads-up: Button must land on an occupied seat
+    // Find the next occupied seat after current button
+    let seat = getNextSeat(state.buttonSeat, state.maxPlayers);
+    const startSeat = state.buttonSeat;
+
+    while (seat !== startSeat) {
+      if (state.players[seat] !== null && state.players[seat]!.stack > 0) {
+        return seat;
+      }
+      seat = getNextSeat(seat, state.maxPlayers);
+    }
+
+    // Fallback: keep button where it is (shouldn't happen with valid 2-player game)
+    return state.buttonSeat;
+  }
+
+  // 3+ players: Dead Button Rule - advance regardless of occupancy
   return getNextSeat(state.buttonSeat, state.maxPlayers);
 }
