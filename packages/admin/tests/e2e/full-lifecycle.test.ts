@@ -532,9 +532,11 @@ describe("E2E: Deposit -> Game -> Sweep -> Withdraw", () => {
       kzg: undefined,
     });
 
+    const withdrawAmount = 10000; // $100.00
     const users = await prisma.account.findMany({
-      where: { type: "MAIN", balance: { gt: 10000 } },
+      where: { type: "MAIN", balance: { gte: withdrawAmount } },
       include: { user: true },
+      orderBy: { balance: "desc" },
     });
 
     if (users.length === 0) {
@@ -542,7 +544,6 @@ describe("E2E: Deposit -> Game -> Sweep -> Withdraw", () => {
     }
 
     const richUser = users[0].user;
-    const withdrawAmount = 14000; // $140.00
     const destAddr = "0x9999999999999999999999999999999999999999" as Address;
 
     const chain = await prisma.blockchain.findUniqueOrThrow({ where: { chainId: 31337 } });

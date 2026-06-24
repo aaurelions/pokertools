@@ -11,13 +11,13 @@ The repository is organized into workspaces managed by NPM.
 
 | Package                                           | Description                                                              | Version |
 | :------------------------------------------------ | :----------------------------------------------------------------------- | :------ |
-| **[@pokertools/engine](./packages/engine)**       | The immutable core logic for Texas Hold'em state management.             | `1.0.2` |
-| **[@pokertools/evaluator](./packages/evaluator)** | High-performance hand evaluation and win frequency calculation.          | `1.0.2` |
-| **[@pokertools/api](./packages/api)**             | Scalable REST & WebSocket API built with Fastify, Redis, and PostgreSQL. | `1.0.2` |
-| **[@pokertools/sdk](./packages/sdk)**             | TypeScript SDK with React hooks and real-time socket management.         | `1.0.2` |
-| **[@pokertools/admin](./packages/admin)**         | Financial sweeper service, withdrawal processing, and Telegram bot.      | `1.0.2` |
-| **[@pokertools/types](./packages/types)**         | Shared TypeScript definitions, Zod schemas, and DTOs.                    | `1.0.2` |
-| **[@pokertools/bench](./packages/bench)**         | Performance benchmarking suite for the engine and evaluator.             | `1.0.2` |
+| **[@pokertools/engine](./packages/engine)**       | The immutable core logic for Texas Hold'em state management.             | `1.0.3` |
+| **[@pokertools/evaluator](./packages/evaluator)** | High-performance hand evaluation and win frequency calculation.          | `1.0.3` |
+| **[@pokertools/api](./packages/api)**             | Scalable REST & WebSocket API built with Fastify, Redis, and PostgreSQL. | `1.0.3` |
+| **[@pokertools/sdk](./packages/sdk)**             | TypeScript SDK with React hooks and real-time socket management.         | `1.0.3` |
+| **[@pokertools/admin](./packages/admin)**         | Financial sweeper service, withdrawal processing, and Telegram bot.      | `1.0.3` |
+| **[@pokertools/types](./packages/types)**         | Shared TypeScript definitions, Zod schemas, and DTOs.                    | `1.0.3` |
+| **[@pokertools/bench](./packages/bench)**         | Performance benchmarking suite for the engine and evaluator.             | `1.0.3` |
 
 ## ✨ Key Features
 

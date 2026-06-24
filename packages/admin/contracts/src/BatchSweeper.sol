@@ -5,6 +5,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 
 /**
  * @title BatchSweeper
@@ -92,7 +93,6 @@ contract BatchSweeper is Ownable {
      * @notice Emergency rescue for ETH sent to this contract.
      */
     function rescueEth(uint256 amount) external onlyOwner {
-        (bool success, ) = msg.sender.call{value: amount}("");
-        require(success, "ETH transfer failed");
+        Address.sendValue(payable(msg.sender), amount);
     }
 }
