@@ -3,7 +3,7 @@ import { createDeck, shuffle, dealCards } from "../utils/deck";
 import { cardCodesToStrings } from "../utils/cardUtils";
 import { getBlindPositions } from "../rules/blinds";
 import { getFirstToAct } from "../rules/actionOrder";
-import { getNextSeat } from "../utils/positioning";
+import { getNextOccupiedSeat, getNextSeat } from "../utils/positioning";
 
 /**
  * Deal a new hand
@@ -14,7 +14,7 @@ import { getNextSeat } from "../utils/positioning";
  */
 export function handleDeal(state: GameState, action: DealAction): GameState {
   // Move button (Dead Button logic: moves to next seat index regardless of occupancy)
-  const newButtonSeat = moveButton(state);
+  let newButtonSeat = moveButton(state);
 
   // Determine if this is a tournament
   const isTournament = !!state.config.blindStructure;
@@ -52,6 +52,11 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
       stack: newStack,
       pendingAddOn: 0, // Clear pending add-on
     };
+  });
+
+  newButtonSeat = moveHeadsUpButtonToOccupiedSeat(newButtonSeat, {
+    ...state,
+    players: newPlayers,
   });
 
   // Get blind positions for this hand
@@ -320,4 +325,15 @@ function moveButton(state: GameState): number {
   // Simply increment seat index (Dead Button)
   // We do not skip empty seats here.
   return getNextSeat(state.buttonSeat, state.maxPlayers);
+}
+
+function moveHeadsUpButtonToOccupiedSeat(buttonSeat: number, state: GameState): number {
+  const occupiedSeats = state.players.filter((player) => player !== null && player.stack > 0);
+  const buttonPlayer = state.players[buttonSeat];
+
+  if (occupiedSeats.length !== 2 || (buttonPlayer !== null && buttonPlayer.stack > 0)) {
+    return buttonSeat;
+  }
+
+  return getNextOccupiedSeat(buttonSeat, state.players, state.maxPlayers) ?? buttonSeat;
 }

@@ -107,10 +107,9 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
 
     // 3. Verify the message contains withdrawal details to prevent replay attacks
     const expectedMessage = `Withdraw ${amount} USD to ${address}`;
-    if (!message.includes(expectedMessage) && message !== expectedMessage) {
+    if (message !== expectedMessage) {
       return reply.code(400).send({
         error: "Message does not match withdrawal details",
-        expected: expectedMessage,
       });
     }
 

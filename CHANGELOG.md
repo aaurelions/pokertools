@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2026-06-25
+
+### Fixed
+
+#### @pokertools/api
+
+- Fixed CI SQLite test database startup by normalizing test `DATABASE_URL` paths and creating the runtime directory before Prisma connects.
+- Fixed auth nonce consumption to use atomic Redis `GETDEL` semantics.
+- Fixed SIWE login tests and runtime behavior by using deterministic local signature verification for externally owned accounts.
+- Fixed withdrawal message validation to require an exact signed message match.
+- Added WebSocket inbound message size validation before JSON parsing.
+- Fixed buy-in and add-chips idempotency cache keys to use the provided idempotency key.
+- Fixed duplicate buy-ins so repeated requests do not move funds again when the player is already seated.
+- Made stand cash-out balance sync transactional.
+- Preserved settle-hand audit ledger entries when a player has already stood and cashed out.
+- Replaced worker and route console logging with structured logger calls.
+- Fixed standalone deposit monitor ESM loading.
+
+#### @pokertools/admin
+
+- Fixed `GasMonitor` to use the injected Telegram bot instance.
+
+#### @pokertools/sdk / @pokertools/types
+
+- Added runtime validation for server WebSocket messages and used it in the SDK socket handler.
+
+#### @pokertools/engine
+
+- Added regression coverage for heads-up multi-hand dealing behavior.
+
+### Changed
+
+- Updated CI to run on supported Node.js versions only.
+- Bumped all workspace package versions to `1.0.3`.
+
 ## [1.0.2] - 2025-12-17
 
 ### Added

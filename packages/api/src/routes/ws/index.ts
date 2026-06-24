@@ -67,6 +67,16 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
       });
 
       socket.on("message", async (data: Buffer) => {
+        if (data.length > 4096) {
+          const errorMsg: ErrorMessage = {
+            type: "ERROR",
+            code: "MESSAGE_TOO_LARGE",
+            message: "Message exceeds maximum size of 4KB",
+          };
+          sendMessage(errorMsg);
+          return;
+        }
+
         try {
           const parsed = JSON.parse(data.toString());
           const result = safeParseClientMessage(parsed);

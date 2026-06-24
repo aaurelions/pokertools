@@ -400,13 +400,12 @@ async function checkPendingDeposits(
 
 // Export for backward compatibility
 // This is used if worker is started standalone without FastifyInstance
-export default function createStandaloneWorker(): Worker {
+export default async function createStandaloneWorker(): Promise<Worker> {
   const prisma = new PrismaClient();
   const redis = new Redis(config.REDIS_URL);
 
   // Create real Pino logger for standalone mode
-  // Use pino directly for proper async logging (not blocking console.log)
-  const pino = require("pino");
+  const { default: pino } = await import("pino");
   const logger = pino({
     level: config.LOG_LEVEL || "info",
     transport:
@@ -423,7 +422,9 @@ export default function createStandaloneWorker(): Worker {
   });
 
   // Mock FastifyInstance with just the log property
-  const mockApp = { log: logger.child({ worker: "deposit-monitor" }) } as FastifyInstance;
+  const mockApp = {
+    log: logger.child({ worker: "deposit-monitor" }),
+  } as unknown as FastifyInstance;
 
   return createDepositMonitorWorker(mockApp, prisma, redis);
 }

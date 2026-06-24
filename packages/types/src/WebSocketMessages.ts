@@ -207,3 +207,79 @@ export function safeParseClientMessage(
   }
   return { success: false, error: result.error };
 }
+
+// ============================================================================
+// Server Message Zod Schemas
+// ============================================================================
+
+export const SnapshotMessageSchema = z.object({
+  type: z.literal("SNAPSHOT"),
+  tableId: z.string().min(1),
+  state: z.record(z.unknown()),
+  timestamp: z.number(),
+});
+
+export const StateUpdateMessageSchema = z.object({
+  type: z.literal("STATE_UPDATE"),
+  tableId: z.string().min(1),
+  version: z.number(),
+  timestamp: z.number(),
+});
+
+export const ErrorMessageSchema = z.object({
+  type: z.literal("ERROR"),
+  code: z.string(),
+  message: z.string(),
+  requestId: z.string().optional(),
+  context: z.record(z.unknown()).optional(),
+});
+
+export const AckMessageSchema = z.object({
+  type: z.literal("ACK"),
+  requestId: z.string(),
+  message: z.string().optional(),
+});
+
+export const PongMessageSchema = z.object({
+  type: z.literal("PONG"),
+  requestId: z.string(),
+  timestamp: z.number(),
+});
+
+export const ActionNotificationMessageSchema = z.object({
+  type: z.literal("ACTION"),
+  tableId: z.string().min(1),
+  playerId: z.string(),
+  actionType: z.string(),
+  amount: z.number().optional(),
+  timestamp: z.number(),
+});
+
+export const ServerMessageSchema = z.discriminatedUnion("type", [
+  SnapshotMessageSchema,
+  StateUpdateMessageSchema,
+  ErrorMessageSchema,
+  AckMessageSchema,
+  PongMessageSchema,
+  ActionNotificationMessageSchema,
+]);
+
+/**
+ * Parse and validate a server message (throws on invalid)
+ */
+export function parseServerMessage(data: unknown): ServerMessage {
+  return ServerMessageSchema.parse(data) as unknown as ServerMessage;
+}
+
+/**
+ * Safe parser for server messages
+ */
+export function safeParseServerMessage(
+  data: unknown
+): { success: true; data: ServerMessage } | { success: false; error: z.ZodError } {
+  const result = ServerMessageSchema.safeParse(data);
+  if (result.success) {
+    return { success: true, data: result.data as unknown as ServerMessage };
+  }
+  return { success: false, error: result.error };
+}

@@ -11,9 +11,7 @@ export class GasMonitor {
     private chainService: BlockchainService,
     private bot: Bot,
     private logger: Logger
-  ) {
-    this.bot = new Bot(config.TELEGRAM_BOT_TOKEN);
-  }
+  ) {}
 
   start() {
     this.logger.info("⛽ Gas Monitor Started");

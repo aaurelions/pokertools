@@ -1,6 +1,6 @@
 {
   "name": "@pokertools/sdk",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "TypeScript SDK for PokerTools API - Real-time poker client for browser and Node.js",
   "author": "A.Aurelius",
   "license": "MIT",

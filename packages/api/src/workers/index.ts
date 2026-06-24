@@ -7,6 +7,7 @@
 
 import { Queue } from "bullmq";
 import { Redis } from "ioredis";
+import pino from "pino";
 import settleHandWorker from "./settle-hand.js";
 import archiveHandWorker from "./archive-hand.js";
 import nextHandWorker from "./next-hand.js";
@@ -15,15 +16,22 @@ import timeoutWorker from "./timeout.js";
 import createDepositMonitorWorker from "./deposit-monitor.js";
 
 // Initialize deposit monitor worker (standalone mode)
-const depositMonitorWorker = createDepositMonitorWorker();
+const depositMonitorWorker = await createDepositMonitorWorker();
 
-console.log("🔧 BullMQ Workers initialized:");
-console.log("   - settle-hand");
-console.log("   - archive-hand");
-console.log("   - next-hand");
-console.log("   - persist-snapshot");
-console.log("   - player-timeout");
-console.log("   - deposit-monitor");
+const logger = pino({ name: "workers" });
+logger.info(
+  {
+    workers: [
+      "settle-hand",
+      "archive-hand",
+      "next-hand",
+      "persist-snapshot",
+      "player-timeout",
+      "deposit-monitor",
+    ],
+  },
+  "BullMQ Workers initialized"
+);
 
 // Export workers for cleanup on shutdown
 export const workers = [
@@ -54,15 +62,15 @@ const queue = new Queue("deposit-monitor", { connection: redis });
         jobId: "deposit-monitor-singleton", // Ensure only one cron exists
       }
     );
-    console.log("✅ Deposit monitor scheduled: every 15 seconds");
+    logger.info("Deposit monitor scheduled: every 15 seconds");
   } catch (error) {
-    console.error("❌ Failed to schedule deposit monitor:", error);
+    logger.error({ error }, "Failed to schedule deposit monitor");
   }
 })();
 
 // Graceful shutdown
 process.on("SIGTERM", async () => {
-  console.log("🛑 Shutting down workers...");
+  logger.info("Shutting down workers...");
   await Promise.all(workers.map((w) => w.close()));
   process.exit(0);
 });

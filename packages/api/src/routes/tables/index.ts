@@ -88,7 +88,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       // Check idempotency cache (fast path)
-      const lockKey = `idempotency:buyin:${userId}:${id}:${seat}`;
+      const lockKey = `idempotency:buyin:${idempotencyKey}`;
       const resultKey = `idempotency:result:${lockKey}`;
 
       const cached = await fastify.redis.get(resultKey);
@@ -114,6 +114,22 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
       try {
         // Financial transaction (ensure amount is a number)
         const amountNum = typeof amount === "string" ? parseInt(amount, 10) : amount;
+        const state = await fastify.gameManager.getState(id);
+        const seatedPlayer = state.players[seat];
+
+        if (seatedPlayer) {
+          if (seatedPlayer.id === userId) {
+            const response = { success: true };
+            await fastify.redis.set(resultKey, JSON.stringify(response), "EX", 86400);
+            return response;
+          }
+
+          return reply.code(400).send({
+            error: "SEAT_OCCUPIED",
+            message: `Seat ${seat} is already occupied`,
+          });
+        }
+
         await fastify.financialManager.buyIn(userId, id, amountNum);
 
         // Get username
@@ -232,7 +248,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       // Check idempotency cache
-      const lockKey = `idempotency:addchips:${userId}:${id}`;
+      const lockKey = `idempotency:addchips:${idempotencyKey}`;
       const resultKey = `idempotency:result:${lockKey}`;
 
       const cached = await fastify.redis.get(resultKey);
@@ -319,48 +335,88 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
         // We need to settle up the difference between current IN_PLAY and engine stack
         if (stack > 0) {
           try {
-            // First, sync the IN_PLAY balance to match engine reality
-            // If IN_PLAY > stack, player lost chips (deduct the loss)
-            // If IN_PLAY < stack, player won chips (add the win)
-            const delta = stack - currentInPlay;
+            await fastify.prisma.$transaction(async (tx) => {
+              // First, sync the IN_PLAY balance to match engine reality
+              const delta = stack - currentInPlay;
 
-            if (delta !== 0) {
-              // Manually sync the balance before cash-out
-              // This handles the case where settle-hand worker hasn't run
-              const syncAmount = Math.abs(delta);
+              if (delta !== 0) {
+                const syncAmount = Math.abs(delta);
 
-              if (delta < 0) {
-                // Player lost chips, deduct from IN_PLAY
-                await fastify.prisma.account.update({
-                  where: {
-                    userId_currency_type: {
-                      userId,
-                      currency: "USDC",
-                      type: "IN_PLAY",
+                if (delta < 0) {
+                  await tx.account.update({
+                    where: {
+                      userId_currency_type: {
+                        userId,
+                        currency: "USDC",
+                        type: "IN_PLAY",
+                      },
                     },
-                  },
-                  data: { balance: { decrement: syncAmount } },
-                });
-              } else {
-                // Player won chips, add to IN_PLAY
-                await fastify.prisma.account.update({
-                  where: {
-                    userId_currency_type: {
-                      userId,
-                      currency: "USDC",
-                      type: "IN_PLAY",
+                    data: { balance: { decrement: syncAmount } },
+                  });
+                } else {
+                  await tx.account.update({
+                    where: {
+                      userId_currency_type: {
+                        userId,
+                        currency: "USDC",
+                        type: "IN_PLAY",
+                      },
                     },
-                  },
-                  data: { balance: { increment: syncAmount } },
-                });
+                    data: { balance: { increment: syncAmount } },
+                  });
+                }
               }
-            }
 
-            // Now cash out the full stack amount
-            await fastify.financialManager.cashOut(userId, id, stack);
+              // Cash out: move IN_PLAY -> MAIN with ledger entries
+              const inPlayAccount = await tx.account.findUniqueOrThrow({
+                where: {
+                  userId_currency_type: {
+                    userId,
+                    currency: "USDC",
+                    type: "IN_PLAY",
+                  },
+                },
+              });
+
+              const mainAccount = await tx.account.findUniqueOrThrow({
+                where: {
+                  userId_currency_type: {
+                    userId,
+                    currency: "USDC",
+                    type: "MAIN",
+                  },
+                },
+              });
+
+              await tx.ledgerEntry.createMany({
+                data: [
+                  {
+                    accountId: inPlayAccount.id,
+                    amount: -stack,
+                    type: "CASH_OUT",
+                    referenceId: id,
+                  },
+                  {
+                    accountId: mainAccount.id,
+                    amount: stack,
+                    type: "CASH_OUT",
+                    referenceId: id,
+                  },
+                ],
+              });
+
+              await tx.account.update({
+                where: { id: inPlayAccount.id },
+                data: { balance: { decrement: stack } },
+              });
+
+              await tx.account.update({
+                where: { id: mainAccount.id },
+                data: { balance: { increment: stack } },
+              });
+            });
           } catch (cashOutError) {
-            // If cash out fails, player keeps their chips in-game
-            console.error(`❌ Cash out failed for ${userId}:`, cashOutError);
+            fastify.log.error({ userId, error: cashOutError }, "Cash out failed");
             throw new Error("Cash out failed. Please try again.");
           }
         } else if (currentInPlay > 0) {

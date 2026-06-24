@@ -5,6 +5,8 @@ node_modules/
 dist/
 generated/
 .tsbuildinfo
+packages/admin/contracts/out/
+packages/admin/cache/
 
 # Runtime (temp files, logs, databases, Redis data)
 .runtime/

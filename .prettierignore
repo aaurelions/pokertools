@@ -10,3 +10,5 @@ yarn.lock
 **/*.d.ts
 packages/admin/contracts/lib/forge-std
 packages/admin/contracts/lib/openzeppelin-contracts
+packages/admin/contracts/out/
+packages/admin/cache/

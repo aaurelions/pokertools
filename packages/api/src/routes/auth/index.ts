@@ -1,14 +1,8 @@
 import type { FastifyPluginAsync } from "fastify";
-import { createPublicClient, http } from "viem";
-import { mainnet } from "viem/chains";
+import { verifyMessage } from "viem";
 import { generateSiweNonce, parseSiweMessage } from "viem/siwe";
 import crypto from "node:crypto";
 import { LoginRequest } from "@pokertools/types";
-
-const publicClient = createPublicClient({
-  chain: mainnet,
-  transport: http(),
-});
 
 export const authRoutes: FastifyPluginAsync = async (fastify) => {
   // POST /auth/nonce
@@ -26,30 +20,27 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
 
     // 1. Parse and verify nonce
     const siweMessage = parseSiweMessage(message);
-    const nonceExists = await fastify.redis.get(`nonce:${siweMessage.nonce}`);
+    const nonceExists = await fastify.redis.getdel(`nonce:${siweMessage.nonce}`);
     if (!nonceExists) {
       return reply.code(401).send({ error: "Invalid or expired nonce" });
     }
 
     // 2. Verify signature
-    const valid = await publicClient.verifySiweMessage({
+    if (!siweMessage.address) {
+      return reply.code(400).send({ error: "Invalid SIWE message: missing address" });
+    }
+
+    const valid = await verifyMessage({
+      address: siweMessage.address,
       message,
       signature,
-      nonce: siweMessage.nonce,
-      time: new Date(),
     });
 
     if (!valid) {
       return reply.code(401).send({ error: "Invalid signature" });
     }
 
-    // Burn nonce
-    await fastify.redis.del(`nonce:${siweMessage.nonce}`);
-
     // 3. Upsert user (store address in lowercase)
-    if (!siweMessage.address) {
-      return reply.code(400).send({ error: "Invalid SIWE message: missing address" });
-    }
     const addressLower = siweMessage.address.toLowerCase();
 
     const user = await fastify.prisma.user.upsert({

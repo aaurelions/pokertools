@@ -1,11 +1,13 @@
 import { Worker } from "bullmq";
 import { PrismaClient } from "../../generated/prisma/index.js";
 import { Redis } from "ioredis";
+import pino from "pino";
 import { config } from "../config.js";
 import { getHouseUserId } from "../utils/houseUser.js";
 
 const prisma = new PrismaClient();
 const redis = new Redis(config.REDIS_URL);
+const logger = pino({ name: "settle-hand" });
 
 /**
  * Hand Settlement Worker
@@ -60,16 +62,7 @@ const worker = new Worker(
           },
         });
 
-        // CRITICAL: If player stood and cashed out, their IN_PLAY might be 0 or insufficient
-        // The stand endpoint already handled the sync. Skip if applying netChange would go negative.
-        const newBalance = Number(account.balance) + netChange;
-        if (newBalance < 0) {
-          console.log(
-            `⚠️  Skipping netChange ${netChange} for user ${userId} - would result in negative balance (current: ${account.balance})`
-          );
-          continue;
-        }
-
+        // Always create ledger entry for audit trail
         await tx.ledgerEntry.create({
           data: {
             accountId: account.id,
@@ -79,6 +72,13 @@ const worker = new Worker(
             metadata: { tableId },
           },
         });
+
+        // CRITICAL: If player stood and cashed out, their IN_PLAY might be 0 or insufficient
+        // The stand endpoint already handled the sync. Skip balance update if it would go negative.
+        const newBalance = Number(account.balance) + netChange;
+        if (newBalance < 0) {
+          continue;
+        }
 
         if (netChange > 0) {
           await tx.account.update({
@@ -94,13 +94,13 @@ const worker = new Worker(
       }
     });
 
-    console.log(`✅ Settled hand ${handId}. Rake: ${rakeTotal}`);
+    logger.info({ handId, rakeTotal }, "Hand settled");
   },
   { connection: redis }
 );
 
 worker.on("failed", (job, err) => {
-  console.error(`❌ settle-hand job ${job?.id} failed:`, err);
+  logger.error({ jobId: job?.id, error: err }, "settle-hand job failed");
 });
 
 export default worker;

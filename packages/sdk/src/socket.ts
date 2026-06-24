@@ -7,12 +7,13 @@
 
 import type {
   PublicState,
-  ServerMessage,
   ClientMessage,
   JoinTableMessage,
   LeaveTableMessage,
   PingMessage,
 } from "@pokertools/types";
+
+import { safeParseServerMessage } from "@pokertools/types";
 
 import {
   PokerSDKConfig,
@@ -424,7 +425,13 @@ export class PokerSocket {
    */
   private handleMessage(data: string): void {
     try {
-      const message = JSON.parse(data) as ServerMessage;
+      const parsed: unknown = JSON.parse(data);
+      const result = safeParseServerMessage(parsed);
+      if (!result.success) {
+        this.log("Invalid server message:", result.error);
+        return;
+      }
+      const message = result.data;
       this.log("Received:", message);
 
       switch (message.type) {

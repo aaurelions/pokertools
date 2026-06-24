@@ -1,10 +1,26 @@
 import { beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { config } from "dotenv";
-import { resolve } from "path";
+import { dirname, resolve } from "path";
+import { mkdirSync } from "fs";
 import { Redis } from "ioredis";
 
 // Load test environment
 config({ path: resolve(__dirname, "../.env.test") });
+
+if (process.env.DATABASE_URL?.startsWith("file:")) {
+  let dbPath = process.env.DATABASE_URL.replace(/^file:/, "").replace(/^\.\//, "");
+
+  if (dbPath.startsWith("packages/api/")) {
+    dbPath = dbPath.replace(/^packages\/api\//, "");
+  }
+
+  if (!dbPath.startsWith("/")) {
+    dbPath = resolve(__dirname, "../prisma", dbPath);
+  }
+
+  mkdirSync(dirname(dbPath), { recursive: true });
+  process.env.DATABASE_URL = `file:${dbPath}`;
+}
 
 let testRedis: Redis;
 

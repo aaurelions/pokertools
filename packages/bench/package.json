@@ -1,6 +1,6 @@
 {
   "name": "@pokertools/bench",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Performance benchmarks for poker hand evaluators",
   "author": "A.Aurelius",
   "license": "MIT",

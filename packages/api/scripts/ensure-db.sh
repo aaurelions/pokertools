@@ -47,17 +47,17 @@ else
   ENV_DB_URL=$(grep "^DATABASE_URL=" "$ENV_FILE" 2>/dev/null | cut -d'"' -f2 || cut -d'=' -f2- | tr -d ' ' || echo "")
   if [ -n "$ENV_DB_URL" ]; then
     DB_PATH=$(echo "$ENV_DB_URL" | sed 's|^file:||' | sed 's|^\./||')
-    # Convert relative paths to absolute
-    if [[ "$DB_PATH" != /* ]]; then
-      ABS_DB_PATH="$(pwd)/$DB_PATH"
-      export DATABASE_URL="file:$ABS_DB_PATH"
-    else
-      export DATABASE_URL="$ENV_DB_URL"
-    fi
   else
     DB_PATH="$DEFAULT_DB_PATH"
-    ABS_DB_PATH="$(pwd)/$DB_PATH"
+  fi
+  # Prisma resolves relative file: paths from the prisma/ schema directory,
+  # so we must resolve relative to prisma/ to match runtime behavior
+  if [[ "$DB_PATH" != /* ]]; then
+    PRISMA_DIR="$(pwd)/prisma"
+    ABS_DB_PATH=$(cd "$PRISMA_DIR" && cd "$(dirname "$DB_PATH")" && echo "$(pwd)/$(basename "$DB_PATH")")
     export DATABASE_URL="file:$ABS_DB_PATH"
+  else
+    export DATABASE_URL="file:$DB_PATH"
   fi
 fi
 
@@ -89,8 +89,10 @@ fi
 
 # Run prisma db push to sync schema
 # We use --skip-generate since we just generated above (or it was already generated)
+set +e
 PUSH_OUTPUT=$(npx prisma db push --skip-generate --accept-data-loss 2>&1)
 PUSH_EXIT_CODE=$?
+set -e
 
 if [ $PUSH_EXIT_CODE -ne 0 ]; then
   echo "❌ Failed to sync database schema!"
