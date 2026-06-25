@@ -40,8 +40,12 @@ jobs:
       - name: Build All
         run: npm run build
 
-      - name: Run Tests
-        run: npm test
+      - name: Run Tests (published packages only)
+        run: |
+          npm run test --workspace=@pokertools/types
+          npm run test --workspace=@pokertools/sdk
+          npm run test --workspace=@pokertools/evaluator
+          npm run test --workspace=@pokertools/engine
 
       # 1. Publish Types (Base Dependency)
       - name: Publish @pokertools/types
