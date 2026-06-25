@@ -86,7 +86,7 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
               type: "ERROR",
               code: "INVALID_MESSAGE",
               message: "Invalid message format",
-              context: { errors: result.error.errors },
+              context: { errors: result.error.issues },
             };
             sendMessage(errorMsg);
             return;

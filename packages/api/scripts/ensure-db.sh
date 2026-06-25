@@ -87,10 +87,9 @@ if [ ! -d "generated/prisma" ]; then
   npx prisma generate
 fi
 
-# Run prisma db push to sync schema
-# We use --skip-generate since we just generated above (or it was already generated)
+# Run prisma db push to sync schema. Prisma 7 removed --skip-generate.
 set +e
-PUSH_OUTPUT=$(npx prisma db push --skip-generate --accept-data-loss 2>&1)
+PUSH_OUTPUT=$(npx prisma db push --accept-data-loss 2>&1)
 PUSH_EXIT_CODE=$?
 set -e
 

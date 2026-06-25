@@ -1,13 +1,13 @@
 import { Worker } from "bullmq";
-import { PrismaClient } from "../../generated/prisma/index.js";
 import { Redis } from "ioredis";
 import Redlock from "redlock";
 import { config } from "../config.js";
 import { PokerEngine, type Snapshot as EngineSnapshot } from "@pokertools/engine";
+import { createPrismaClient } from "../utils/prismaClient.js";
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const redis = new Redis(config.REDIS_URL);
-const redlock = new Redlock([redis], {
+const redlock = new Redlock([redis as any], {
   driftFactor: 0.01,
   retryCount: 10,
   retryDelay: 200,
@@ -90,7 +90,7 @@ const worker = new Worker(
       await lock.release();
     }
   },
-  { connection: redis }
+  { connection: redis as any }
 );
 
 worker.on("failed", (job, err) => {

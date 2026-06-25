@@ -5,7 +5,7 @@ import { mkdirSync } from "fs";
 import { Redis } from "ioredis";
 
 // Load test environment
-config({ path: resolve(__dirname, "../.env.test") });
+config({ path: resolve(__dirname, "../.env.test"), quiet: true });
 
 if (process.env.DATABASE_URL?.startsWith("file:")) {
   let dbPath = process.env.DATABASE_URL.replace(/^file:/, "").replace(/^\.\//, "");
@@ -59,6 +59,12 @@ afterAll(async () => {
   // where one test file's cleanup deletes another test file's tables.
   // Redis is flushed in beforeAll to ensure clean state at start.
   if (testRedis) {
-    await testRedis.quit();
+    if (testRedis.status !== "end") {
+      await testRedis.quit().catch((error: unknown) => {
+        if (!(error instanceof Error) || !error.message.includes("Connection is closed")) {
+          throw error;
+        }
+      });
+    }
   }
 });

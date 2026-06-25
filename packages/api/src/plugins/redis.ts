@@ -24,7 +24,13 @@ const redisPlugin: FastifyPluginAsync = async (fastify) => {
   fastify.decorate("redis", redis);
 
   fastify.addHook("onClose", async (app) => {
-    await app.redis.quit();
+    if (app.redis.status !== "end") {
+      await app.redis.quit().catch((error: unknown) => {
+        if (!(error instanceof Error) || !error.message.includes("Connection is closed")) {
+          throw error;
+        }
+      });
+    }
     fastify.log.info("Redis disconnected");
   });
 };

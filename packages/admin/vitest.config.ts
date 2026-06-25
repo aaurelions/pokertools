@@ -2,7 +2,7 @@ import { defineConfig } from "vitest/config";
 import { config } from "dotenv";
 import { resolve } from "path";
 
-config({ path: resolve(__dirname, ".env.test") });
+config({ path: resolve(__dirname, ".env.test"), quiet: true });
 
 const dbPath = resolve(__dirname, "../api/.runtime/test.db");
 process.env.DATABASE_URL = `file:${dbPath}`;

@@ -1,7 +1,7 @@
-import { PrismaClient } from "../generated/prisma/index.js";
 import { createId } from "@paralleldrive/cuid2";
+import { createPrismaClient } from "../src/utils/prismaClient.js";
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 async function main() {
   console.log("🌱 Starting database seed...");

@@ -1,7 +1,7 @@
-import { PrismaClient } from "../generated/prisma/index.js";
 import { HDKey } from "@scure/bip32";
+import { createPrismaClient } from "../src/utils/prismaClient.js";
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 /**
  * Generate a test HD wallet xPub for development

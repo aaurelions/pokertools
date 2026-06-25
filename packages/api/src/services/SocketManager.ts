@@ -26,13 +26,29 @@ export class SocketManager {
     this.initSubscriber();
 
     app.addHook("onClose", async () => {
-      await this.subscriber.quit();
+      if (this.subscriber.status !== "end") {
+        await this.subscriber.quit().catch((error: unknown) => {
+          if (!(error instanceof Error) || !error.message.includes("Connection is closed")) {
+            throw error;
+          }
+        });
+      }
     });
   }
 
   private initSubscriber() {
     // Pattern: pubsub:table:{tableId}
-    void this.subscriber.psubscribe("pubsub:table:*");
+    void this.subscriber.psubscribe("pubsub:table:*").catch((error: unknown) => {
+      if (!(error instanceof Error) || !error.message.includes("Connection is closed")) {
+        this.app.log.error(error, "Redis subscriber error");
+      }
+    });
+
+    this.subscriber.on("error", (error) => {
+      if (!error.message.includes("Connection is closed")) {
+        this.app.log.error(error, "Redis subscriber error");
+      }
+    });
 
     this.subscriber.on("pmessage", async (_pattern, channel, _message) => {
       const tableId = channel.split(":")[2];

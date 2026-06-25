@@ -29,7 +29,7 @@ export function getActivePlayers(state: GameState): number[] {
 
   for (let i = 0; i < state.players.length; i++) {
     const player = state.players[i];
-    if (player && player.status === PlayerStatus.ACTIVE && player.stack > 0) {
+    if (player?.status === PlayerStatus.ACTIVE && player.stack > 0) {
       active.push(i);
     }
   }
@@ -83,7 +83,7 @@ export function getNextActionableSeat(currentSeat: number, state: GameState): nu
   while (seat !== startSeat) {
     const player = state.players[seat];
 
-    if (player && player.status === PlayerStatus.ACTIVE && player.stack > 0) {
+    if (player?.status === PlayerStatus.ACTIVE && player.stack > 0) {
       return seat;
     }
 

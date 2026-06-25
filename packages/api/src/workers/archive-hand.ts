@@ -1,10 +1,10 @@
 import { Worker } from "bullmq";
-import { PrismaClient } from "../../generated/prisma/index.js";
 import { PokerEngine } from "@pokertools/engine";
 import { Redis } from "ioredis";
 import { config } from "../config.js";
+import { createPrismaClient } from "../utils/prismaClient.js";
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const redis = new Redis(config.REDIS_URL);
 
 /**
@@ -31,7 +31,7 @@ const worker = new Worker(
 
     console.log(`✅ Archived hand ${handId} for table ${tableId}`);
   },
-  { connection: redis }
+  { connection: redis as any }
 );
 
 worker.on("failed", (job, err) => {

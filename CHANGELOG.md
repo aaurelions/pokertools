@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Upgraded Prisma from 6 to 7, including `@prisma/adapter-better-sqlite3` for SQLite connections. All `new PrismaClient()` calls replaced with `createPrismaClient()` factory. Removed `DATABASE_URL` from datasource config (now runtime-only via adapter). Removed `--skip-generate` from ensure-db.sh (not supported in Prisma 7).
+- Upgraded Zod from 3 to 4: `.errors` replaced with `.issues`, `z.record()` now requires explicit key type.
+- Upgraded @scure/bip32 from 1 to 2, @scure/bip39 from 1 to 2.
+- Upgraded fastify-plugin from 5 to 6, @fastify/rate-limit from 10 to 11, @fastify/swagger-ui from 5 to 6.
+- Upgraded dotenv from 16 to 17, ulid from 2 to 3, globals from 16 to 17.
+- Bumped dozens of dev/transitive dependencies to latest.
+
+### Fixed
+
+- Graceful Redis quit handling: check connection status before quitting, suppress "Connection is closed" errors across plugins, workers, tests, and SocketManager.
+- Redis psubscribe error handling added to SocketManager subscriber.
+- vitest config: replaced deprecated `poolOptions.forks.singleFork` with top-level `singleFork`.
+- dotenv config: added `quiet: true` to all `config()` calls to suppress missing env file warnings in CI and tests.
+
+### Added
+
+- `.npmrc` with `audit=false`, `fund=false`, `loglevel=error` for cleaner installs.
+- `createPrismaClient()` utility in both `packages/admin/src/utils/` and `packages/api/src/utils/`.
+- New test suites: engine game-logic edge cases, evaluator edge cases, SDK edge cases, and types schema coverage.
+- `COOKIE_SECRET` to admin `.env.test`.
+
+### CI
+
+- Upgraded actions/checkout v4 -> v7, actions/setup-node v4 -> v6.
+- Publish workflow Node.js 20 -> 22.
+- Added `--no-audit --no-fund --loglevel=error` to `npm ci` in both workflows.
+
 ## [1.0.3] - 2026-06-25
 
 ### Fixed

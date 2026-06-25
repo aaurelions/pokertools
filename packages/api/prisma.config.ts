@@ -5,9 +5,9 @@ import { defineConfig } from "prisma/config";
 
 // Load appropriate env file based on NODE_ENV
 if (process.env.NODE_ENV === "test") {
-  config({ path: ".env.test" });
+  config({ path: ".env.test", quiet: true });
 } else {
-  config();
+  config({ quiet: true });
 }
 
 // Use DATABASE_URL from environment, fallback to dev database

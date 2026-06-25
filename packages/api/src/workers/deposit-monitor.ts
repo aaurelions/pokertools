@@ -5,6 +5,7 @@ import { config } from "../config.js";
 import { BlockchainManager } from "../services/BlockchainManager.js";
 import { parseAbi } from "viem";
 import type { FastifyInstance } from "fastify";
+import { createPrismaClient } from "../utils/prismaClient.js";
 
 // ABI for ERC20 Transfer event and BalanceOf
 const ERC20_ABI = parseAbi([
@@ -295,7 +296,7 @@ export function createDepositMonitorWorker(
       await checkPendingDeposits(prisma, blockchainManager, logger);
     },
     {
-      connection: redis,
+      connection: redis as any,
       concurrency: 5, // Scan 5 users in parallel
       limiter: {
         max: 10, // Limit RPC calls
@@ -401,7 +402,7 @@ async function checkPendingDeposits(
 // Export for backward compatibility
 // This is used if worker is started standalone without FastifyInstance
 export default async function createStandaloneWorker(): Promise<Worker> {
-  const prisma = new PrismaClient();
+  const prisma = createPrismaClient();
   const redis = new Redis(config.REDIS_URL);
 
   // Create real Pino logger for standalone mode

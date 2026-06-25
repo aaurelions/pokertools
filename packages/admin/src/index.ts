@@ -1,4 +1,4 @@
-import { PrismaClient } from "../../api/generated/prisma/index.js";
+import { createPrismaClient } from "./utils/prismaClient.js";
 import Redis from "ioredis";
 import pino from "pino";
 import { config } from "./config.js";
@@ -28,7 +28,7 @@ function main() {
   logger.info("🚀 Starting Admin Service...");
 
   // 1. Initialize Infrastructure
-  const prisma = new PrismaClient({
+  const prisma = createPrismaClient({
     log:
       config.NODE_ENV === "development"
         ? [{ emit: "event", level: "query" }]

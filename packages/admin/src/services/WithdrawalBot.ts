@@ -82,7 +82,7 @@ export class WithdrawalBot {
       where: { id: requestId },
       include: { account: { include: { user: true } } },
     });
-    if (!tx || !tx.metadata) return;
+    if (!tx?.metadata) return;
 
     const user = tx.account.user;
     const meta = tx.metadata as unknown as WithdrawalMetadata;

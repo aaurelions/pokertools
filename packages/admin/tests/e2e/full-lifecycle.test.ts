@@ -7,7 +7,8 @@ import {
   walletClient,
   localChain,
 } from "../helpers/chain-utils.js";
-import { PrismaClient, type User } from "../../../api/generated/prisma/index.js";
+import { type PrismaClient, type User } from "../../../api/generated/prisma/index.js";
+import { createPrismaClient } from "../../src/utils/prismaClient.js";
 import { BlockchainService } from "../../src/services/BlockchainService.js";
 import { SweeperService } from "../../src/services/SweeperService.js";
 import { WithdrawalBot } from "../../src/services/WithdrawalBot.js";
@@ -81,12 +82,12 @@ describe("E2E: Deposit -> Game -> Sweep -> Withdraw", () => {
     await startAnvil();
     contracts = await deployContracts();
 
-    prisma = new PrismaClient();
+    prisma = createPrismaClient();
     redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379", {
       maxRetriesPerRequest: null,
     });
-    const redlock = new Redlock([redis]);
-    const queue = new Queue("poker-jobs", { connection: redis });
+    const redlock = new Redlock([redis as any]);
+    const queue = new Queue("poker-jobs", { connection: redis as any });
 
     // Generate xPriv for admin wallet
     const seed = mnemonicToSeedSync(process.env.MASTER_MNEMONIC!);
@@ -323,7 +324,7 @@ describe("E2E: Deposit -> Game -> Sweep -> Withdraw", () => {
     // Run deposit monitor
     const mockApp = { log: logger } as any;
     const depositWorker = createDepositMonitorWorker(mockApp, prisma, redis);
-    const depositQueue = new Queue("deposit-monitor", { connection: redis });
+    const depositQueue = new Queue("deposit-monitor", { connection: redis as any });
 
     await depositQueue.add("scan", {});
     await new Promise((resolve) => setTimeout(resolve, 3000));

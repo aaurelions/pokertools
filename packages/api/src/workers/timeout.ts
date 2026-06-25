@@ -1,11 +1,11 @@
 import { Worker } from "bullmq";
 import { Redis } from "ioredis";
-import { PrismaClient } from "../../generated/prisma/index.js";
 import { PokerEngine, type Snapshot as EngineSnapshot } from "@pokertools/engine";
 import { config } from "../config.js";
+import { createPrismaClient } from "../utils/prismaClient.js";
 
 const redis = new Redis(config.REDIS_URL);
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 interface Snapshot extends EngineSnapshot {
   _version?: number;
@@ -69,7 +69,7 @@ const worker = new Worker(
       console.error(`❌ Failed to process timeout for ${playerId}:`, error.message);
     }
   },
-  { connection: redis }
+  { connection: redis as any }
 );
 
 worker.on("failed", (job, err) => {

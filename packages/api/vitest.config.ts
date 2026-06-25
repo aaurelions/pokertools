@@ -4,7 +4,7 @@ import { resolve } from "path";
 
 // Load test environment variables
 if (process.env.NODE_ENV === "test") {
-  config({ path: resolve(__dirname, ".env.test") });
+  config({ path: resolve(__dirname, ".env.test"), quiet: true });
 }
 
 export default defineConfig({
@@ -21,11 +21,7 @@ export default defineConfig({
     },
     // Run tests sequentially to avoid Redis/DB/Redlock conflicts
     pool: "forks",
-    poolOptions: {
-      forks: {
-        singleFork: true, // Run all tests in a single process sequentially
-      },
-    },
+    singleFork: true,
     // Ensure tests run one file at a time
     fileParallelism: false,
     // Isolate each test file

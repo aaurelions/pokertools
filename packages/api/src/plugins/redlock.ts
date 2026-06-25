@@ -2,11 +2,14 @@ import fp from "fastify-plugin";
 import Redlock from "redlock";
 import type { FastifyPluginAsync } from "fastify";
 
+type RedlockClient =
+  ConstructorParameters<typeof Redlock>[0] extends Iterable<infer Client> ? Client : never;
+
 const redlockPlugin: FastifyPluginAsync = async (fastify) => {
   // Configure Redlock for single-instance (dev/test) or multi-instance (prod)
   const isTestEnv = process.env.NODE_ENV === "test";
 
-  const redlock = new Redlock([fastify.redis], {
+  const redlock = new Redlock([fastify.redis as unknown as RedlockClient], {
     driftFactor: 0.01,
     retryCount: isTestEnv ? 5000 : 50, // Even higher for concurrent test scenarios
     retryDelay: isTestEnv ? 2 : 100, // Very fast retry in tests

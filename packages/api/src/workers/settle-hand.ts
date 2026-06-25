@@ -1,11 +1,11 @@
 import { Worker } from "bullmq";
-import { PrismaClient } from "../../generated/prisma/index.js";
 import { Redis } from "ioredis";
 import pino from "pino";
 import { config } from "../config.js";
 import { getHouseUserId } from "../utils/houseUser.js";
+import { createPrismaClient } from "../utils/prismaClient.js";
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const redis = new Redis(config.REDIS_URL);
 const logger = pino({ name: "settle-hand" });
 
@@ -96,7 +96,7 @@ const worker = new Worker(
 
     logger.info({ handId, rakeTotal }, "Hand settled");
   },
-  { connection: redis }
+  { connection: redis as any }
 );
 
 worker.on("failed", (job, err) => {

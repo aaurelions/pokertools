@@ -35,7 +35,7 @@ function getNextToActNormal(state: GameState): number | null {
     const player = state.players[seat];
 
     // Skip if: no player, folded, all-in, or busted
-    if (!player || player.status !== PlayerStatus.ACTIVE || player.stack === 0) {
+    if (player?.status !== PlayerStatus.ACTIVE || player.stack === 0) {
       seat = getNextSeat(seat, state.maxPlayers);
       continue;
     }
@@ -92,7 +92,7 @@ function getNextToActHeadsUp(state: GameState): number | null {
   for (const seat of actionOrder) {
     const player = state.players[seat];
 
-    if (!player || player.status !== PlayerStatus.ACTIVE || player.stack === 0) {
+    if (player?.status !== PlayerStatus.ACTIVE || player.stack === 0) {
       continue;
     }
 
@@ -153,7 +153,7 @@ function getNextActionableSeat(startSeat: number, state: GameState): number | nu
   while (seat !== endSeat) {
     const player = state.players[seat];
 
-    if (player && player.status === PlayerStatus.ACTIVE && player.stack > 0) {
+    if (player?.status === PlayerStatus.ACTIVE && player.stack > 0) {
       return seat;
     }
 
@@ -209,7 +209,7 @@ export function isActionComplete(state: GameState): boolean {
   if (activeCount === 0) {
     // Only return true if we're in a hand (not pre-deal)
     // Check: Are there all-in players with bets?
-    const allInPlayers = state.players.filter((p) => p && p.status === PlayerStatus.ALL_IN);
+    const allInPlayers = state.players.filter((p) => p?.status === PlayerStatus.ALL_IN);
     return allInPlayers.length > 0 && state.currentBets.size > 0;
   }
 

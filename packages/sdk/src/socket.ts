@@ -335,7 +335,7 @@ export class PokerSocket {
     if (!this.listeners.has(event)) {
       this.listeners.set(event, new Set());
     }
-    this.listeners.get(event)!.add(listener as EventListener<keyof PokerSocketEvents>);
+    this.listeners.get(event)!.add(listener);
 
     // Return unsubscribe function
     return () => {
@@ -349,7 +349,7 @@ export class PokerSocket {
   off<E extends keyof PokerSocketEvents>(event: E, listener: PokerSocketEvents[E]): void {
     const listeners = this.listeners.get(event);
     if (listeners) {
-      listeners.delete(listener as EventListener<keyof PokerSocketEvents>);
+      listeners.delete(listener);
     }
   }
 
@@ -412,7 +412,7 @@ export class PokerSocket {
    * Send a message to the server
    */
   private send(message: ClientMessage): void {
-    if (!this.ws || this.ws.readyState !== this.WebSocketImpl.OPEN) {
+    if (this.ws?.readyState !== this.WebSocketImpl.OPEN) {
       throw new PokerSDKError("WebSocket not open", "NOT_CONNECTED");
     }
 

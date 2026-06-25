@@ -215,7 +215,7 @@ export function safeParseClientMessage(
 export const SnapshotMessageSchema = z.object({
   type: z.literal("SNAPSHOT"),
   tableId: z.string().min(1),
-  state: z.record(z.unknown()),
+  state: z.record(z.string(), z.unknown()),
   timestamp: z.number(),
 });
 
@@ -231,7 +231,7 @@ export const ErrorMessageSchema = z.object({
   code: z.string(),
   message: z.string(),
   requestId: z.string().optional(),
-  context: z.record(z.unknown()).optional(),
+  context: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const AckMessageSchema = z.object({
