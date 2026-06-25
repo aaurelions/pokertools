@@ -182,7 +182,7 @@ npm run workers
 **Server Output:**
 
 ```
-🃏 @pokertools/api v1.0.0
+🃏 @pokertools/api v1.0.4
 -------------------------
 🌍 Server: http://0.0.0.0:3000
 📚 Docs:   http://0.0.0.0:3000/docs
