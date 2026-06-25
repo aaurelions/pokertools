@@ -1,14 +1,10 @@
 import fp from "fastify-plugin";
-import { Queue } from "bullmq";
+import { Queue, type ConnectionOptions } from "bullmq";
 import type { FastifyPluginAsync } from "fastify";
-import { config } from "../config.js";
 
 const queuePlugin: FastifyPluginAsync = async (fastify) => {
   const queue = new Queue("poker-jobs", {
-    connection: {
-      host: new URL(config.REDIS_URL).hostname,
-      port: parseInt(new URL(config.REDIS_URL).port || "6379"),
-    },
+    connection: fastify.redis as unknown as ConnectionOptions,
   });
 
   fastify.decorate("queue", queue);
@@ -16,7 +12,11 @@ const queuePlugin: FastifyPluginAsync = async (fastify) => {
 
   // Cleanup on shutdown
   fastify.addHook("onClose", async (app) => {
-    await app.queue.close();
+    await app.queue.close().catch((error: unknown) => {
+      if (!(error instanceof Error) || !error.message.includes("Connection is closed")) {
+        throw error;
+      }
+    });
     fastify.log.info("BullMQ queue closed");
   });
 
