@@ -3,7 +3,6 @@ import {
   evaluateStrings,
   evaluateBoard,
   rank,
-  rankBoard,
   HandRank,
   rankDescription,
   getCardCode,

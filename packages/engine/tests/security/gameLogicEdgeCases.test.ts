@@ -1,5 +1,5 @@
 import { PokerEngine } from "../../src/engine/PokerEngine";
-import { ActionType, PlayerStatus, Street, SitInOption } from "@pokertools/types";
+import { ActionType, PlayerStatus, Street } from "@pokertools/types";
 import { getInitialChips } from "../../src/utils/invariants";
 import { createSeededRandom } from "../helpers/seededRandom";
 
@@ -25,21 +25,6 @@ function playToShowdown(engine: PokerEngine, maxActions = 30): void {
     } catch (_e) {
       break;
     }
-    count++;
-  }
-}
-
-/**
- * Fold out all but one active player to end the hand quickly.
- */
-function foldToWinner(engine: PokerEngine, winnerSeat: number): void {
-  let count = 0;
-  while (engine.state.street !== "SHOWDOWN" && count < 10) {
-    const seat = engine.state.actionTo;
-    if (seat === null) break;
-    if (seat === winnerSeat) break;
-    const player = engine.state.players[seat]!;
-    engine.act({ type: ActionType.FOLD, playerId: player.id });
     count++;
   }
 }
@@ -326,7 +311,7 @@ describe("Auto-Runout (All-In) Chip Integrity", () => {
 
     engine.deal();
 
-    const ids = [0, 1, 2].map((s) => engine.state.players[s]!.id);
+    const _ids = [0, 1, 2].map((s) => engine.state.players[s]!.id);
 
     try {
       // UTG player (the first to act) goes all-in for their entire stack.
