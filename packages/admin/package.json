@@ -1,6 +1,6 @@
 {
   "name": "@pokertools/admin",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Fund aggregation (sweeper) and withdrawal processing service",
   "author": "A.Aurelius",
   "license": "MIT",

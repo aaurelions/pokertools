@@ -1,6 +1,6 @@
 {
   "name": "@pokertools/api",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Production-ready REST/WebSocket API for PokerTools engine",
   "author": "A.Aurelius",
   "license": "MIT",

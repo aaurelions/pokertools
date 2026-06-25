@@ -1,6 +1,6 @@
 {
   "name": "@pokertools/engine",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Enterprise-grade Texas Hold'em poker engine",
   "author": "A.Aurelius",
   "license": "MIT",
