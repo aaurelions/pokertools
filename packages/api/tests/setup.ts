@@ -24,6 +24,15 @@ if (process.env.DATABASE_URL?.startsWith("file:")) {
 
 let testRedis: Redis;
 
+// Suppress harmless "Connection is closed" errors from BullMQ's ioredis
+// that fire as unhandled rejections during worker/queue cleanup.
+function suppressClosedError(reason: unknown) {
+  if (reason instanceof Error && reason.message.includes("Connection is closed")) return;
+  console.error("Unhandled rejection in test:", reason);
+}
+
+process.on("unhandledRejection", suppressClosedError);
+
 // Store original console methods
 const originalConsoleLog = console.log;
 const originalConsoleInfo = console.info;
@@ -53,6 +62,8 @@ afterAll(async () => {
   // Restore console
   console.log = originalConsoleLog;
   console.info = originalConsoleInfo;
+
+  process.removeListener("unhandledRejection", suppressClosedError);
 
   // Close test Redis connection
   // NOTE: We do NOT call flushdb() here to avoid race conditions

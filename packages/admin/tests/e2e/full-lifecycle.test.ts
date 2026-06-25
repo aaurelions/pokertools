@@ -86,6 +86,8 @@ describe("E2E: Deposit -> Game -> Sweep -> Withdraw", () => {
     redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379", {
       maxRetriesPerRequest: null,
     });
+    await redis.flushdb();
+
     const redlock = new Redlock([redis as any]);
     const queue = new Queue("poker-jobs", { connection: redis as any });
 

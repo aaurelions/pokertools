@@ -21,7 +21,7 @@ export async function startAnvil() {
   // If already running, skip
   if (anvilProcess) return;
 
-  return new Promise<void>((resolve) => {
+  await new Promise<void>((resolve) => {
     // Start Anvil on a specific port
     anvilProcess = spawn("anvil", ["--port", "8545", "--block-time", "1"], {
       stdio: "ignore", // Keep console clean
@@ -30,6 +30,10 @@ export async function startAnvil() {
 
     // Give it 1 second to spin up
     setTimeout(() => resolve(), 1000);
+  });
+
+  await (publicClient.request as (args: { method: string }) => Promise<unknown>)({
+    method: "anvil_reset",
   });
 }
 
