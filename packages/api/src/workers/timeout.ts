@@ -1,10 +1,17 @@
 import { Worker } from "bullmq";
 import { Redis } from "ioredis";
+import Redlock from "redlock";
 import { PokerEngine, type Snapshot as EngineSnapshot } from "@pokertools/engine";
 import { config } from "../config.js";
 import { createPrismaClient } from "../utils/prismaClient.js";
 
 const redis = new Redis(config.REDIS_URL);
+const redlock = new Redlock([redis as any], {
+  driftFactor: 0.01,
+  retryCount: 10,
+  retryDelay: 200,
+  retryJitter: 100,
+});
 const prisma = createPrismaClient();
 
 interface Snapshot extends EngineSnapshot {
@@ -14,59 +21,138 @@ interface Snapshot extends EngineSnapshot {
 /**
  * Timeout Worker
  *
- * Processes player timeouts with version checking to prevent race conditions.
- * When a player times out, they are automatically folded.
+ * Processes player timeouts with Redlock concurrency and version checking
+ * to prevent race conditions. When a player times out, they are automatically
+ * folded. Uses the same concurrency pattern as normal actions (GameManager).
  */
 const worker = new Worker(
   "player-timeout",
   async (job) => {
     const { tableId, playerId, expectedVersion } = job.data;
 
-    // 1. Load state from Redis
-    const stateJson = await redis.get(`table:${tableId}`);
-    if (!stateJson) {
-      console.warn(`⚠️  No state found for table ${tableId}`);
-      return;
-    }
-
-    const snapshot: Snapshot = JSON.parse(stateJson);
-
-    // 2. Version check prevents race condition
-    if ((snapshot._version || 0) !== expectedVersion) {
+    // 1. Acquire distributed lock (same pattern as GameManager.processAction)
+    const lockTTL = process.env.NODE_ENV === "test" ? 15000 : 10000;
+    let lock;
+    try {
+      lock = await redlock.acquire([`lock:table:${tableId}`], lockTTL);
+    } catch {
       console.log(
-        `⏭️  Skipping timeout for ${playerId} (version mismatch: expected ${expectedVersion}, got ${snapshot._version || 0})`
+        `⏭️  Could not acquire lock for table ${tableId} (timeout for ${playerId}), skipping`
       );
       return;
     }
 
-    // 3. Restore engine from snapshot
-    const engine = PokerEngine.restore(snapshot);
+    const lockStartTime = Date.now();
+    const lockExtendThreshold = lockTTL * 0.6;
 
-    // 4. Execute timeout action (fold)
     try {
+      // 2. Load state from Redis
+      const stateJson = await redis.get(`table:${tableId}`);
+      if (!stateJson) {
+        console.warn(`⚠️  No state found for table ${tableId}`);
+        return;
+      }
+
+      const snapshot: Snapshot = JSON.parse(stateJson);
+
+      // 3. Version check prevents race condition
+      if ((snapshot._version || 0) !== expectedVersion) {
+        console.log(
+          `⏭️  Skipping timeout for ${playerId} (version mismatch: expected ${expectedVersion}, got ${snapshot._version || 0})`
+        );
+        return;
+      }
+
+      // 4. Restore engine from snapshot
+      const engine = PokerEngine.restore(snapshot);
+
+      // 5. Execute timeout action (fold)
       engine.act({
         type: "TIMEOUT" as any,
         playerId,
       });
 
-      // 5. Save new state
-      const newSnapshot: Snapshot = engine.snapshot as any;
-      newSnapshot._version = expectedVersion + 1;
-      await redis.set(`table:${tableId}`, JSON.stringify(newSnapshot), "EX", 86400);
+      // Check if we need to extend lock before write
+      if (Date.now() - lockStartTime > lockExtendThreshold) {
+        try {
+          await lock.extend(lockTTL);
+        } catch {
+          throw new Error("Lock expired during timeout processing - operation aborted");
+        }
+      }
 
-      // 6. Broadcast state update
+      // 6. Save new state with optimistic version guard (same Lua script as GameManager)
+      const newSnapshot: Snapshot = engine.snapshot as any;
+      const currentVersion = expectedVersion + 1;
+      newSnapshot._version = currentVersion;
+
+      const setScript = `
+        local key = KEYS[1]
+        local expectedVersion = tonumber(ARGV[1])
+        local newValue = ARGV[2]
+        local ttl = tonumber(ARGV[3])
+
+        local current = redis.call('GET', key)
+        if current == false then
+          return redis.error_reply('Table state not found')
+        end
+
+        if current == '' then
+          return redis.error_reply('Table state is empty')
+        end
+
+        local ok, currentData = pcall(cjson.decode, current)
+        if not ok then
+          return redis.error_reply('Table state is corrupted (invalid JSON)')
+        end
+
+        if type(currentData) ~= 'table' then
+          return redis.error_reply('Table state is not a valid object')
+        end
+
+        local currentVersion = currentData._version or 0
+
+        if currentVersion ~= expectedVersion then
+          return redis.error_reply('Version mismatch: expected ' .. expectedVersion .. ', got ' .. currentVersion)
+        end
+
+        redis.call('SET', key, newValue, 'EX', ttl)
+        return 'OK'
+      `;
+
+      try {
+        await redis.eval(
+          setScript,
+          1,
+          `table:${tableId}`,
+          expectedVersion.toString(),
+          JSON.stringify(newSnapshot),
+          "86400"
+        );
+      } catch (err) {
+        if (err instanceof Error && err.message.includes("Version mismatch")) {
+          console.log(
+            `⏭️  Version guard blocked stale timeout for ${playerId} at table ${tableId}`
+          );
+          return;
+        }
+        throw err;
+      }
+
+      // 7. Broadcast lightweight state update
       await redis.publish(
         `pubsub:table:${tableId}`,
         JSON.stringify({
           type: "STATE_UPDATE",
           tableId,
-          version: newSnapshot._version,
+          version: currentVersion,
+          timestamp: Date.now(),
         })
       );
 
       console.log(`⏰ Player ${playerId} timed out at table ${tableId} and was folded`);
-    } catch (error: any) {
-      console.error(`❌ Failed to process timeout for ${playerId}:`, error.message);
+    } finally {
+      await lock.release();
     }
   },
   { connection: redis as any }

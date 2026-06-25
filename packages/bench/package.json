@@ -1,6 +1,6 @@
 {
   "name": "@pokertools/bench",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Performance benchmarks for poker hand evaluators",
   "author": "A.Aurelius",
   "license": "MIT",
@@ -32,7 +32,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "@pokertools/evaluator": "*",
+    "@pokertools/evaluator": "1.0.5",
     "benchmark": "^2.1.4",
     "microtime": "^3.1.1",
     "phe": "^0.6.0",

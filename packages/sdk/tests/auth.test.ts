@@ -151,15 +151,49 @@ describe("Auth Utilities", () => {
   });
 
   describe("createWithdrawalMessage", () => {
-    it("creates correct withdrawal message", () => {
-      const message = createWithdrawalMessage(100, "0x742d35Cc6634C0532925a3b844Bc454e4438f44e");
-      expect(message).toBe("Withdraw 100 USD to 0x742d35Cc6634C0532925a3b844Bc454e4438f44e");
+    it("creates withdrawal message with required nonce and timestamp", () => {
+      const message = createWithdrawalMessage(
+        100,
+        "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
+        "nonce-100",
+        1719000000000
+      );
+      expect(message).toBe(
+        "Withdraw 100 USD to 0x742d35Cc6634C0532925a3b844Bc454e4438f44e\nNonce: nonce-100\nTimestamp: 1719000000000"
+      );
     });
 
     it("handles decimal amounts", () => {
-      const message = createWithdrawalMessage(99.99, "0x123");
-      expect(message).toBe("Withdraw 99.99 USD to 0x123");
+      const message = createWithdrawalMessage(99.99, "0x123", "nonce-decimal", 1719000000000);
+      expect(message).toBe("Withdraw 99.99 USD to 0x123\nNonce: nonce-decimal\nTimestamp: 1719000000000");
     });
+
+    it("creates withdrawal message with nonce and timestamp", () => {
+      const nonce = "abc-123-def";
+      const timestamp = 1719000000000;
+      const message = createWithdrawalMessage(100, "0x742d35Cc6634C0532925a3b844Bc454e4438f44e", nonce, timestamp);
+      expect(message).toContain("Withdraw 100 USD to 0x742d35Cc6634C0532925a3b844Bc454e4438f44e");
+      expect(message).toContain("Nonce: abc-123-def");
+      expect(message).toContain("Timestamp: 1719000000000");
+    });
+
+    it("includes nonce but auto-generates timestamp if not provided", () => {
+      const nonce = "unique-nonce-1";
+      const beforeTime = Date.now();
+      const message = createWithdrawalMessage(50, "0xabc", nonce);
+      const afterTime = Date.now();
+
+      expect(message).toContain("Nonce: unique-nonce-1");
+      expect(message).toContain("Timestamp: ");
+
+      // Extract timestamp and verify it's within range
+      const tsMatch = /Timestamp: (\d+)/.exec(message);
+      expect(tsMatch).not.toBeNull();
+      const ts = parseInt(tsMatch![1], 10);
+      expect(ts).toBeGreaterThanOrEqual(beforeTime);
+      expect(ts).toBeLessThanOrEqual(afterTime);
+    });
+
   });
 
   describe("generateIdempotencyKey", () => {

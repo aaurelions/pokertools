@@ -63,6 +63,9 @@ export const config = cleanEnv(process.env, {
   MAX_SINGLE_WITHDRAWAL_USD: num({ default: 5000 }),
   MAX_DAILY_WITHDRAWAL_USD: num({ default: 50000 }),
 
+  // Security
+  WALLET_ENCRYPTION_SECRET: str(),
+
   // Logging
   LOG_LEVEL: str({ default: "info" }),
 });

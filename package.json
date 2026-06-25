@@ -1,6 +1,6 @@
 {
   "name": "pokertools-monorepo",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
   "description": "Enterprise-grade Texas Hold'em poker engine and API monorepo",
   "author": "A.Aurelius",
@@ -48,7 +48,7 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.5",
-    "@eslint/js": "^9.39.4",
+    "@eslint/js": "^10.0.1",
     "@swc/core": "^1.15.43",
     "@swc/jest": "^0.2.39",
     "@types/jest": "^30.0.0",
@@ -58,7 +58,7 @@
     "@typescript-eslint/parser": "^8.62.0",
     "@vitest/coverage-v8": "^4.1.9",
     "dotenv": "^17.4.2",
-    "eslint": "^9.39.4",
+    "eslint": "^10.5.0",
     "fast-check": "^4.8.0",
     "globals": "^17.7.0",
     "jest": "^30.4.2",
@@ -70,13 +70,23 @@
     "react-dom": "^19.2.7",
     "ts-node": "^10.9.2",
     "tsx": "^4.22.4",
-    "typescript": "^5.9.3",
+    "typescript": "^6.0.3",
     "typescript-eslint": "^8.62.0",
     "vitest": "^4.1.9",
     "ws": "^8.21.0",
     "zod": "^4.4.3"
   },
   "overrides": {
+    "@hono/node-server": "^1.19.13",
+    "esbuild": "^0.28.1",
+    "tsup": {
+      "esbuild": "^0.28.1"
+    },
+    "ws": "^8.21.0",
+    "viem@2.53.1": {
+      "ws": "^8.21.0"
+    },
+    "js-yaml": "^5.1.0",
     "test-exclude": "^7.0.1"
   },
   "allowScripts": {

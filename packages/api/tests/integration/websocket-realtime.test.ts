@@ -64,8 +64,19 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
     ]);
 
     // Set up message handlers
+    const player1Snapshots: any[] = [];
+    const player1StateUpdates: any[] = [];
+    const player2Snapshots: any[] = [];
+    const player2StateUpdates: any[] = [];
+
     ws1.on("message", (data) => {
       const message = JSON.parse(data.toString());
+      if (message.type === "SNAPSHOT") {
+        player1Snapshots.push(message);
+      }
+      if (message.type === "STATE_UPDATE") {
+        player1StateUpdates.push(message);
+      }
       if (message.type === "STATE_UPDATE" || message.type === "SNAPSHOT") {
         player1Updates.push(message);
       }
@@ -73,6 +84,12 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
 
     ws2.on("message", (data) => {
       const message = JSON.parse(data.toString());
+      if (message.type === "SNAPSHOT") {
+        player2Snapshots.push(message);
+      }
+      if (message.type === "STATE_UPDATE") {
+        player2StateUpdates.push(message);
+      }
       if (message.type === "STATE_UPDATE" || message.type === "SNAPSHOT") {
         player2Updates.push(message);
       }
@@ -111,25 +128,36 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
     await waitFor(() => player1Updates.length > updateCountBefore, 3000);
 
     // =========================================================================
-    // STEP 5: Verify State Masking
+    // STEP 5: Verify STATE_UPDATE is lightweight (no state field)
     // =========================================================================
-    const player1State = player1Updates[player1Updates.length - 1].state;
-    const player2State = player2Updates[player2Updates.length - 1].state;
+    // Gather any STATE_UPDATE messages that arrived after buy-in
+    const buyInStateUpdates = player1StateUpdates.filter(
+      (u) => u.type === "STATE_UPDATE"
+    );
 
-    // Player 1 should see their own cards (if dealt)
-    // Player 2 should NOT see Player 1's cards
+    // Every STATE_UPDATE must NOT have a `state` field
+    for (const su of buyInStateUpdates) {
+      expect(su.state).toBeUndefined();
+      expect(su.type).toBe("STATE_UPDATE");
+      expect(su.tableId).toBeDefined();
+      expect(su.version).toBeTypeOf("number");
+      expect(su.timestamp).toBeTypeOf("number");
+    }
 
-    // Verify both received the same table state
-    expect(player1State.handNumber).toBe(player2State.handNumber);
-    expect(player1State.buttonSeat).toBe(player2State.buttonSeat);
+    // State should come from SNAPSHOT or REST, not STATE_UPDATE
+    const p1Snapshot = player1Snapshots[player1Snapshots.length - 1];
+    expect(p1Snapshot.state).toBeDefined();
+    expect(p1Snapshot.state.viewingPlayerId).toBeDefined();
 
-    console.log(`✅ State masking verified`);
+    console.log(`✅ STATE_UPDATE is lightweight (no state field) - verified`);
 
     // =========================================================================
     // STEP 6: More Players Join and Deal
     // =========================================================================
     player1Updates.length = 0;
     player2Updates.length = 0;
+    player1StateUpdates.length = 0;
+    player2StateUpdates.length = 0;
 
     await buyIn(ctx.app, player2.token, ctx.tableId, 1000, 1);
     await buyIn(ctx.app, player3.token, ctx.tableId, 1000, 2);
@@ -141,13 +169,14 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
       type: "DEAL",
     });
 
-    // Wait for deal update
-    await waitFor(() => {
-      const lastUpdate = player1Updates[player1Updates.length - 1];
-      return lastUpdate?.state?.street === "PREFLOP";
+    // Wait for deal update - verify via REST since STATE_UPDATE is lightweight
+    const tid = ctx.tableId!;
+    await waitFor(async () => {
+      const state = await getTableState(ctx.app, player1.token, tid);
+      return state.street === "PREFLOP";
     }, 2000);
 
-    let dealState = player1Updates[player1Updates.length - 1].state;
+    let dealState = await getTableState(ctx.app, player1.token, tid);
     expect(dealState.street).toBe("PREFLOP");
 
     console.log(`✅ Deal update received via WebSocket`);
@@ -336,4 +365,70 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
     await cleanupTestTable(ctx.app, table1);
     await cleanupTestTable(ctx.app, table2);
   }, 10000);
+
+  it("STATE_UPDATE messages must be lightweight (no state field - regression)", async () => {
+    const [player1, player2] = ctx.users;
+
+    // Create table
+    const testTableId = await createTable(ctx.app, player1.token, {
+      name: "Lightweight Protocol Test",
+      mode: "CASH",
+      smallBlind: 5,
+      bigBlind: 10,
+    });
+
+    try {
+      // Connect WebSocket
+      const ws = new WebSocket(`${wsUrl}?token=${player1.token}`);
+      await new Promise((resolve) => ws.once("open", resolve));
+
+      const allMessages: any[] = [];
+      ws.on("message", (data) => {
+        allMessages.push(JSON.parse(data.toString()));
+      });
+
+      // Join table
+      ws.send(JSON.stringify({ type: "JOIN", tableId: testTableId }));
+      await waitFor(() => allMessages.length > 0, 3000);
+
+      // Verify SNAPSHOT has state
+      const snapshot = allMessages.find((m) => m.type === "SNAPSHOT");
+      expect(snapshot).toBeDefined();
+      expect(snapshot.state).toBeDefined();
+
+      // Buy in to trigger STATE_UPDATE
+      await buyIn(ctx.app, player1.token, testTableId, 500, 0);
+      await buyIn(ctx.app, player2.token, testTableId, 500, 1);
+
+      // Wait for STATE_UPDATE messages
+      await waitFor(() => {
+        const updates = allMessages.filter((m) => m.type === "STATE_UPDATE");
+        return updates.length > 0;
+      }, 3000);
+
+      // Verify EVERY STATE_UPDATE is lightweight
+      const stateUpdates = allMessages.filter((m) => m.type === "STATE_UPDATE");
+      expect(stateUpdates.length).toBeGreaterThan(0);
+
+      for (const su of stateUpdates) {
+        // Must have lightweight fields
+        expect(su.type).toBe("STATE_UPDATE");
+        expect(su.tableId).toBeTypeOf("string");
+        expect(su.version).toBeTypeOf("number");
+        expect(su.timestamp).toBeTypeOf("number");
+
+        // Must NOT have state
+        expect(su.state).toBeUndefined();
+
+        // Must NOT have any other fields
+        const allowedKeys = ["type", "tableId", "version", "timestamp"];
+        const actualKeys = Object.keys(su).sort();
+        expect(actualKeys.sort()).toEqual(allowedKeys.sort());
+      }
+
+      ws.close();
+    } finally {
+      await cleanupTestTable(ctx.app, testTableId);
+    }
+  }, 15000);
 });

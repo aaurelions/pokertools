@@ -545,17 +545,21 @@ describe("Auth utility edge cases", () => {
 
   describe("createWithdrawalMessage", () => {
     it("includes amount integer in message", () => {
-      const m = createWithdrawalMessage(500, "0xabc");
-      expect(m).toBe("Withdraw 500 USD to 0xabc");
+      const m = createWithdrawalMessage(500, "0xabc", "nonce-500", 1719000000000);
+      expect(m).toBe("Withdraw 500 USD to 0xabc\nNonce: nonce-500\nTimestamp: 1719000000000");
     });
 
     it("includes amount 0 in message", () => {
-      expect(createWithdrawalMessage(0, "0xabc")).toBe("Withdraw 0 USD to 0xabc");
+      expect(createWithdrawalMessage(0, "0xabc", "nonce-zero", 1719000000000)).toBe(
+        "Withdraw 0 USD to 0xabc\nNonce: nonce-zero\nTimestamp: 1719000000000"
+      );
     });
 
     it("handles long ethereum address with mixed case", () => {
       const addr = "0x742d35Cc6634C0532925a3b844Bc454e4438f44e";
-      expect(createWithdrawalMessage(100, addr)).toBe(`Withdraw 100 USD to ${addr}`);
+      expect(createWithdrawalMessage(100, addr, "nonce-address", 1719000000000)).toBe(
+        `Withdraw 100 USD to ${addr}\nNonce: nonce-address\nTimestamp: 1719000000000`
+      );
     });
   });
 

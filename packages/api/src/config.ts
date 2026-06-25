@@ -10,6 +10,7 @@ export const config = cleanEnv(process.env, {
 
   JWT_SECRET: str(),
   COOKIE_SECRET: str(),
+  WALLET_ENCRYPTION_SECRET: str(),
 
   LOG_LEVEL: str({ default: "info", choices: ["debug", "info", "warn", "error"] }),
 
@@ -17,4 +18,7 @@ export const config = cleanEnv(process.env, {
   RPC_RETRY_COUNT: num({ default: 3, desc: "Number of retries for RPC calls" }),
   RPC_RETRY_DELAY: num({ default: 1000, desc: "Delay between retries in milliseconds" }),
   RPC_TIMEOUT: num({ default: 10000, desc: "Timeout for RPC calls in milliseconds" }),
+
+  // CORS origin - specific in production, broad in dev/test
+  CORS_ORIGIN: str({ default: "" }),
 });

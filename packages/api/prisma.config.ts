@@ -10,15 +10,17 @@ if (process.env.NODE_ENV === "test") {
   config({ quiet: true });
 }
 
-// Use DATABASE_URL from environment, fallback to dev database
-const databaseUrl = process.env.DATABASE_URL || "file:../.runtime/dev.db";
+const databaseUrl = process.env.DATABASE_URL;
+
+if (!databaseUrl) {
+  throw new Error("DATABASE_URL must be set for Prisma commands");
+}
 
 export default defineConfig({
   schema: "prisma/schema.prisma",
   migrations: {
     path: "prisma/migrations",
   },
-  engine: "classic",
   datasource: {
     url: databaseUrl,
   },

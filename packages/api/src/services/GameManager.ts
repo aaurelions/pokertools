@@ -78,9 +78,9 @@ export class GameManager {
       if (Date.now() - lockStartTime > lockExtendThreshold) {
         try {
           await lock.extend(lockTTL);
-        } catch (_err) {
+        } catch (err) {
           // Lock extension failed - another process may have taken over
-          throw new Error("Lock expired during operation - operation aborted");
+          throw new Error("Lock expired during operation - operation aborted", { cause: err });
         }
       }
 
@@ -136,7 +136,9 @@ export class GameManager {
         );
       } catch (err) {
         if (err instanceof Error && err.message.includes("Version mismatch")) {
-          throw new Error("Concurrent modification detected - state changed during operation");
+          throw new Error("Concurrent modification detected - state changed during operation", {
+            cause: err,
+          });
         }
         throw err;
       }
@@ -161,6 +163,7 @@ export class GameManager {
           type: "STATE_UPDATE",
           tableId,
           version: currentVersion,
+          timestamp: Date.now(),
         })
       );
 

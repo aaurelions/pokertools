@@ -123,6 +123,7 @@ describe("PokerSocket", () => {
                   type: "SNAPSHOT",
                   tableId: msg.tableId,
                   state: { version: 1, players: [] },
+                  version: 1,
                   timestamp: Date.now(),
                 }),
               });
@@ -170,13 +171,30 @@ describe("PokerSocket", () => {
   });
 
   describe("events", () => {
-    it("emits stateUpdate", async () => {
+    it("emits stateUpdate with cached state when cache exists", async () => {
       await socket.connect();
       const ws = (socket as any).ws as MockWebSocket;
 
       const onStateUpdate = vi.fn();
       socket.on("stateUpdate", onStateUpdate);
 
+      // First, inject a SNAPSHOT to populate the cache
+      if (ws.onmessage) {
+        ws.onmessage({
+          data: JSON.stringify({
+            type: "SNAPSHOT",
+            tableId: "table-1",
+            state: { version: 1, players: [], deck: [], viewingPlayerId: null },
+            version: 1,
+            timestamp: Date.now(),
+          }),
+        });
+      }
+
+      // Clear the spy since SNAPSHOT triggers stateUpdate?
+      onStateUpdate.mockClear();
+
+      // Now send STATE_UPDATE
       if (ws.onmessage) {
         ws.onmessage({
           data: JSON.stringify({
@@ -188,10 +206,71 @@ describe("PokerSocket", () => {
         });
       }
 
+      // Should emit the CACHED full state with updated version
       expect(onStateUpdate).toHaveBeenCalledWith(
         "table-1",
-        expect.objectContaining({ version: 2 })
+        expect.objectContaining({ version: 2, players: [], viewingPlayerId: null })
       );
+    });
+
+    it("does NOT emit stateUpdate when no cached state exists (regression: no phantom partial state)", async () => {
+      await socket.connect();
+      const ws = (socket as any).ws as MockWebSocket;
+
+      const onStateUpdate = vi.fn();
+      socket.on("stateUpdate", onStateUpdate);
+
+      // Send STATE_UPDATE for a table with NO cached state
+      if (ws.onmessage) {
+        ws.onmessage({
+          data: JSON.stringify({
+            type: "STATE_UPDATE",
+            tableId: "table-unknown",
+            version: 5,
+            timestamp: Date.now(),
+          }),
+        });
+      }
+
+      // Must NOT emit a phantom partial PublicState
+      expect(onStateUpdate).not.toHaveBeenCalled();
+    });
+
+    it("getTableVersion exposes version metadata safely", async () => {
+      await socket.connect();
+      const ws = (socket as any).ws as MockWebSocket;
+
+      // Unknown table returns undefined
+      expect(socket.getTableVersion("table-1")).toBeUndefined();
+
+      // Receive SNAPSHOT
+      if (ws.onmessage) {
+        ws.onmessage({
+          data: JSON.stringify({
+            type: "SNAPSHOT",
+            tableId: "table-1",
+            state: { version: 1, players: [], deck: [], viewingPlayerId: null },
+            version: 1,
+            timestamp: Date.now(),
+          }),
+        });
+      }
+
+      expect(socket.getTableVersion("table-1")).toBe(1);
+
+      // Receive STATE_UPDATE
+      if (ws.onmessage) {
+        ws.onmessage({
+          data: JSON.stringify({
+            type: "STATE_UPDATE",
+            tableId: "table-1",
+            version: 3,
+            timestamp: Date.now(),
+          }),
+        });
+      }
+
+      expect(socket.getTableVersion("table-1")).toBe(3);
     });
 
     it("emits action", async () => {

@@ -90,13 +90,29 @@ export class SweeperService {
       return;
     }
 
-    const wallets = await this.prisma.userWallet.findMany({ take: 100 });
+    // Paginate ALL wallets, not just first 100
+    const pageSize = 100;
+    let lastId: string | undefined = undefined;
+    const allWallets: Awaited<ReturnType<typeof this.prisma.userWallet.findMany>> = [];
+
+    while (true) {
+      const page: Awaited<ReturnType<typeof this.prisma.userWallet.findMany>> =
+        await this.prisma.userWallet.findMany({
+          take: pageSize,
+          ...(lastId ? { cursor: { id: lastId }, skip: 1 } : {}),
+          orderBy: { id: "asc" },
+        });
+      if (page.length === 0) break;
+      allWallets.push(...page);
+      lastId = page[page.length - 1].id;
+    }
+
     const batchSize = 20;
 
     for (const token of chain.tokens) {
       const candidates: Candidate[] = [];
 
-      for (const wallet of wallets) {
+      for (const wallet of allWallets) {
         this.logger.info(`Checking wallet ${wallet.id}:`);
         this.logger.info(`  Stored address: ${wallet.address}`);
 

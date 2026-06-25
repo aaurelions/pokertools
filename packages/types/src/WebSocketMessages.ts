@@ -56,6 +56,7 @@ export interface SnapshotMessage {
   readonly type: "SNAPSHOT";
   readonly tableId: string;
   readonly state: PublicState;
+  readonly version: number; // State version for cache tracking
   readonly timestamp: number; // Server timestamp
 }
 
@@ -216,6 +217,7 @@ export const SnapshotMessageSchema = z.object({
   type: z.literal("SNAPSHOT"),
   tableId: z.string().min(1),
   state: z.record(z.string(), z.unknown()),
+  version: z.number(),
   timestamp: z.number(),
 });
 

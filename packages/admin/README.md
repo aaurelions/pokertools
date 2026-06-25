@@ -59,7 +59,7 @@ A Telegram bot that acts as a security gatekeeper for outgoing funds.
   3. Bot notifies the admin channel with details (User, Amount, Risk Score).
   4. Admin clicks **Approve** or **Reject** inline button.
   5. If approved, the bot triggers the Hot Wallet to send funds.
-- **Security Checks**: Verifies cryptographic signatures and checks daily withdrawal limits before notifying admins.
+- **Security Checks**: Verifies nonce/timestamp withdrawal signatures, checks daily withdrawal limits, and processes the DB-backed withdrawal outbox created atomically by the API.
 
 ### 3. Monitors
 
@@ -155,6 +155,8 @@ npm test
 - **Cold Storage**: The Hot Wallet should only hold enough funds for daily withdrawals. The Sweeper can be configured to forward excess funds to a Cold Wallet (Multisig).
 - **Rate Limiting**: The Withdrawal Bot enforces strict daily and per-transaction limits.
 - **Signature Verification**: All withdrawals require a valid signature from the user's wallet to prevent replay or impersonation attacks.
+- **Separated Secrets**: Set `WALLET_ENCRYPTION_SECRET` separately from `JWT_SECRET`; wallet encryption must never reuse auth signing secrets.
+- **Sweeping Coverage**: Wallet sweeping paginates through all user wallets instead of only a fixed first page.
 
 ---
 

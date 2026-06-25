@@ -1,7 +1,8 @@
 import { PrismaClient } from "../../generated/prisma/index.js";
-import { createPublicClient, http, fallback, type PublicClient, defineChain } from "viem";
+import { createPublicClient, http, fallback, type PublicClient, defineChain, bytesToHex } from "viem";
 import { HDKey } from "@scure/bip32";
-import { privateKeyToAccount } from "viem/accounts";
+import { secp256k1 } from "@noble/curves/secp256k1.js";
+import { publicKeyToAddress } from "viem/accounts";
 import { AppError } from "../utils/errors.js";
 import { config } from "../config.js";
 import { decryptXpub } from "../utils/crypto.js";
@@ -143,23 +144,33 @@ export class BlockchainManager {
    *
    * The xPub should be derived at m/44'/60'/0'/0, then we append the index.
    * Final logical path: m/44'/60'/0'/0/{index}
+   *
+   * Uses ONLY public key derivation — no private key required.
+   * This works because BIP32 non-hardened child derivation can use
+   * the parent public key to derive child public keys.
    */
-  private deriveAddressFromXpub(xpubOrXpriv: string, index: number): string {
-    const hdKey = HDKey.fromExtendedKey(xpubOrXpriv);
+  private deriveAddressFromXpub(xpub: string, index: number): string {
+    const hdKey = HDKey.fromExtendedKey(xpub);
     const childKey = hdKey.deriveChild(index);
 
-    if (!childKey.privateKey) {
-      throw new Error(`Cannot derive private key for index ${index}`);
+    const publicKey = childKey.publicKey;
+    if (!publicKey) {
+      throw new Error(`Cannot derive public key for index ${index}`);
     }
 
-    // Use same method as BlockchainService
-    const account = privateKeyToAccount(`0x${Buffer.from(childKey.privateKey).toString("hex")}`);
+    // @scure/bip32 returns compressed secp256k1 public keys. Ethereum address
+    // derivation requires the uncompressed key, so decompress before passing it
+    // to viem's address helper. This remains xpub-only and matches admin-side
+    // private-key derivation for the same non-hardened child index.
+    const uncompressedPublicKey = secp256k1.Point.fromBytes(publicKey).toBytes(false);
+    const address = publicKeyToAddress(bytesToHex(uncompressedPublicKey));
 
-    return account.address.toLowerCase();
+    return address.toLowerCase();
   }
 
   /**
-   * Start a deposit monitoring session
+   * Start a deposit monitoring session.
+   * Idempotent: if an active session already exists, extends it instead of creating a new one.
    */
   async startDepositSession(
     userId: string,
@@ -174,14 +185,27 @@ export class BlockchainManager {
 
     const expiresAt = new Date(Date.now() + durationMinutes * 60 * 1000);
 
-    // Create or extend session
-    await this.prisma.depositSession.create({
-      data: {
-        userId,
-        userWalletId: wallet.id,
-        expiresAt,
-      },
+    // Check for existing active session — if found, extend instead of creating new
+    const existingSession = await this.prisma.depositSession.findFirst({
+      where: { userId, userWalletId: wallet.id, expiresAt: { gt: new Date() } },
     });
+
+    if (existingSession) {
+      // Extend the existing session
+      await this.prisma.depositSession.update({
+        where: { id: existingSession.id },
+        data: { expiresAt },
+      });
+    } else {
+      // Create new session only if no active one exists
+      await this.prisma.depositSession.create({
+        data: {
+          userId,
+          userWalletId: wallet.id,
+          expiresAt,
+        },
+      });
+    }
 
     return { address, expiresAt };
   }

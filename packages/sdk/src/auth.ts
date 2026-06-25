@@ -182,15 +182,33 @@ export function isSiweExpired(message: string): boolean {
 /**
  * Create a withdrawal message for signing
  *
+ * Includes nonce and timestamp to prevent replay attacks.
+ *
+ * @param amount - Amount in USD
+ * @param destinationAddress - Destination Ethereum address
+ * @param nonce - Unique nonce to prevent replay (recommended: use generateIdempotencyKey())
+ * @param timestamp - Unix timestamp in milliseconds (defaults to now)
+ *
  * @example
  * ```typescript
- * const message = createWithdrawalMessage(100, "0x...");
+ * const nonce = generateIdempotencyKey();
+ * const message = createWithdrawalMessage(100, "0x...", nonce);
  * const signature = await signMessage({ message });
- * await client.withdraw({ amount: 100, address: "0x...", message, signature, ... });
+ * await client.withdraw({
+ *   amount: 100, address: "0x...", blockchainId, tokenId,
+ *   message, signature, idempotencyKey: nonce
+ * });
  * ```
  */
-export function createWithdrawalMessage(amount: number, destinationAddress: string): string {
-  return `Withdraw ${amount} USD to ${destinationAddress}`;
+export function createWithdrawalMessage(
+  amount: number,
+  destinationAddress: string,
+  nonce: string,
+  timestamp?: number
+): string {
+  const ts = timestamp ?? Date.now();
+  const baseMsg = `Withdraw ${amount} USD to ${destinationAddress}`;
+  return `${baseMsg}\nNonce: ${nonce}\nTimestamp: ${ts}`;
 }
 
 /**

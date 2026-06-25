@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.5] - 2026-06-25
+
+### Security
+
+- Removed replayable withdrawal messages; withdrawals now require nonce/timestamp signatures and DB-backed idempotency keys.
+- Moved withdrawal debit/request creation to an atomic DB outbox pattern.
+- Added `WALLET_ENCRYPTION_SECRET` as a required separate wallet-encryption secret for API and admin services.
+- Updated API deposit address derivation to work with public HD wallet material and no API-side private-key derivation.
+- Deposit monitor now enforces `Token.minDeposit` and ignores zero-address mint events.
+- Production CORS now denies cross-origin requests unless `CORS_ORIGIN` is explicitly configured.
+
+### Changed
+
+- WebSocket `STATE_UPDATE` is now a lightweight `{ tableId, version, timestamp }` notification; full state is delivered by `SNAPSHOT` or REST fetches.
+- Timeout worker now uses Redlock plus optimistic version-guarded Redis writes.
+- Admin sweeper now paginates all user wallets.
+- Prisma config requires `DATABASE_URL`; no implicit development database fallback is used.
+
+### Added
+
+- Prisma migration for `PaymentTransaction.idempotencyKey`.
+- Regression coverage for withdrawal replay/idempotency, deposit min/mint filtering, WebSocket protocol shape, timeout locking, and full blockchain deposit/sweep/withdraw lifecycle.
+
 ## [1.0.4] - 2026-06-25
 
 ### Changed
@@ -293,6 +316,9 @@ Given a version number MAJOR.MINOR.PATCH:
 - [NPM: @pokertools/evaluator](https://www.npmjs.com/package/@pokertools/evaluator)
 - [NPM: @pokertools/types](https://www.npmjs.com/package/@pokertools/types)
 
-[Unreleased]: https://github.com/aaurelions/pokertools/compare/v1.0.1...HEAD
+[1.0.5]: https://github.com/aaurelions/pokertools/compare/v1.0.4...v1.0.5
+[1.0.4]: https://github.com/aaurelions/pokertools/compare/v1.0.3...v1.0.4
+[1.0.3]: https://github.com/aaurelions/pokertools/compare/v1.0.2...v1.0.3
+[1.0.2]: https://github.com/aaurelions/pokertools/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/aaurelions/pokertools/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/aaurelions/pokertools/releases/tag/v1.0.0

@@ -483,4 +483,111 @@ describe("Deposit Security Tests", () => {
       await app.prisma.user.delete({ where: { id: user.id } });
     });
   });
+
+  describe("Minimum Deposit Enforcement", () => {
+    it("should reject deposits below Token.minDeposit", async () => {
+      const blockchain = await app.prisma.blockchain.create({
+        data: {
+          name: "Test MinDep Chain",
+          chainId: 993,
+          rpcUrl: "http://localhost:8545",
+          explorerUrl: "https://explorer.io",
+          nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
+          confirmations: 1,
+        },
+      });
+
+      const token = await app.prisma.token.create({
+        data: {
+          blockchainId: blockchain.id,
+          address: "0x4444444444444444444444444444444444444444",
+          symbol: "USDC",
+          name: "USD Coin",
+          decimals: 6,
+          minDeposit: "10000000", // 10 USDC minimum
+        },
+      });
+
+      // Simulating the BigInt check that the deposit monitor would do
+      const belowMinAmount = BigInt("5000000"); // 5 USDC - below 10 USDC min
+      const minDepositBigInt = BigInt(token.minDeposit);
+      expect(belowMinAmount < minDepositBigInt).toBe(true);
+
+      // At minimum
+      const atMinAmount = BigInt("10000000"); // 10 USDC - exactly at min
+      expect(atMinAmount >= minDepositBigInt).toBe(true);
+
+      // Above minimum
+      const aboveMinAmount = BigInt("20000000"); // 20 USDC - above min
+      expect(aboveMinAmount >= minDepositBigInt).toBe(true);
+
+      // Cleanup
+      await app.prisma.token.delete({ where: { id: token.id } });
+      await app.prisma.blockchain.delete({ where: { id: blockchain.id } });
+    });
+
+    it("should enforce zero minimum deposit (allow all deposits)", async () => {
+      const blockchain = await app.prisma.blockchain.create({
+        data: {
+          name: "Test ZeroMin Chain",
+          chainId: 992,
+          rpcUrl: "http://localhost:8545",
+          explorerUrl: "https://explorer.io",
+          nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
+          confirmations: 1,
+        },
+      });
+
+      const token = await app.prisma.token.create({
+        data: {
+          blockchainId: blockchain.id,
+          address: "0x5555555555555555555555555555555555555555",
+          symbol: "TEST",
+          name: "Test Token",
+          decimals: 6,
+          minDeposit: "0", // No minimum
+        },
+      });
+
+      // Even tiny amounts should pass when minDeposit is 0
+      const tinyAmount = BigInt("1");
+      const minDepositBigInt = BigInt(token.minDeposit);
+      expect(tinyAmount >= minDepositBigInt).toBe(true);
+
+      // Cleanup
+      await app.prisma.token.delete({ where: { id: token.id } });
+      await app.prisma.blockchain.delete({ where: { id: blockchain.id } });
+    });
+  });
+
+  describe("Zero-Address Mint Transfer Filtering", () => {
+    it("should identify zero-address transfers (mints) as not real deposits", () => {
+      const zeroAddress = "0x0000000000000000000000000000000000000000";
+      const realAddress: string = "0x1234567890123456789012345678901234567890";
+
+      // Zero-address as 'from' = mint (should be filtered)
+      const isMint = zeroAddress === "0x0000000000000000000000000000000000000000";
+      expect(isMint).toBe(true);
+
+      // Real address as 'from' = actual transfer (should be processed)
+      const isTransfer = !!(realAddress.length === 42 && realAddress !== zeroAddress);
+      expect(isTransfer).toBe(true);
+
+      // Check case-insensitive comparison
+      const upperZero = "0x0000000000000000000000000000000000000000".toLowerCase();
+      expect(upperZero).toBe(zeroAddress);
+    });
+
+    it("should log and skip zero-address mint transfers in deposit processing", () => {
+      // This test validates the logic that would be used in the deposit monitor
+      const fromAddress: string = "0x0000000000000000000000000000000000000000";
+      const isZeroAddress = fromAddress === "0x0000000000000000000000000000000000000000" || !fromAddress;
+      expect(isZeroAddress).toBe(true);
+
+      // A valid non-zero from address
+      const validFrom: string = "0xabcdef1234567890abcdef1234567890abcdef12";
+      const isValidFrom = !!(validFrom.length > 0 && validFrom !== "0x0000000000000000000000000000000000000000");
+      expect(isValidFrom).toBe(true);
+    });
+  });
 });

@@ -422,15 +422,8 @@ function awardPotToLastPlayer(state: GameState, winningSeat: number): GameState 
     }
 
     // Calculate uncalled and called portions
-    let uncalledAmount = 0;
-    let calledPortion = 0;
-
-    if (winnersBet > maxOpponentBet) {
-      uncalledAmount = winnersBet - maxOpponentBet;
-      calledPortion = maxOpponentBet;
-    } else {
-      calledPortion = winnersBet;
-    }
+    const uncalledAmount = winnersBet > maxOpponentBet ? winnersBet - maxOpponentBet : 0;
+    const calledPortion = winnersBet > maxOpponentBet ? maxOpponentBet : winnersBet;
 
     // Step 1: Return uncalled bet immediately (NO RAKE on uncalled bets)
     if (uncalledAmount > 0) {

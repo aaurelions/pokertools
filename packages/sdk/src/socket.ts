@@ -113,6 +113,9 @@ export class PokerSocket {
   // Latest state cache for each table
   private stateCache = new Map<string, PublicState>();
 
+  // Version metadata per table (exposed safely via getTableVersion)
+  private tableVersions = new Map<string, number>();
+
   constructor(config: SocketConfig) {
     // Construct WebSocket URL with token
     const wsUrl = new URL(config.url);
@@ -301,6 +304,7 @@ export class PokerSocket {
 
     this.joinedTables.delete(tableId);
     this.stateCache.delete(tableId);
+    this.tableVersions.delete(tableId);
 
     const message: LeaveTableMessage = {
       type: "LEAVE",
@@ -322,6 +326,14 @@ export class PokerSocket {
    */
   getCachedState(tableId: string): PublicState | undefined {
     return this.stateCache.get(tableId);
+  }
+
+  /**
+   * Get latest known version for a table
+   * Returns undefined if no version has been received
+   */
+  getTableVersion(tableId: string): number | undefined {
+    return this.tableVersions.get(tableId);
   }
 
   // ============================================================================
@@ -436,8 +448,9 @@ export class PokerSocket {
 
       switch (message.type) {
         case "SNAPSHOT": {
-          // Cache state
+          // Cache state and track version
           this.stateCache.set(message.tableId, message.state);
+          this.tableVersions.set(message.tableId, message.version);
 
           // Resolve pending join request
           const pending = this.pendingRequests.get(`snapshot:${message.tableId}`);
@@ -451,21 +464,20 @@ export class PokerSocket {
         }
 
         case "STATE_UPDATE": {
-          // For lightweight updates, we need to fetch full state
-          // The message only contains version info
-          // Emit event so UI can decide to fetch or use existing data
+          // Track version metadata (always available)
+          this.tableVersions.set(message.tableId, message.version);
+
+          // Only emit if we have a cached state (from a prior SNAPSHOT)
+          // Never emit a phantom partial PublicState
           const cachedState = this.stateCache.get(message.tableId);
           if (cachedState) {
-            // Update version in cache
+            // Update version in cache to keep it consistent
             const updatedState = { ...cachedState, version: message.version };
             this.stateCache.set(message.tableId, updatedState);
             this.emit("stateUpdate", message.tableId, updatedState);
-          } else {
-            // No cached state, emit with minimal info
-            this.emit("stateUpdate", message.tableId, {
-              version: message.version,
-            } as PublicState);
           }
+          // If no cached state, consumer should fetch via REST
+          // Version is still available via getTableVersion()
           break;
         }
 

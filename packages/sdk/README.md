@@ -13,6 +13,7 @@ The official TypeScript SDK for the **PokerTools** platform. Build real-time Tex
 - 🛡️ **Type-Safe**: Full TypeScript support with shared types from the core engine.
 - 🔄 **State Management**: Automatic synchronization of game state (snapshots + delta updates).
 - 💰 **Financials**: Deposit, withdrawal, and chip management utilities.
+- 🔐 **Replay-safe Withdrawals**: Helpers generate nonce/timestamp withdrawal messages for the current API contract.
 
 ## 📦 Installation
 
@@ -107,6 +108,8 @@ The SDK bridges your frontend application with the PokerTools API and Real-time 
 | --------------- | -------------------------------------------------------------- |
 | `PokerClient`   | Handles REST API requests (Tables, User, Finance).             |
 | `PokerSocket`   | Manages WebSocket connection and real-time events.             |
+
+`STATE_UPDATE` WebSocket events are lightweight version notifications. Use `getTableVersion(tableId)` to inspect the latest server version and fetch full state via REST when the version advances beyond your cached snapshot.
 | `PokerProvider` | React Context provider that initializes the client and socket. |
 | `useTable`      | Hook that subscribes to a specific table's updates.            |
 

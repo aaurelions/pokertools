@@ -417,7 +417,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
             });
           } catch (cashOutError) {
             fastify.log.error({ userId, error: cashOutError }, "Cash out failed");
-            throw new Error("Cash out failed. Please try again.");
+            throw new Error("Cash out failed. Please try again.", { cause: cashOutError });
           }
         } else if (currentInPlay > 0) {
           // Player is busted (stack = 0) but still has IN_PLAY balance

@@ -291,11 +291,23 @@ describe("E2E: Deposit -> Game -> Sweep -> Withdraw", () => {
       throw new Error("Deposit sessions or user wallets not found");
     }
 
-    // Mint USDC to deposit addresses
-    const hash1 = await walletClient.writeContract({
+    // Mint USDC to the deployer, then transfer to deposit addresses. The
+    // deposit monitor intentionally ignores zero-address mint events, so this
+    // exercises the same ERC-20 Transfer path users create on public chains.
+    const mintHash = await walletClient.writeContract({
       address: contracts.usdcAddress as `0x${string}`,
       abi: USDC_ABI,
       functionName: "mint",
+      args: [walletClient.account.address, depositAmount * 2n],
+      chain: localChain,
+      account: walletClient.account,
+    });
+    await publicClient.waitForTransactionReceipt({ hash: mintHash });
+
+    const hash1 = await walletClient.writeContract({
+      address: contracts.usdcAddress as `0x${string}`,
+      abi: USDC_ABI,
+      functionName: "transfer",
       args: [winnerDepositAddr as `0x${string}`, depositAmount],
       chain: localChain,
       account: walletClient.account,
@@ -305,7 +317,7 @@ describe("E2E: Deposit -> Game -> Sweep -> Withdraw", () => {
     const hash2 = await walletClient.writeContract({
       address: contracts.usdcAddress as `0x${string}`,
       abi: USDC_ABI,
-      functionName: "mint",
+      functionName: "transfer",
       args: [loserDepositAddr as `0x${string}`, depositAmount],
       chain: localChain,
       account: walletClient.account,

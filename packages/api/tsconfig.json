@@ -3,6 +3,7 @@
     "target": "ES2023",
     "module": "ESNext",
     "moduleResolution": "node",
+    "ignoreDeprecations": "6.0",
     "lib": ["ES2023"],
     "outDir": "./dist",
     "rootDir": "./src",

@@ -3,7 +3,8 @@
   "compilerOptions": {
     "composite": false,
     "declaration": true,
-    "emitDeclarationOnly": true
+    "emitDeclarationOnly": true,
+    "ignoreDeprecations": "6.0"
   },
   "references": [],
   "include": ["src/**/*"]

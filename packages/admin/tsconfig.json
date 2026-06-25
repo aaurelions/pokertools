@@ -10,8 +10,7 @@
     "target": "ES2022",
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "resolveJsonModule": true,
-    "baseUrl": "."
+    "resolveJsonModule": true
   },
   "include": ["src/**/*", "tests/**/*", "../api/generated/**/*", "vitest.config.ts"],
   "exclude": ["node_modules", "dist", "contracts/**/*"],

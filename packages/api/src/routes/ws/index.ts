@@ -105,6 +105,7 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
               type: "SNAPSHOT",
               tableId,
               state,
+              version: state.version,
               timestamp: Date.now(),
             };
             sendMessage(snapshot);

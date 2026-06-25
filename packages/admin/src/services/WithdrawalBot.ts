@@ -168,7 +168,7 @@ Dest: <code>${meta.address}</code>
           where: { ledgerEntryId: reqId },
         });
 
-        if (exists) {
+        if (exists && exists.status !== "PENDING") {
           // 'ctx.msg' is a shortcut for the message object in grammY
           // We use 'msg' because callback queries are always attached to a message
           if (ctx.msg) {
@@ -218,23 +218,11 @@ Dest: <code>${meta.address}</code>
       account: client.account!,
     });
 
-    const account = await this.prisma.account.findUniqueOrThrow({
-      where: { id: tx.accountId },
-      include: { user: true },
-    });
-
-    // DB Record
-    await this.prisma.paymentTransaction.create({
+    // DB outbox row was created atomically by the API when the user balance was debited.
+    await this.prisma.paymentTransaction.update({
+      where: { ledgerEntryId: reqId },
       data: {
-        userId: account.userId,
-        type: "WITHDRAWAL",
-        ledgerEntryId: reqId,
         txHash: hash,
-        blockchainId: chain.id,
-        tokenId: token.id,
-        address: meta.address,
-        amountRaw: meta.amountRaw,
-        amountCredit: Math.abs(tx.amount),
         status: "PROCESSING",
       },
     });
@@ -263,6 +251,10 @@ Dest: <code>${meta.address}</code>
           referenceId: reqId,
           metadata: { reason: "Admin Rejected" },
         },
+      }),
+      this.prisma.paymentTransaction.update({
+        where: { ledgerEntryId: reqId },
+        data: { status: "REJECTED" },
       }),
     ]);
 

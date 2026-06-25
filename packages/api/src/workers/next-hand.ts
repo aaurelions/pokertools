@@ -82,6 +82,7 @@ const worker = new Worker(
           type: "STATE_UPDATE",
           tableId,
           version: newSnapshot._version,
+          timestamp: Date.now(),
         })
       );
 

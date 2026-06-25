@@ -1,7 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import type { Redis } from "ioredis";
-import { PokerEngine } from "@pokertools/engine";
 
 /**
  * Extended WebSocket with userId property
@@ -50,7 +49,7 @@ export class SocketManager {
       }
     });
 
-    this.subscriber.on("pmessage", async (_pattern, channel, _message) => {
+    this.subscriber.on("pmessage", async (_pattern, channel, message) => {
       const tableId = channel.split(":")[2];
       if (!tableId) return;
 
@@ -58,29 +57,28 @@ export class SocketManager {
       if (!sockets || sockets.size === 0) return;
 
       try {
-        // Fetch state ONCE per update
-        const rawState = await this.app.redis.get(`table:${tableId}`);
-        if (!rawState) return;
+        // Parse the lightweight notification published via Redis
+        let payload: { type: string; tableId: string; version: number; timestamp?: number };
+        try {
+          payload = JSON.parse(message);
+        } catch {
+          this.app.log.warn(`Invalid pub message for table ${tableId}`);
+          return;
+        }
 
-        const snapshot = JSON.parse(rawState);
-        const engine = PokerEngine.restore(snapshot);
+        // Ensure timestamp is present (publishers should include it)
+        const broadcastMessage = JSON.stringify({
+          type: "STATE_UPDATE",
+          tableId: payload.tableId || tableId,
+          version: payload.version ?? 0,
+          timestamp: payload.timestamp ?? Date.now(),
+        });
 
-        // Broadcast masked views to each socket
+        // Forward lightweight STATE_UPDATE to all subscribers
         for (const socket of sockets) {
           if (socket.readyState === 1) {
             // OPEN
-            const userId = socket.userId;
-
-            // Engine handles masking
-            const maskedView = engine.view(userId);
-
-            socket.send(
-              JSON.stringify({
-                type: "STATE_UPDATE",
-                tableId,
-                state: maskedView,
-              })
-            );
+            socket.send(broadcastMessage);
           }
         }
       } catch (err) {

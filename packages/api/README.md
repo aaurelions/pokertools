@@ -142,6 +142,8 @@ REDIS_URL="redis://localhost:6379"
 # Security
 JWT_SECRET="your-256-bit-secret-key-here"
 COOKIE_SECRET="your-cookie-secret-here"
+WALLET_ENCRYPTION_SECRET="separate-256-bit-wallet-encryption-secret"
+CORS_ORIGIN="https://your-poker-room.example"
 
 # Logging
 LOG_LEVEL="info"
@@ -182,7 +184,7 @@ npm run workers
 **Server Output:**
 
 ```
-🃏 @pokertools/api v1.0.4
+🃏 @pokertools/api v1.0.5
 -------------------------
 🌍 Server: http://0.0.0.0:3000
 📚 Docs:   http://0.0.0.0:3000/docs
@@ -206,6 +208,8 @@ npm run workers
 | `REDIS_URL`       | `string` | `redis://localhost:6379` | Redis connection       |
 | `JWT_SECRET`      | `string` | **required**             | JWT signing key        |
 | `COOKIE_SECRET`   | `string` | **required**             | Cookie signing key     |
+| `WALLET_ENCRYPTION_SECRET` | `string` | **required** | Separate key for encrypted wallet material |
+| `CORS_ORIGIN`     | `string` | `""`                     | Required in production to allow browser origins |
 | `LOG_LEVEL`       | `string` | `info`                   | Pino log level         |
 | `RPC_RETRY_COUNT` | `number` | `3`                      | Blockchain RPC retries |
 | `RPC_RETRY_DELAY` | `number` | `1000`                   | Retry delay (ms)       |
@@ -225,6 +229,8 @@ export const config = cleanEnv(process.env, {
   REDIS_URL: str({ default: "redis://localhost:6379" }),
   JWT_SECRET: str(),
   COOKIE_SECRET: str(),
+  WALLET_ENCRYPTION_SECRET: str(),
+  CORS_ORIGIN: str({ default: "" }),
   LOG_LEVEL: str({ default: "info", choices: ["debug", "info", "warn", "error"] }),
 });
 ```
@@ -526,7 +532,7 @@ curl http://localhost:3000/user/history \
 
 #### `POST /user/withdraw`
 
-Request withdrawal (with signature).
+Request withdrawal with a wallet signature. Withdrawal messages must include a unique nonce and recent timestamp; replayable legacy messages are rejected.
 
 ```bash
 curl -X POST http://localhost:3000/user/withdraw \
@@ -537,8 +543,9 @@ curl -X POST http://localhost:3000/user/withdraw \
     "blockchainId": "clx-chain-id",
     "tokenId": "clx-token-id",
     "address": "0x...",
-    "message": "Withdraw 100 USD to 0x...",
-    "signature": "0x..."
+    "message": "Withdraw 100 USD to 0x...\nNonce: withdrawal-uuid\nTimestamp: 1782400000000",
+    "signature": "0x...",
+    "idempotencyKey": "withdrawal-uuid"
   }'
 ```
 
@@ -725,11 +732,12 @@ const ws = new WebSocket("ws://localhost:3000/ws/play");
 {
   "type": "STATE_UPDATE",
   "tableId": "clx789ghi",
-  "state": {
-    /* updated state */
-  }
+  "version": 42,
+  "timestamp": 1705316400000
 }
 ```
+
+`STATE_UPDATE` is intentionally lightweight. Clients should use the version metadata to decide whether to fetch fresh table state via REST, or rely on an existing cached snapshot.
 
 #### Acknowledgment
 
@@ -776,8 +784,8 @@ Client                                Server
    │◀────── SNAPSHOT { state } ──────────│
    │◀────── ACK { requestId } ───────────│
    │                                     │
-   │◀───── STATE_UPDATE { state } ───────│ (action occurred)
-   │◀───── STATE_UPDATE { state } ───────│ (another action)
+   │◀───── STATE_UPDATE { version } ─────│ (action occurred)
+   │◀───── STATE_UPDATE { version } ─────│ (another action)
    │                                     │
    │─────── PING { requestId } ─────────▶│
    │◀────── PONG { timestamp } ──────────│
@@ -1350,7 +1358,7 @@ All amounts are stored in **cents** (1 chip = 1 cent = $0.01):
       └────────┘      └────────┘      └────────┘
 ```
 
-Each user gets a unique deterministic address derived from the master xpub. The derivation index is atomically incremented to prevent collisions.
+Each user gets a unique deterministic address derived from public HD wallet material. The API supports xpub-only derivation and does not need private keys to assign deposit addresses; private-key-capable material must remain isolated to the admin/sweeper environment. The derivation index is atomically incremented to prevent collisions.
 
 ### Deposit Detection
 
@@ -1358,16 +1366,17 @@ Each user gets a unique deterministic address derived from the master xpub. The 
 2. Returns unique deposit address
 3. `deposit-monitor` worker scans ERC20 Transfer events
 4. Matches `to` address against active sessions
-5. Credits MAIN account after confirmations
+5. Ignores zero-address mint events and deposits below `Token.minDeposit`
+6. Credits MAIN account after confirmations
 
 ### Withdrawal Flow
 
-1. User constructs message: `"Withdraw 100 USD to 0x..."`
+1. User constructs message: `"Withdraw 100 USD to 0x...\nNonce: <unique-id>\nTimestamp: <unix-ms>"`
 2. Signs with wallet
 3. Server verifies signature matches user's address
-4. Deducts from MAIN account
-5. Creates ledger entry
-6. Queues for admin approval
+4. Server rejects expired timestamps and duplicate idempotency keys
+5. Deducts from MAIN account and creates `PaymentTransaction` in the same DB transaction
+6. Queues the DB-backed outbox row for admin approval
 
 ---
 

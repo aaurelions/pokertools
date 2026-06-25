@@ -24,7 +24,6 @@ describe("Side Pot Properties", () => {
           });
 
           // Seat players with different stacks
-          let totalInvested = 0;
           for (let i = 0; i < numPlayers; i++) {
             engine.sit(i, `p${i}`, `Player${i}`, config.stacks[i]);
           }
@@ -68,7 +67,7 @@ describe("Side Pot Properties", () => {
 
           // Calculate total invested by all players
           const state = engine.state;
-          totalInvested = 0;
+          let totalInvested = 0;
           for (const player of state.players) {
             if (player) {
               totalInvested += player.totalInvestedThisHand;

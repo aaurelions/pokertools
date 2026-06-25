@@ -142,6 +142,11 @@ model PaymentTransaction {
   // Lifecycle
   status PaymentStatus @default(PENDING)
 
+  // Optional client-supplied idempotency key for withdrawal requests.
+  // Nullable so inbound deposits and older rows are unaffected; unique so retries
+  // cannot create duplicate debits/withdrawal requests.
+  idempotencyKey String? @unique
+
   // Accounting Link (Once confirmed, a LedgerEntry is created)
   ledgerEntryId String?      @unique
   ledgerEntry   LedgerEntry? @relation(fields: [ledgerEntryId], references: [id])

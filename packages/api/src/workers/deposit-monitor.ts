@@ -136,6 +136,7 @@ export function createDepositMonitorWorker(
 
               // Filter in memory - check if 'to' is in our active wallet set
               for (const log of logs) {
+                const fromAddress = log.args.from?.toLowerCase();
                 const toAddress = log.args.to?.toLowerCase();
 
                 // Debug logging
@@ -148,6 +149,16 @@ export function createDepositMonitorWorker(
 
                 if (!toAddress || !walletToUserMap.has(toAddress)) {
                   continue; // Not one of our users
+                }
+
+                // Reject zero-address mint transfers (from === 0x0)
+                // These are token mints, not real user deposits
+                if (fromAddress === "0x0000000000000000000000000000000000000000" || !fromAddress) {
+                  logger.info(
+                    { txHash: log.transactionHash, token: token.symbol },
+                    "Skipping zero-address mint transfer"
+                  );
+                  continue;
                 }
 
                 const txHash = log.transactionHash;
@@ -175,6 +186,16 @@ export function createDepositMonitorWorker(
                 }
 
                 if (chips <= 0) continue;
+
+                // Enforce minimum deposit amount from token configuration
+                const minDepositBigInt = BigInt(token.minDeposit);
+                if (amountBigInt < minDepositBigInt) {
+                  logger.info(
+                    { txHash, amount: amountBigInt.toString(), minDeposit: token.minDeposit, token: token.symbol },
+                    "Deposit below minimum, skipping"
+                  );
+                  continue;
+                }
 
                 // Calculate confirmations
                 const confirmations = Number(currentBlock - txBlockNumber);
@@ -399,8 +420,7 @@ async function checkPendingDeposits(
   }
 }
 
-// Export for backward compatibility
-// This is used if worker is started standalone without FastifyInstance
+// Standalone entry point for running the worker outside the Fastify process.
 export default async function createStandaloneWorker(): Promise<Worker> {
   const prisma = createPrismaClient();
   const redis = new Redis(config.REDIS_URL);

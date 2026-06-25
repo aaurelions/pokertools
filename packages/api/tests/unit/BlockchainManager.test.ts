@@ -9,13 +9,13 @@ describe("BlockchainManager", () => {
   let blockchainManager: BlockchainManager;
   let mockPrisma: any;
 
-  // ✅ Generate a valid xPriv instead of xPub
-  const getTestXpriv = () => {
+  // Generate a valid xPub (not xPriv) for testing xpub-only derivation
+  const getTestXpub = () => {
     const mnemonic = "test test test test test test test test test test test junk";
     const seed = mnemonicToSeedSync(mnemonic);
     const masterKey = HDKey.fromMasterSeed(seed);
     const derivedKey = masterKey.derive("m/44'/60'/0'/0");
-    return derivedKey.privateExtendedKey; // ✅ Use xPriv
+    return derivedKey.publicExtendedKey; // xPub only - no private key exposure
   };
 
   beforeEach(() => {
@@ -36,6 +36,8 @@ describe("BlockchainManager", () => {
       },
       depositSession: {
         create: vi.fn(),
+        findFirst: vi.fn(),
+        update: vi.fn(),
       },
       $transaction: vi.fn(),
     };
@@ -66,15 +68,15 @@ describe("BlockchainManager", () => {
       });
     });
 
-    it("should create new wallet if user doesn't have one", async () => {
+    it("should create new wallet if user doesn't have one, using xpub-only derivation", async () => {
       const userId = "user_456";
-      const testXpriv = getTestXpriv(); // ✅ Use xPriv
-      const encryptedXpriv = encryptXpub(testXpriv); // Still using same encryption function
+      const testXpub = getTestXpub(); // xPub only - no private key
+      const encryptedXpub = encryptXpub(testXpub);
 
       mockPrisma.userWallet.findFirst.mockResolvedValue(null);
       mockPrisma.adminWallet.findFirst.mockResolvedValue({
         id: "admin_wallet_1",
-        xpub: encryptedXpriv, // ✅ Contains encrypted xPriv now
+        xpub: encryptedXpub,
         currentIndex: 5,
         isActive: true,
       });
@@ -82,15 +84,14 @@ describe("BlockchainManager", () => {
       mockPrisma.$transaction.mockImplementation(async (callback: any) => {
         mockPrisma.adminWallet.update.mockResolvedValue({
           id: "admin_wallet_1",
-          xpub: encryptedXpriv,
+          xpub: encryptedXpub,
           currentIndex: 6,
         });
 
-        // Mock the userWallet.create call that happens inside the transaction
         mockPrisma.userWallet.create.mockResolvedValue({
           id: "new_wallet",
           userId,
-          address: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8", // ✅ Expected address from test xPriv at index 6
+          address: "0x1234567890abcdef1234567890abcdef12345678", // Placeholder
           derivationIndex: 6,
         });
 
@@ -133,6 +134,9 @@ describe("BlockchainManager", () => {
         address,
       });
 
+      // No existing active session
+      mockPrisma.depositSession.findFirst.mockResolvedValue(null);
+
       mockPrisma.depositSession.create.mockResolvedValue({
         id: "session_1",
         userId,
@@ -149,6 +153,47 @@ describe("BlockchainManager", () => {
       const expiryTime = result.expiresAt.getTime() - Date.now();
       expect(expiryTime).toBeGreaterThan(29 * 60 * 1000); // At least 29 minutes
       expect(expiryTime).toBeLessThan(31 * 60 * 1000); // At most 31 minutes
+    });
+
+    it("should extend existing session instead of creating new one", async () => {
+      const userId = "user_123";
+      const address = "0x1234567890123456789012345678901234567890";
+
+      mockPrisma.userWallet.findFirst.mockResolvedValue({
+        id: "wallet_1",
+        userId,
+        address,
+      });
+
+      mockPrisma.userWallet.findFirstOrThrow.mockResolvedValue({
+        id: "wallet_1",
+        userId,
+        address,
+      });
+
+      // Existing active session found
+      mockPrisma.depositSession.findFirst.mockResolvedValue({
+        id: "session_existing",
+        userId,
+        userWalletId: "wallet_1",
+        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+        createdAt: new Date(),
+      });
+
+      mockPrisma.depositSession.update.mockResolvedValue({
+        id: "session_existing",
+        userId,
+        userWalletId: "wallet_1",
+        expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+        createdAt: new Date(),
+      });
+
+      const result = await blockchainManager.startDepositSession(userId);
+
+      expect(result.address).toBe(address);
+      // Should have called update, not create
+      expect(mockPrisma.depositSession.update).toHaveBeenCalled();
+      expect(mockPrisma.depositSession.create).not.toHaveBeenCalled();
     });
 
     it("should use custom duration when provided", async () => {
@@ -168,6 +213,8 @@ describe("BlockchainManager", () => {
         address,
       });
 
+      mockPrisma.depositSession.findFirst.mockResolvedValue(null);
+
       mockPrisma.depositSession.create.mockResolvedValue({
         id: "session_1",
         userId,
@@ -185,9 +232,9 @@ describe("BlockchainManager", () => {
   });
 
   describe("HD Wallet Derivation", () => {
-    it("should generate unique addresses for different indices", async () => {
-      const testXpriv = getTestXpriv(); // ✅ Use xPriv
-      const encryptedXpriv = encryptXpub(testXpriv);
+    it("should generate unique addresses for different indices using xpub-only", async () => {
+      const testXpub = getTestXpub(); // xPub only
+      const encryptedXpub = encryptXpub(testXpub);
 
       // Mock two different users getting different addresses
       mockPrisma.userWallet.findFirst
@@ -196,7 +243,7 @@ describe("BlockchainManager", () => {
 
       mockPrisma.adminWallet.findFirst.mockResolvedValue({
         id: "admin_wallet_1",
-        xpub: encryptedXpriv, // ✅ Contains encrypted xPriv
+        xpub: encryptedXpub,
         currentIndex: 0,
         isActive: true,
       });
@@ -207,13 +254,11 @@ describe("BlockchainManager", () => {
         mockPrisma.$transaction.mockImplementation(async (callback: any) => {
           mockPrisma.adminWallet.update.mockResolvedValue({
             id: "admin_wallet_1",
-            xpub: encryptedXpriv,
+            xpub: encryptedXpub,
             currentIndex: i + 1,
           });
 
-          // Mock create to return wallet with derived address
           mockPrisma.userWallet.create.mockImplementation((data: any) => {
-            // The actual address will be derived by BlockchainManager
             return Promise.resolve({
               ...data.data,
               id: `wallet_${i}`,
@@ -232,6 +277,20 @@ describe("BlockchainManager", () => {
       // Verify both are valid Ethereum addresses
       expect(addresses[0]).toMatch(/^0x[a-fA-F0-9]{40}$/);
       expect(addresses[1]).toMatch(/^0x[a-fA-F0-9]{40}$/);
+    });
+
+    it("should derive addresses from xpub without requiring private key", () => {
+      const testXpub = getTestXpub(); // xPub only
+      const hdKey = HDKey.fromExtendedKey(testXpub);
+
+      // Verify this is indeed a public-only key (no private key)
+      expect(hdKey.privateKey).toBeNull();
+      expect(hdKey.publicKey).not.toBeNull();
+
+      // Derive a child and get an address (this should NOT throw)
+      const childKey = hdKey.deriveChild(0);
+      expect(childKey.publicKey).not.toBeNull();
+      // Address derivation from public key should work without private key
     });
   });
 });

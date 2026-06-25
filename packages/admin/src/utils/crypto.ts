@@ -16,8 +16,9 @@ const SALT_LENGTH = 32; // 256 bits
  * Derives a 256-bit encryption key from the master secret
  */
 function deriveKey(salt: Buffer): Buffer {
+  const secret = config.WALLET_ENCRYPTION_SECRET;
   return crypto.pbkdf2Sync(
-    config.JWT_SECRET, // Use JWT_SECRET as master key for now
+    secret,
     salt,
     100000, // iterations
     32, // key length (256 bits)
