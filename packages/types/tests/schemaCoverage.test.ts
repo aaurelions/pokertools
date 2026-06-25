@@ -70,9 +70,9 @@ describe("Individual Action Schemas (coverage gap-fill)", () => {
     });
 
     test("rejects RAISE with zero amount", () => {
-      expect(RaiseActionSchema.safeParse({ type: "RAISE", playerId: "p1", amount: 0 }).success).toBe(
-        false
-      );
+      expect(
+        RaiseActionSchema.safeParse({ type: "RAISE", playerId: "p1", amount: 0 }).success
+      ).toBe(false);
     });
   });
 
@@ -241,9 +241,9 @@ describe("Individual Action Schemas (coverage gap-fill)", () => {
 
     test("rejects action where type mismatch leaves required fields absent", () => {
       // FOLD needs playerId, but BET fields (amount) shouldn't satisfy FOLD
-      expect(
-        ActionSchema.safeParse({ type: "FOLD", playerId: "p1", amount: 999 }).success
-      ).toBe(true); // FOLD accepts (extra fields ignored by zod)
+      expect(ActionSchema.safeParse({ type: "FOLD", playerId: "p1", amount: 999 }).success).toBe(
+        true
+      ); // FOLD accepts (extra fields ignored by zod)
     });
   });
 });
@@ -253,7 +253,9 @@ describe("BlindLevelSchema (previously untested)", () => {
     expect(BlindLevelSchema.safeParse({ smallBlind: 10, bigBlind: 20, ante: 0 }).success).toBe(
       true
     );
-    expect(BlindLevelSchema.safeParse({ smallBlind: 25, bigBlind: 50, ante: 5 }).success).toBe(true);
+    expect(BlindLevelSchema.safeParse({ smallBlind: 25, bigBlind: 50, ante: 5 }).success).toBe(
+      true
+    );
   });
 
   test("rejects zero small blind", () => {
@@ -587,9 +589,9 @@ describe("API Request Schemas (gap-fill)", () => {
 
   describe("AddChipsRequestSchema", () => {
     test("accepts valid request", () => {
-      expect(
-        AddChipsRequestSchema.safeParse({ amount: 1000, idempotencyKey: "k1" }).success
-      ).toBe(true);
+      expect(AddChipsRequestSchema.safeParse({ amount: 1000, idempotencyKey: "k1" }).success).toBe(
+        true
+      );
     });
 
     test("rejects zero amount", () => {
@@ -599,15 +601,15 @@ describe("API Request Schemas (gap-fill)", () => {
     });
 
     test("rejects negative amount", () => {
-      expect(
-        AddChipsRequestSchema.safeParse({ amount: -100, idempotencyKey: "k1" }).success
-      ).toBe(false);
+      expect(AddChipsRequestSchema.safeParse({ amount: -100, idempotencyKey: "k1" }).success).toBe(
+        false
+      );
     });
 
     test("rejects non-integer amount", () => {
-      expect(
-        AddChipsRequestSchema.safeParse({ amount: 10.99, idempotencyKey: "k1" }).success
-      ).toBe(false);
+      expect(AddChipsRequestSchema.safeParse({ amount: 10.99, idempotencyKey: "k1" }).success).toBe(
+        false
+      );
     });
 
     test("rejects missing idempotencyKey", () => {
