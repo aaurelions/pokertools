@@ -66,11 +66,12 @@ export async function buildApp() {
   });
 
   await app.register(cors, {
-    origin: config.NODE_ENV === "production" && config.CORS_ORIGIN
-      ? config.CORS_ORIGIN
-      : config.NODE_ENV === "production"
-        ? false // In production without explicit CORS_ORIGIN, deny cross-origin
-        : true, // In dev/test, allow all origins
+    origin:
+      config.NODE_ENV === "production" && config.CORS_ORIGIN
+        ? config.CORS_ORIGIN
+        : config.NODE_ENV === "production"
+          ? false // In production without explicit CORS_ORIGIN, deny cross-origin
+          : true, // In dev/test, allow all origins
     credentials: true,
   });
 

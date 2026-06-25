@@ -581,12 +581,15 @@ describe("Deposit Security Tests", () => {
     it("should log and skip zero-address mint transfers in deposit processing", () => {
       // This test validates the logic that would be used in the deposit monitor
       const fromAddress: string = "0x0000000000000000000000000000000000000000";
-      const isZeroAddress = fromAddress === "0x0000000000000000000000000000000000000000" || !fromAddress;
+      const isZeroAddress =
+        fromAddress === "0x0000000000000000000000000000000000000000" || !fromAddress;
       expect(isZeroAddress).toBe(true);
 
       // A valid non-zero from address
       const validFrom: string = "0xabcdef1234567890abcdef1234567890abcdef12";
-      const isValidFrom = !!(validFrom.length > 0 && validFrom !== "0x0000000000000000000000000000000000000000");
+      const isValidFrom = !!(
+        validFrom.length > 0 && validFrom !== "0x0000000000000000000000000000000000000000"
+      );
       expect(isValidFrom).toBe(true);
     });
   });

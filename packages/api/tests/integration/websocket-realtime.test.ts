@@ -131,9 +131,7 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
     // STEP 5: Verify STATE_UPDATE is lightweight (no state field)
     // =========================================================================
     // Gather any STATE_UPDATE messages that arrived after buy-in
-    const buyInStateUpdates = player1StateUpdates.filter(
-      (u) => u.type === "STATE_UPDATE"
-    );
+    const buyInStateUpdates = player1StateUpdates.filter((u) => u.type === "STATE_UPDATE");
 
     // Every STATE_UPDATE must NOT have a `state` field
     for (const su of buyInStateUpdates) {

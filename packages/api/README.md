@@ -199,21 +199,21 @@ npm run workers
 
 ### Environment Variables
 
-| Variable          | Type     | Default                  | Description            |
-| ----------------- | -------- | ------------------------ | ---------------------- |
-| `NODE_ENV`        | `string` | `development`            | Environment mode       |
-| `PORT`            | `number` | `3000`                   | HTTP server port       |
-| `HOST`            | `string` | `0.0.0.0`                | Bind address           |
-| `DATABASE_URL`    | `string` | **required**             | Prisma database URL    |
-| `REDIS_URL`       | `string` | `redis://localhost:6379` | Redis connection       |
-| `JWT_SECRET`      | `string` | **required**             | JWT signing key        |
-| `COOKIE_SECRET`   | `string` | **required**             | Cookie signing key     |
-| `WALLET_ENCRYPTION_SECRET` | `string` | **required** | Separate key for encrypted wallet material |
-| `CORS_ORIGIN`     | `string` | `""`                     | Required in production to allow browser origins |
-| `LOG_LEVEL`       | `string` | `info`                   | Pino log level         |
-| `RPC_RETRY_COUNT` | `number` | `3`                      | Blockchain RPC retries |
-| `RPC_RETRY_DELAY` | `number` | `1000`                   | Retry delay (ms)       |
-| `RPC_TIMEOUT`     | `number` | `10000`                  | RPC timeout (ms)       |
+| Variable                   | Type     | Default                  | Description                                     |
+| -------------------------- | -------- | ------------------------ | ----------------------------------------------- |
+| `NODE_ENV`                 | `string` | `development`            | Environment mode                                |
+| `PORT`                     | `number` | `3000`                   | HTTP server port                                |
+| `HOST`                     | `string` | `0.0.0.0`                | Bind address                                    |
+| `DATABASE_URL`             | `string` | **required**             | Prisma database URL                             |
+| `REDIS_URL`                | `string` | `redis://localhost:6379` | Redis connection                                |
+| `JWT_SECRET`               | `string` | **required**             | JWT signing key                                 |
+| `COOKIE_SECRET`            | `string` | **required**             | Cookie signing key                              |
+| `WALLET_ENCRYPTION_SECRET` | `string` | **required**             | Separate key for encrypted wallet material      |
+| `CORS_ORIGIN`              | `string` | `""`                     | Required in production to allow browser origins |
+| `LOG_LEVEL`                | `string` | `info`                   | Pino log level                                  |
+| `RPC_RETRY_COUNT`          | `number` | `3`                      | Blockchain RPC retries                          |
+| `RPC_RETRY_DELAY`          | `number` | `1000`                   | Retry delay (ms)                                |
+| `RPC_TIMEOUT`              | `number` | `10000`                  | RPC timeout (ms)                                |
 
 ### Validation
 

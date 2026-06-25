@@ -165,13 +165,20 @@ describe("Auth Utilities", () => {
 
     it("handles decimal amounts", () => {
       const message = createWithdrawalMessage(99.99, "0x123", "nonce-decimal", 1719000000000);
-      expect(message).toBe("Withdraw 99.99 USD to 0x123\nNonce: nonce-decimal\nTimestamp: 1719000000000");
+      expect(message).toBe(
+        "Withdraw 99.99 USD to 0x123\nNonce: nonce-decimal\nTimestamp: 1719000000000"
+      );
     });
 
     it("creates withdrawal message with nonce and timestamp", () => {
       const nonce = "abc-123-def";
       const timestamp = 1719000000000;
-      const message = createWithdrawalMessage(100, "0x742d35Cc6634C0532925a3b844Bc454e4438f44e", nonce, timestamp);
+      const message = createWithdrawalMessage(
+        100,
+        "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
+        nonce,
+        timestamp
+      );
       expect(message).toContain("Withdraw 100 USD to 0x742d35Cc6634C0532925a3b844Bc454e4438f44e");
       expect(message).toContain("Nonce: abc-123-def");
       expect(message).toContain("Timestamp: 1719000000000");
@@ -193,7 +200,6 @@ describe("Auth Utilities", () => {
       expect(ts).toBeGreaterThanOrEqual(beforeTime);
       expect(ts).toBeLessThanOrEqual(afterTime);
     });
-
   });
 
   describe("generateIdempotencyKey", () => {

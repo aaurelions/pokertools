@@ -104,14 +104,14 @@ The SDK bridges your frontend application with the PokerTools API and Real-time 
 
 ### Key Components
 
-| Component       | Description                                                    |
-| --------------- | -------------------------------------------------------------- |
-| `PokerClient`   | Handles REST API requests (Tables, User, Finance).             |
-| `PokerSocket`   | Manages WebSocket connection and real-time events.             |
+| Component     | Description                                        |
+| ------------- | -------------------------------------------------- |
+| `PokerClient` | Handles REST API requests (Tables, User, Finance). |
+| `PokerSocket` | Manages WebSocket connection and real-time events. |
 
 `STATE_UPDATE` WebSocket events are lightweight version notifications. Use `getTableVersion(tableId)` to inspect the latest server version and fetch full state via REST when the version advances beyond your cached snapshot.
 | `PokerProvider` | React Context provider that initializes the client and socket. |
-| `useTable`      | Hook that subscribes to a specific table's updates.            |
+| `useTable` | Hook that subscribes to a specific table's updates. |
 
 ## 🔑 Authentication (SIWE)
 

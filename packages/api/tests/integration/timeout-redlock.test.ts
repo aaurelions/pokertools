@@ -81,10 +81,10 @@ describe("Timeout Worker - Redlock & Version Guard Integration Test", () => {
       await waitFor(() => messages.length > 0, 2000);
 
       // Execute an action (fold) by the acting player
-      const state = await ctx.app.gameManager.getState(
+      const state = (await ctx.app.gameManager.getState(
         tableId,
         player1.token ? player1.id : undefined
-      ) as any;
+      )) as any;
 
       if (state.actionTo !== null && state.actionTo !== undefined) {
         const actingPlayer = ctx.users[state.actionTo];
@@ -138,10 +138,7 @@ describe("Timeout Worker - Redlock & Version Guard Integration Test", () => {
       await executeAction(ctx.app, player1.token, tableId, { type: "DEAL" });
 
       // Get the current state to know who should act
-      const stateAfterDeal = await ctx.app.gameManager.getState(
-        tableId,
-        player1.id
-      ) as any;
+      const stateAfterDeal = (await ctx.app.gameManager.getState(tableId, player1.id)) as any;
       const versionAfterDeal = stateAfterDeal.version;
 
       // If actionTo is set, a timeout job was scheduled
@@ -153,10 +150,7 @@ describe("Timeout Worker - Redlock & Version Guard Integration Test", () => {
         await executeAction(ctx.app, actingPlayer.token, tableId, { type: "FOLD" });
 
         // The version should have incremented
-        const stateAfterAction = await ctx.app.gameManager.getState(
-          tableId,
-          player1.id
-        ) as any;
+        const stateAfterAction = (await ctx.app.gameManager.getState(tableId, player1.id)) as any;
         expect(stateAfterAction.version).toBe(versionAfterDeal + 1);
 
         // The stale timeout job for the previous version would have been

@@ -18,7 +18,11 @@ describe("Withdrawal Endpoint", () => {
   const testAccount = privateKeyToAccount(testPrivateKey);
   const testAddress = testAccount.address;
 
-  const createWithdrawalMessage = (amount: number, address: string, nonce = `nonce-${Date.now()}`) => {
+  const createWithdrawalMessage = (
+    amount: number,
+    address: string,
+    nonce = `nonce-${Date.now()}`
+  ) => {
     const timestamp = Date.now();
     return {
       nonce,

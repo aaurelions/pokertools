@@ -1,5 +1,12 @@
 import { PrismaClient } from "../../generated/prisma/index.js";
-import { createPublicClient, http, fallback, type PublicClient, defineChain, bytesToHex } from "viem";
+import {
+  createPublicClient,
+  http,
+  fallback,
+  type PublicClient,
+  defineChain,
+  bytesToHex,
+} from "viem";
 import { HDKey } from "@scure/bip32";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { publicKeyToAddress } from "viem/accounts";

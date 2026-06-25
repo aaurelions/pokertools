@@ -137,7 +137,8 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
 
     if (!hasNonceAndTimestamp) {
       return reply.code(400).send({
-        error: "Message does not match withdrawal details. Expected format with nonce and timestamp.",
+        error:
+          "Message does not match withdrawal details. Expected format with nonce and timestamp.",
       });
     }
 
@@ -295,7 +296,10 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
 
     // 11. Queue withdrawal for admin approval (best-effort, PaymentTransaction is already in DB)
     await fastify.redis.rpush("withdrawal_queue", result.ledgerEntry.id).catch((err: Error) => {
-      fastify.log.warn({ err, paymentTxId: result.paymentTx.id }, "Failed to queue withdrawal in Redis, but PaymentTransaction saved in DB");
+      fastify.log.warn(
+        { err, paymentTxId: result.paymentTx.id },
+        "Failed to queue withdrawal in Redis, but PaymentTransaction saved in DB"
+      );
     });
 
     fastify.log.info(

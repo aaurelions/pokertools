@@ -191,7 +191,12 @@ export function createDepositMonitorWorker(
                 const minDepositBigInt = BigInt(token.minDeposit);
                 if (amountBigInt < minDepositBigInt) {
                   logger.info(
-                    { txHash, amount: amountBigInt.toString(), minDeposit: token.minDeposit, token: token.symbol },
+                    {
+                      txHash,
+                      amount: amountBigInt.toString(),
+                      minDeposit: token.minDeposit,
+                      token: token.symbol,
+                    },
                     "Deposit below minimum, skipping"
                   );
                   continue;

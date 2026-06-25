@@ -17,6 +17,7 @@
     "infra:up": "bash scripts/ensure-redis.sh",
     "infra:down": "bash scripts/stop-redis.sh",
     "db:generate": "prisma generate",
+    "db:generate:prepare": "node scripts/generate-prisma-for-prepare.js",
     "db:migrate": "prisma migrate dev",
     "db:seed": "tsx prisma/seed.ts",
     "db:ensure:test": "NODE_ENV=test bash scripts/ensure-db.sh",
