@@ -48,7 +48,7 @@ export const workers = [
 // ============================================================================
 
 const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
-const redis = new Redis(redisUrl);
+const redis = new Redis(redisUrl, { maxRetriesPerRequest: null });
 const queue = new Queue("deposit-monitor", { connection: redis as any });
 
 // Schedule deposit monitor to run every 15 seconds

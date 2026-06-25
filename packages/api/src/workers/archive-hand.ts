@@ -5,7 +5,7 @@ import { config } from "../config.js";
 import { createPrismaClient } from "../utils/prismaClient.js";
 
 const prisma = createPrismaClient();
-const redis = new Redis(config.REDIS_URL);
+const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
 
 /**
  * Archive Hand Worker

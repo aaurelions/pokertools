@@ -6,7 +6,7 @@ import { getHouseUserId } from "../utils/houseUser.js";
 import { createPrismaClient } from "../utils/prismaClient.js";
 
 const prisma = createPrismaClient();
-const redis = new Redis(config.REDIS_URL);
+const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
 const logger = pino({ name: "settle-hand" });
 
 /**

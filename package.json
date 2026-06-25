@@ -1,6 +1,6 @@
 {
   "name": "pokertools-monorepo",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "private": true,
   "description": "Enterprise-grade Texas Hold'em poker engine and API monorepo",
   "author": "A.Aurelius",
@@ -14,7 +14,7 @@
   },
   "homepage": "https://github.com/aaurelions/pokertools#readme",
   "engines": {
-    "node": ">=20.0.0",
+    "node": ">=24.0.0",
     "npm": ">=10.0.0"
   },
   "workspaces": [
@@ -44,7 +44,8 @@
     "db:seed": "npm run db:seed -w @pokertools/api",
     "db:studio": "npm run db:studio -w @pokertools/api",
     "db:reset": "npm run db:reset -w @pokertools/api",
-    "ci": "npm run clean && npm run setup && npm run test"
+    "ci": "npm run clean && npm run setup && npm run test",
+    "e2e:docker": "npm run test:docker -w @pokertools/e2e"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.5",

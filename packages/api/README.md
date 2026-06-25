@@ -167,6 +167,8 @@ npm run db:migrate
 npm run db:seed
 ```
 
+When running in Docker, the entrypoint (`docker-entrypoint.sh`) applies `prisma db push --accept-data-loss` at container startup, synchronising the Prisma schema with the database without requiring a complete migration history. For PostgreSQL production deployments, replace this with `prisma migrate deploy` after ensuring migration history is complete.
+
 ### Start Server
 
 ```bash
@@ -184,7 +186,7 @@ npm run workers
 **Server Output:**
 
 ```
-🃏 @pokertools/api v1.0.5
+🃏 @pokertools/api v1.0.6
 -------------------------
 🌍 Server: http://0.0.0.0:3000
 📚 Docs:   http://0.0.0.0:3000/docs
@@ -204,7 +206,7 @@ npm run workers
 | `NODE_ENV`                 | `string` | `development`            | Environment mode                                |
 | `PORT`                     | `number` | `3000`                   | HTTP server port                                |
 | `HOST`                     | `string` | `0.0.0.0`                | Bind address                                    |
-| `DATABASE_URL`             | `string` | **required**             | Prisma database URL                             |
+| `DATABASE_URL`             | `string` | `file:.runtime/app.db`   | Prisma database URL                             |
 | `REDIS_URL`                | `string` | `redis://localhost:6379` | Redis connection                                |
 | `JWT_SECRET`               | `string` | **required**             | JWT signing key                                 |
 | `COOKIE_SECRET`            | `string` | **required**             | Cookie signing key                              |
@@ -1493,54 +1495,22 @@ Coverage:
 
 ### Docker Compose
 
-```yaml
-version: "3.8"
+The repository root includes a production-ready [`docker-compose.yml`](../../docker-compose.yml) that starts the API alongside a Redis service. It uses the monorepo [`Dockerfile`](../../Dockerfile) (two-stage build: `node:24-slim`, `prisma generate`, `tsc`, then a minimal production image running as a non-root `pokertools` user).
 
-services:
-  api:
-    build: .
-    ports:
-      - "3000:3000"
-    environment:
-      - NODE_ENV=production
-      - DATABASE_URL=postgresql://postgres:password@db:5432/poker
-      - REDIS_URL=redis://redis:6379
-      - JWT_SECRET=${JWT_SECRET}
-      - COOKIE_SECRET=${COOKIE_SECRET}
-    depends_on:
-      - db
-      - redis
-
-  workers:
-    build: .
-    command: node dist/workers/index.js
-    environment:
-      - NODE_ENV=production
-      - DATABASE_URL=postgresql://postgres:password@db:5432/poker
-      - REDIS_URL=redis://redis:6379
-      - JWT_SECRET=${JWT_SECRET}
-    depends_on:
-      - db
-      - redis
-
-  db:
-    image: postgres:16-alpine
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    environment:
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_DB=poker
-
-  redis:
-    image: redis:7-alpine
-    volumes:
-      - redis_data:/data
-    command: redis-server --appendonly yes
-
-volumes:
-  postgres_data:
-  redis_data:
+```bash
+# From the monorepo root
+docker compose up --build
 ```
+
+Key compose behaviours:
+
+- **Image**: tagged as `ghcr.io/aaurelions/pokertools:latest`.
+- **Database**: SQLite (`file:.runtime/app.db`) persisted to a named `sqlite_data` volume.
+- **Migrations**: the container entrypoint (`packages/api/scripts/docker-entrypoint.sh`) applies `npx prisma db push --accept-data-loss` at startup, synchronising the Prisma schema without requiring a full migration history.
+- **Healthcheck**: `curl -fsS http://localhost:3000/health` every 30 s.
+- **Secrets**: `JWT_SECRET`, `COOKIE_SECRET`, and `WALLET_ENCRYPTION_SECRET` are read from the host environment or fall back to dev-only defaults (never use those defaults in production).
+
+To run the API with PostgreSQL instead of SQLite, set `DATABASE_URL` to a PostgreSQL connection string and ensure an appropriate Prisma datasource configuration.
 
 ### Production Checklist
 

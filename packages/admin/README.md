@@ -28,7 +28,7 @@ The service sits between the Blockchain, the Database, and the Admin (via Telegr
 │                    └────────┬────────┘   └──────┬────┬────┘      │
 │                             │                   │    │           │
 │                             ▼                   │    │           │
-│                      [(PostgreSQL)] ◄───────────┘    │           │
+│                      [(Prisma / SQLite)] ◄───────────┘    │           │
 │                                                      │           │
 │                                         [(Redis)] ◄──┘           │
 │                                                                  │
@@ -82,7 +82,7 @@ A specialized contract deployed on each supported chain.
 
 - Node.js v20+
 - Foundry (for contract compilation)
-- PostgreSQL & Redis
+- Redis
 - Telegram Bot Token
 
 ### Environment Variables
@@ -91,7 +91,7 @@ Ensure these are set in your `.env`:
 
 ```bash
 # Infrastructure
-DATABASE_URL="postgresql://..."
+DATABASE_URL="file:../.runtime/app.db"
 REDIS_URL="redis://..."
 
 # Blockchain

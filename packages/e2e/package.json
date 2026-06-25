@@ -1,0 +1,25 @@
+{
+  "name": "@pokertools/e2e",
+  "version": "1.0.6",
+  "description": "End-to-end Docker integration tests for PokerTools API",
+  "author": "A.Aurelius",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "pretest:docker": "echo '🐳 Building Docker E2E image...' && npm run contracts:build -w @pokertools/admin --if-present",
+    "test:docker": "NODE_ENV=test vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@prisma/adapter-better-sqlite3": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "@scure/bip32": "^2.2.0",
+    "@scure/bip39": "^2.2.0",
+    "better-sqlite3": "^12.11.1",
+    "bullmq": "^5.79.1",
+    "dotenv": "^17.4.2",
+    "ioredis": "^5.11.1",
+    "viem": "^2.53.1",
+    "vitest": "^4.1.9"
+  }
+}

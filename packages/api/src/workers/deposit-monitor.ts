@@ -428,7 +428,7 @@ async function checkPendingDeposits(
 // Standalone entry point for running the worker outside the Fastify process.
 export default async function createStandaloneWorker(): Promise<Worker> {
   const prisma = createPrismaClient();
-  const redis = new Redis(config.REDIS_URL);
+  const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
 
   // Create real Pino logger for standalone mode
   const { default: pino } = await import("pino");

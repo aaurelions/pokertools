@@ -1,0 +1,76 @@
+# =============================================================================
+# docker-compose.yml — PokerTools local development stack
+#
+# Usage:
+#   docker compose up --build       # build + start
+#   docker compose up -d            # start in background
+#   docker compose down -v          # tear down (remove volumes)
+#
+# The API image is built from the monorepo root Dockerfile and tagged as
+# ghcr.io/aaurelions/pokertools.
+# =============================================================================
+
+services:
+  # ---- Redis (required by the API for caching, pub/sub, job queues) ----
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---- PokerTools API ----
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/aaurelions/pokertools:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      # Application
+      NODE_ENV: production
+      PORT: "3000"
+      HOST: "0.0.0.0"
+      LOG_LEVEL: info
+      # Database — SQLite file on a named volume for persistence
+      DATABASE_URL: "file:.runtime/app.db"
+      # Redis — reach the redis service by its compose name
+      REDIS_URL: "redis://redis:6379"
+      # Security secrets — use .env values, or fall back to dev-only defaults.
+      # NEVER use these defaults in production!
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-not-for-production}
+      COOKIE_SECRET: ${COOKIE_SECRET:-dev-cookie-secret-not-for-production}
+      WALLET_ENCRYPTION_SECRET: ${WALLET_ENCRYPTION_SECRET:-dev-wallet-encryption-secret-not-for-production}
+    volumes:
+      # Persistent SQLite database (the .runtime folder inside the container)
+      - sqlite_data:/app/packages/api/.runtime
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# ---- Named volumes ----
+volumes:
+  redis_data:
+  sqlite_data:

@@ -5,7 +5,7 @@ import { PokerEngine, type Snapshot as EngineSnapshot } from "@pokertools/engine
 import { config } from "../config.js";
 import { createPrismaClient } from "../utils/prismaClient.js";
 
-const redis = new Redis(config.REDIS_URL);
+const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
 const redlock = new Redlock([redis as any], {
   driftFactor: 0.01,
   retryCount: 10,

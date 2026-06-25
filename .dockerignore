@@ -1,0 +1,58 @@
+# Git
+.git/
+.gitmodules
+.github/
+
+# Dependencies (installed fresh in build)
+node_modules/
+
+# Build output (built fresh in build)
+dist/
+generated/
+.tsbuildinfo
+packages/admin/contracts/out/
+packages/admin/cache/
+
+# Runtime artifacts
+.runtime/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Environment files (secrets)
+.env
+.env.*
+!.env.example
+!.env.test
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Testing
+coverage/
+.nyc_output/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary
+*.tmp
+*.temp
+
+# OpenCode
+.opencode/
+
+# Documentation (not needed for build)
+*.md
+!README.md
