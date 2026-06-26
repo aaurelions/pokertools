@@ -353,19 +353,20 @@ describe("Bet-to-raise conversion in the game reducer", () => {
 });
 
 describe("Public view currentBets representation", () => {
-  test("is a plain object despite being typed as a Map", () => {
+  test("is Map-compatible and JSON serializable", () => {
     const engine = new PokerEngine({ smallBlind: 10, bigBlind: 20, maxPlayers: 6 });
     engine.sit(0, "p1", "Alice", 1000);
     engine.sit(1, "p2", "Bob", 1000);
     engine.deal();
 
     const view = engine.view("p1");
-    const cb = view.currentBets as unknown as Record<string, unknown>;
+    const cb = view.currentBets;
 
     expect(typeof cb).toBe("object");
-    expect(typeof (cb as any).entries).toBe("undefined");
-    expect(typeof (cb as any).values).toBe("undefined");
-    expect(cb instanceof Map).toBe(false);
+    expect(typeof cb.entries).toBe("function");
+    expect(typeof cb.values).toBe("function");
+    expect(cb instanceof Map).toBe(true);
+    expect(JSON.parse(JSON.stringify(view)).currentBets).toEqual(Object.fromEntries(cb.entries()));
   });
 });
 

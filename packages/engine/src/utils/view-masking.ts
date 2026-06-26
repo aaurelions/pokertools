@@ -27,20 +27,37 @@ export function createPublicView(
     };
   });
 
-  // Convert Map to plain object for JSON serialization
-  const currentBetsObj: Record<number, number> = {};
-  for (const [seat, amount] of state.currentBets.entries()) {
-    currentBetsObj[seat] = amount;
-  }
+  const currentBets = createSerializableReadonlyMap(state.currentBets);
 
   return {
     ...state,
     deck: [], // Always hide deck
     players: maskedPlayers,
-    currentBets: currentBetsObj as unknown as ReadonlyMap<number, number>, // Serializable record
+    currentBets,
     viewingPlayerId: playerId,
     version,
   };
+}
+
+function createSerializableReadonlyMap(
+  source: ReadonlyMap<number, number>
+): ReadonlyMap<number, number> {
+  const map = new Map(source) as unknown as ReadonlyMap<number, number> & {
+    toJSON: () => Record<number, number>;
+  };
+
+  Object.defineProperty(map, "toJSON", {
+    value: () => {
+      const record: Record<number, number> = {};
+      for (const [seat, amount] of map.entries()) {
+        record[seat] = amount;
+      }
+      return record;
+    },
+    enumerable: false,
+  });
+
+  return map;
 }
 
 /**

@@ -174,7 +174,7 @@ function evaluatePot(state: GameState, pot: Pot): HandEvaluation[] {
     evaluations.push({
       seat: player.seat,
       score,
-      hand: [...(player.hand as string[])], // Store hole cards (copy to mutable array)
+      hand: getBestFiveCardHand(allCards),
       description,
     });
   }
@@ -188,6 +188,45 @@ function evaluatePot(state: GameState, pot: Pot): HandEvaluation[] {
   const winners = evaluations.filter((e) => e.score === bestScore);
 
   return winners;
+}
+
+/**
+ * Return the concrete five cards that produce the best evaluator score.
+ * The evaluator score is lower-is-better, so enumerate all 5-card subsets and
+ * keep the first subset with the minimum score. Hold'em has at most 7 cards,
+ * making this deterministic brute-force path only 21 evaluations per player.
+ */
+function getBestFiveCardHand(cards: readonly string[]): string[] {
+  if (cards.length === 5) {
+    return [...cards];
+  }
+
+  let bestHand: string[] | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (let a = 0; a < cards.length - 4; a++) {
+    for (let b = a + 1; b < cards.length - 3; b++) {
+      for (let c = b + 1; c < cards.length - 2; c++) {
+        for (let d = c + 1; d < cards.length - 1; d++) {
+          for (let e = d + 1; e < cards.length; e++) {
+            const candidate = [cards[a], cards[b], cards[c], cards[d], cards[e]];
+            const score = evaluate(getCardCodes(candidate));
+
+            if (score < bestScore) {
+              bestScore = score;
+              bestHand = candidate;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (bestHand === null) {
+    return [...cards.slice(0, 5)];
+  }
+
+  return bestHand;
 }
 
 /**

@@ -281,7 +281,7 @@ describe("View Masking - createPublicView", () => {
     expect(publicView.players[1]!.hand).toBeNull();
   });
 
-  test("should convert currentBets Map to plain object", () => {
+  test("should keep currentBets Map-compatible and JSON serializable", () => {
     const engine = new PokerEngine({
       smallBlind: 5,
       bigBlind: 10,
@@ -295,9 +295,11 @@ describe("View Masking - createPublicView", () => {
     const player0 = engine.state.players[0]!;
     const publicView = createPublicView(engine.state, player0.id);
 
-    // Should be converted to plain object (not Map)
-    expect(publicView.currentBets).not.toBeInstanceOf(Map);
-    expect(typeof publicView.currentBets).toBe("object");
+    expect(publicView.currentBets).toBeInstanceOf(Map);
+    expect(typeof publicView.currentBets.get(player0.seat)).toBe("number");
+    expect(JSON.parse(JSON.stringify(publicView)).currentBets).toEqual(
+      Object.fromEntries(publicView.currentBets.entries())
+    );
   });
 });
 
