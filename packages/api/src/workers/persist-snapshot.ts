@@ -21,7 +21,7 @@ const worker = new Worker(
     await prisma.table.update({
       where: { id: tableId },
       data: {
-        state: snapshot,
+        state: JSON.stringify(snapshot),
         status: snapshot.phase === "WAITING" ? "WAITING" : "ACTIVE",
         updatedAt: new Date(),
       },

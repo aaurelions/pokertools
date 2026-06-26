@@ -42,6 +42,8 @@
 | 📊 **Job Queues**          | BullMQ for async processing                   |
 | 🔗 **Blockchain**          | HD wallet deposits & withdrawals              |
 | 📜 **Hand History**        | Full audit trail of all games                 |
+| 🩺 **Observability**       | Health checks, Prometheus metrics, audit logs |
+| 🛡️ **Risk Controls**       | Velocity checks and durable idempotency       |
 
 ---
 
@@ -189,7 +191,7 @@ npm run workers
 **Server Output:**
 
 ```
-🃏 @pokertools/api v1.0.7
+🃏 @pokertools/api v1.0.10
 -------------------------
 🌍 Server: http://0.0.0.0:3000
 📚 Docs:   http://0.0.0.0:3000/docs

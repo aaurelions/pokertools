@@ -218,3 +218,25 @@ The benchmark includes a warm-up phase to ensure:
 ## 📄 License
 
 MIT © A.Aurelius
+
+# API, worker, socket, and game-action load/soak benchmarks
+
+Run short load checks against a live stack:
+
+```bash
+POKERTOOLS_API_BASE=http://localhost:3000 npm run bench:load -w @pokertools/bench
+```
+
+To include authenticated WebSocket joins and game actions, provide a JWT and table id:
+
+```bash
+POKERTOOLS_TOKEN=<jwt> POKERTOOLS_TABLE_ID=<table-id> npm run bench:load -w @pokertools/bench
+```
+
+Longer soak profile:
+
+```bash
+npm run bench:soak -w @pokertools/bench
+```
+
+Results are emitted as CSV (`name,count,ok,failed,p50_ms,p95_ms,max_ms`) for CI ingestion.

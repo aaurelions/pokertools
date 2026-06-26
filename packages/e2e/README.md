@@ -27,14 +27,14 @@ This will:
 
 ## What the Tests Cover
 
-| Area                | Tests                                                                                                                                                                           |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Health & Docs**   | `GET /health`, `GET /docs`, `GET /finance/chains`                                                                                                                               |
-| **Authentication**  | `POST /auth/nonce`, `POST /auth/login` (SIWE), `POST /auth/logout`                                                                                                              |
-| **User**            | `GET /user/me`, `GET /user/history`                                                                                                                                             |
-| **Deposits**        | `POST /finance/deposit/start`, `GET /finance/deposit/address`, `GET /finance/deposits`, real on-chain USDC transfer + deposit monitor                                           |
-| **Table Lifecycle** | `POST /tables`, `GET /tables`, `GET /tables/:id`, three-player buy-ins, real `actionTo` gameplay, winnings verification, `POST /tables/:id/add-chips`, `POST /tables/:id/stand` |
-| **Withdrawals**     | `POST /user/withdraw` (signed message), `GET /user/withdrawals`, DB outbox verification, on-chain transfer simulation                                                           |
+| Area                | Tests                                                                                                                                                                                                      |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Health & Docs**   | `GET /health`, `GET /docs`, `GET /finance/chains`                                                                                                                                                          |
+| **Authentication**  | `POST /auth/nonce`, `POST /auth/login` (SIWE), `POST /auth/logout`                                                                                                                                         |
+| **User**            | `GET /user/me`, `GET /user/history`                                                                                                                                                                        |
+| **Deposits**        | `POST /finance/deposit/start`, `GET /finance/deposit/address`, `GET /finance/deposits`, real on-chain USDC transfer + deposit monitor                                                                      |
+| **Table Lifecycle** | `POST /tables`, `GET /tables`, `GET /tables/:id`, three-player buy-ins, SDK-backed WebSocket sync, real `actionTo` gameplay, winnings verification, `POST /tables/:id/add-chips`, `POST /tables/:id/stand` |
+| **Withdrawals**     | `POST /user/withdraw` (signed message), `GET /user/withdrawals`, DB outbox verification, on-chain transfer simulation                                                                                      |
 
 ## Architecture
 

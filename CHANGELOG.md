@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.10] - 2026-06-27
+
+### Added
+
+- Added Redis-to-DB table-state recovery so table reads, game actions, and next-hand workers self-heal when Redis hot state expires or is unavailable.
+- Added durable DB-backed idempotency records for high-value table endpoints and optional game-action replay protection.
+- Added fraud, velocity, and risk controls for buy-ins, add-chips, and withdrawal requests.
+- Added production health checks, Prometheus-compatible metrics, and persistent audit logs.
+- Added SDK-backed WebSocket Docker E2E coverage for live table synchronization.
+- Added API, worker, socket, and game-action load/soak benchmark scripts.
+
+### Changed
+
+- Bumped all workspace package versions and internal `@pokertools/*` dependency ranges to `1.0.10`.
+- Updated README package version, GHCR tag, health endpoint, E2E, and benchmark documentation.
+
 ## [1.0.9] - 2026-06-26
 
 ### Changed
@@ -372,6 +388,9 @@ Given a version number MAJOR.MINOR.PATCH:
 - [NPM: @pokertools/evaluator](https://www.npmjs.com/package/@pokertools/evaluator)
 - [NPM: @pokertools/types](https://www.npmjs.com/package/@pokertools/types)
 
+[1.0.10]: https://github.com/aaurelions/pokertools/compare/v1.0.9...v1.0.10
+[1.0.9]: https://github.com/aaurelions/pokertools/compare/v1.0.8...v1.0.9
+[1.0.8]: https://github.com/aaurelions/pokertools/compare/v1.0.7...v1.0.8
 [1.0.7]: https://github.com/aaurelions/pokertools/compare/v1.0.6...v1.0.7
 [1.0.6]: https://github.com/aaurelions/pokertools/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/aaurelions/pokertools/compare/v1.0.4...v1.0.5

@@ -50,6 +50,8 @@ import {
   type PrivateKeyAccount,
 } from "viem/accounts";
 import { createSiweMessage } from "viem/siwe";
+import WebSocket from "ws";
+import { PokerClient, PokerSocket } from "@pokertools/sdk";
 
 // ============================================================================
 // Constants
@@ -690,11 +692,63 @@ describe("Docker E2E Integration", () => {
     );
   });
 
+  it("SDK-backed WebSocket receives live table updates", async () => {
+    const client = new PokerClient({ baseUrl: API_BASE, token: player1.token });
+    const socket = new PokerSocket({
+      url: API_BASE.replace(/^http/, "ws") + "/ws/play",
+      token: player1.token,
+      WebSocket: WebSocket as unknown as typeof globalThis.WebSocket,
+      heartbeatInterval: 5_000,
+      reconnectAttempts: 0,
+    });
+
+    await socket.connect();
+    try {
+      const snapshot = await socket.join(tableId);
+      expect(snapshot.players.filter(Boolean).length).toBeGreaterThanOrEqual(3);
+
+      const updatePromise = new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(
+          () => reject(new Error("Timed out waiting for socket update")),
+          10_000
+        );
+        socket.on("stateUpdate", (updatedTableId, state) => {
+          if (updatedTableId === tableId && state.version > snapshot.version) {
+            clearTimeout(timeout);
+            resolve();
+          }
+        });
+      });
+
+      await client.action(tableId, {
+        type: "DEAL",
+        idempotencyKey: `e2e-sdk-deal-${Date.now()}`,
+      } as Parameters<PokerClient["action"]>[1]);
+      await updatePromise;
+      expect(socket.getCachedState(tableId)?.version).toBeGreaterThan(snapshot.version);
+    } finally {
+      socket.disconnect();
+    }
+  });
+
   it("POST /tables/:id/action: DEAL + deterministic hand via actionTo folds", async () => {
     // ── DEAL: start the hand ──
-    const dealRes = await api("POST", `/tables/${tableId}/action`, { type: "DEAL" }, player1.token);
-    expect(dealRes.status).toBe(200);
-    const dealBody = dealRes.data as { state: Record<string, unknown> };
+    const currentRes = await api("GET", `/tables/${tableId}`, undefined, player1.token);
+    const currentState = (currentRes.data as { state: Record<string, unknown> }).state;
+    let dealBody: { state: Record<string, unknown> };
+    if (currentState.street === "PREFLOP") {
+      dealBody = { state: currentState };
+      console.log("[E2E] Hand already dealt by SDK WebSocket test; skipping explicit DEAL");
+    } else {
+      const dealRes = await api(
+        "POST",
+        `/tables/${tableId}/action`,
+        { type: "DEAL" },
+        player1.token
+      );
+      expect(dealRes.status).toBe(200);
+      dealBody = dealRes.data as { state: Record<string, unknown> };
+    }
     const streetAfterDeal = dealBody.state.street as string;
     expect(streetAfterDeal).toBeDefined();
     console.log(`[E2E] Street after DEAL: ${streetAfterDeal}`);

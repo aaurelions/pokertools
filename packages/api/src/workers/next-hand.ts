@@ -40,11 +40,19 @@ const worker = new Worker(
     }
 
     try {
-      // 1. Load state from Redis
-      const stateJson = await redis.get(`table:${tableId}`);
+      // 1. Load state from Redis, recovering from durable DB snapshot if Redis expired.
+      let stateJson = await redis.get(`table:${tableId}`);
       if (!stateJson) {
-        console.warn(`⚠️  No state found for table ${tableId}, skipping next hand`);
-        return;
+        const table = await prisma.table.findUnique({
+          where: { id: tableId },
+          select: { state: true },
+        });
+        if (!table?.state) {
+          console.warn(`⚠️  No state found for table ${tableId}, skipping next hand`);
+          return;
+        }
+        stateJson = typeof table.state === "string" ? table.state : JSON.stringify(table.state);
+        await redis.set(`table:${tableId}`, stateJson, "EX", 86400);
       }
 
       const snapshot: Snapshot = JSON.parse(stateJson);
@@ -106,6 +114,11 @@ const worker = new Worker(
         console.log(`⏭️  Table ${tableId} changed concurrently, skipping auto-deal write`);
         return;
       }
+
+      await prisma.table.update({
+        where: { id: tableId },
+        data: { state: JSON.stringify(newSnapshot) },
+      });
 
       // 6. Broadcast state update via Redis Pub/Sub
       await redis.publish(

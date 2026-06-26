@@ -62,14 +62,8 @@ export class GameManager {
     const lockExtendThreshold = lockTTL * 0.6; // Extend at 60% of TTL
 
     try {
-      // 2. Load state from Redis
-      const rawState = await this.redis.get(`table:${tableId}`);
-      if (!rawState) {
-        throw new NotFoundError("Table");
-      }
-
-      // 3. Restore Engine
-      const previousSnapshot: Snapshot = JSON.parse(rawState);
+      // 2. Load state from Redis, recovering from the DB snapshot if hot cache expired.
+      const previousSnapshot = await this.loadSnapshot(tableId);
       const initialVersion = previousSnapshot._version || 0;
       const engine = PokerEngine.restore(previousSnapshot);
 
@@ -155,6 +149,10 @@ export class GameManager {
         tableId,
         snapshot: newSnapshot,
       });
+      await this.prisma.table.update({
+        where: { id: tableId },
+        data: { state: JSON.stringify(newSnapshot) },
+      });
 
       // 7. Handle side effects
       if (engine.state.winners) {
@@ -238,7 +236,13 @@ export class GameManager {
     const snapshot: Snapshot = engine.snapshot;
     snapshot._version = 0;
 
-    await this.redis.set(`table:${table.id}`, JSON.stringify(snapshot), "EX", 86400);
+    await Promise.all([
+      this.redis.set(`table:${table.id}`, JSON.stringify(snapshot), "EX", 86400),
+      this.prisma.table.update({
+        where: { id: table.id },
+        data: { state: JSON.stringify(snapshot) },
+      }),
+    ]);
 
     return table.id;
   }
@@ -247,17 +251,46 @@ export class GameManager {
    * Get current state with view masking
    */
   async getState(tableId: string, userId?: string): Promise<PublicState> {
-    const rawState = await this.redis.get(`table:${tableId}`);
-    if (!rawState) {
-      throw new NotFoundError("Table");
-    }
-
-    const snapshot: Snapshot = JSON.parse(rawState);
+    const snapshot = await this.loadSnapshot(tableId);
     const engine = PokerEngine.restore(snapshot);
     const version = snapshot._version ?? 0;
 
     // Delegate masking to Engine
     return engine.view(userId, version);
+  }
+
+  /**
+   * Load hot Redis state with a durable DB fallback. If Redis is empty/corrupt but
+   * Table.state exists, restore it to Redis and continue. This makes normal reads,
+   * WebSocket joins, and action processing self-healing after Redis loss/restart.
+   */
+  private async loadSnapshot(tableId: string): Promise<Snapshot> {
+    const key = `table:${tableId}`;
+    const rawState = await this.redis.get(key);
+    if (rawState) {
+      try {
+        return JSON.parse(rawState) as Snapshot;
+      } catch (error) {
+        await this.redis.del(key);
+        console.warn(`Table state in Redis is corrupted for ${tableId}; recovering from DB`, error);
+      }
+    }
+
+    const table = await this.prisma.table.findUnique({
+      where: { id: tableId },
+      select: { state: true },
+    });
+
+    if (!table) throw new NotFoundError("Table");
+    if (!table.state) throw new NotFoundError("Table state");
+
+    const snapshot =
+      typeof table.state === "string"
+        ? (JSON.parse(table.state) as Snapshot)
+        : (table.state as unknown as Snapshot);
+    snapshot._version = snapshot._version ?? 0;
+    await this.redis.set(key, JSON.stringify(snapshot), "EX", 86400);
+    return snapshot;
   }
 
   /**

@@ -283,6 +283,7 @@ export const GameActionRequestSchema = z.object({
   ]),
   amount: z.number().int().positive().optional(),
   cardIndices: z.array(z.number().int().min(0).max(1)).optional(),
+  idempotencyKey: z.string().min(1).optional(),
 });
 
 // ============================================================================

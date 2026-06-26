@@ -1,6 +1,6 @@
 {
   "name": "@pokertools/bench",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "description": "Performance benchmarks for poker hand evaluators",
   "author": "A.Aurelius",
   "license": "MIT",
@@ -9,7 +9,9 @@
   "private": true,
   "scripts": {
     "bench": "ts-node index.ts",
-    "bench:detailed": "ts-node index.ts --detailed"
+    "bench:detailed": "ts-node index.ts --detailed",
+    "bench:load": "ts-node load.ts",
+    "bench:soak": "BENCH_DURATION_MS=300000 BENCH_CONCURRENCY=32 ts-node load.ts"
   },
   "keywords": [
     "poker",
@@ -32,11 +34,13 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "@pokertools/evaluator": "1.0.9",
+    "@pokertools/evaluator": "1.0.10",
     "benchmark": "^2.1.4",
     "microtime": "^3.1.1",
     "phe": "^0.6.0",
     "poker-evaluator": "^2.1.1",
-    "pokersolver": "^2.1.4"
+    "pokersolver": "^2.1.4",
+    "bullmq": "^5.79.1",
+    "ws": "^8.21.0"
   }
 }

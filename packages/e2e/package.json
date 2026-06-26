@@ -1,6 +1,6 @@
 {
   "name": "@pokertools/e2e",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "description": "End-to-end Docker integration tests for PokerTools API",
   "author": "A.Aurelius",
   "license": "MIT",
@@ -13,6 +13,7 @@
   "dependencies": {
     "@prisma/adapter-better-sqlite3": "^7.8.0",
     "@prisma/client": "^7.8.0",
+    "@pokertools/sdk": "1.0.10",
     "@scure/bip32": "^2.2.0",
     "@scure/bip39": "^2.2.0",
     "better-sqlite3": "^12.11.1",
@@ -20,6 +21,7 @@
     "dotenv": "^17.4.2",
     "ioredis": "^5.11.1",
     "viem": "^2.53.1",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.9",
+    "ws": "^8.21.0"
   }
 }

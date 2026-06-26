@@ -217,6 +217,12 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
 
     // 7. Check balance (amount is in USD cents, i.e., 100 = $1.00)
     const amountInCents = Math.floor(amount * 100);
+    const risk = await fastify.riskManager.assertAllowed({
+      userId,
+      endpoint: "withdraw",
+      request,
+      amountCents: amountInCents,
+    });
     if (mainAccount.balance < amountInCents) {
       return reply.code(400).send({
         error: "Insufficient balance",
@@ -311,6 +317,15 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       },
       "Withdrawal request queued"
     );
+
+    await fastify.auditManager.record({
+      actorId: userId,
+      action: "WITHDRAWAL_REQUEST",
+      resource: `payment:${result.paymentTx.id}`,
+      request,
+      riskScore: risk.score,
+      metadata: { amount: amountInCents, destination: address, blockchainId, tokenId },
+    });
 
     return {
       id: result.paymentTx.id,

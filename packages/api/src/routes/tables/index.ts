@@ -87,91 +87,66 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: "idempotencyKey is required" });
       }
 
-      // Check idempotency cache (fast path)
-      const lockKey = `idempotency:buyin:${idempotencyKey}`;
-      const resultKey = `idempotency:result:${lockKey}`;
+      const amountNum = typeof amount === "string" ? parseInt(amount, 10) : amount;
+      const risk = await fastify.riskManager.assertAllowed({
+        userId,
+        endpoint: "buy-in",
+        request,
+        amountCents: amountNum,
+      });
 
-      const cached = await fastify.redis.get(resultKey);
-      if (cached) {
-        fastify.log.info(`Buy-in idempotency hit for ${userId} at table ${id}`);
-        return JSON.parse(cached);
-      }
-
-      // Use short lock just to set processing flag
-      const processingKey = `${resultKey}:processing`;
-      const wasProcessing = await fastify.redis.set(processingKey, "1", "EX", 30, "NX");
-
-      if (!wasProcessing) {
-        // Another request is processing this - wait briefly and check result
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        const result = await fastify.redis.get(resultKey);
-        if (result) {
-          return JSON.parse(result);
-        }
-        // Fall through to process (other request may have failed)
-      }
-
-      try {
-        // Financial transaction (ensure amount is a number)
-        const amountNum = typeof amount === "string" ? parseInt(amount, 10) : amount;
-        const state = await fastify.gameManager.getState(id);
-        const seatedPlayer = state.players[seat];
-
-        if (seatedPlayer) {
-          if (seatedPlayer.id === userId) {
-            const response = { success: true };
-            await fastify.redis.set(resultKey, JSON.stringify(response), "EX", 86400);
-            return response;
-          }
-
-          return reply.code(400).send({
-            error: "SEAT_OCCUPIED",
-            message: `Seat ${seat} is already occupied`,
-          });
-        }
-
-        await fastify.financialManager.buyIn(userId, id, amountNum);
-
-        // Get username
-        const user = await fastify.prisma.user.findUniqueOrThrow({
-          where: { id: userId },
-          select: { username: true },
-        });
-
-        // Game action (this acquires its own lock internally)
-        await fastify.gameManager.processAction(
-          id,
-          {
-            type: "SIT" as ActionType.SIT,
-            playerId: userId,
-            playerName: user.username,
-            seat,
-            stack: amountNum,
-          },
-          userId
-        );
-
-        const response = { success: true };
-        await fastify.redis.set(resultKey, JSON.stringify(response), "EX", 86400);
-        return response;
-      } catch (err: unknown) {
-        // If seat is occupied, player may have already bought in - check state
-        if (err && typeof err === "object" && "code" in err && err.code === "SEAT_OCCUPIED") {
+      const idem = await fastify.idempotencyManager.run({
+        key: idempotencyKey,
+        scope: `buy-in:${id}`,
+        userId,
+        requestHash: fastify.idempotencyManager.hash({ id, amount: amountNum, seat }),
+        handler: async () => {
           const state = await fastify.gameManager.getState(id);
-          const player = state.players[seat];
+          const seatedPlayer = state.players[seat];
 
-          // If this user is already in this seat, treat as success (idempotent)
-          if (player && player.id === userId) {
-            const response = { success: true };
-            await fastify.redis.set(resultKey, JSON.stringify(response), "EX", 86400);
-            return response;
+          if (seatedPlayer) {
+            if (seatedPlayer.id === userId) return { success: true };
+            throw Object.assign(new Error(`Seat ${seat} is already occupied`), {
+              statusCode: 400,
+              code: "SEAT_OCCUPIED",
+            });
           }
-        }
-        throw err;
-      } finally {
-        // Clean up processing flag
-        await fastify.redis.del(processingKey);
+
+          await fastify.financialManager.buyIn(userId, id, amountNum);
+          const user = await fastify.prisma.user.findUniqueOrThrow({
+            where: { id: userId },
+            select: { username: true },
+          });
+
+          await fastify.gameManager.processAction(
+            id,
+            {
+              type: "SIT" as ActionType.SIT,
+              playerId: userId,
+              playerName: user.username,
+              seat,
+              stack: amountNum,
+            },
+            userId
+          );
+          return { success: true };
+        },
+      });
+
+      if (idem.replayed) {
+        fastify.observabilityManager.increment("pokertools_idempotency_hits_total", {
+          scope: "buy-in",
+        });
       }
+      await fastify.auditManager.record({
+        actorId: userId,
+        action: "BUY_IN",
+        resource: `table:${id}`,
+        request,
+        riskScore: risk.score,
+        metadata: { amount: amountNum, seat, replayed: idem.replayed },
+      });
+      return idem.response;
     }
   );
 
@@ -187,7 +162,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
     async (request, reply) => {
       const { id } = request.params;
       const { userId } = request.user;
-      const { type, amount } = request.body;
+      const { type, amount, idempotencyKey } = request.body;
 
       // SECURITY: Whitelist only gameplay actions
       // Management actions (SIT, ADD_CHIPS, RESERVE_SEAT) must go through dedicated endpoints with financial checks
@@ -199,7 +174,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
         });
       }
 
-      try {
+      const runAction = async () => {
         const state = await fastify.gameManager.processAction(
           id,
           {
@@ -209,7 +184,35 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
           } as Action,
           userId
         );
+        fastify.observabilityManager.increment("pokertools_game_actions_total", { type });
+        await fastify.auditManager.record({
+          actorId: userId,
+          action: `GAME_${type}`,
+          resource: `table:${id}`,
+          request,
+          metadata: { amount },
+        });
         return { state };
+      };
+
+      try {
+        if (idempotencyKey) {
+          const idem = await fastify.idempotencyManager.run({
+            key: idempotencyKey,
+            scope: `game-action:${id}`,
+            userId,
+            requestHash: fastify.idempotencyManager.hash({ id, type, amount }),
+            ttlSeconds: 3600,
+            handler: runAction,
+          });
+          if (idem.replayed) {
+            fastify.observabilityManager.increment("pokertools_idempotency_hits_total", {
+              scope: "game-action",
+            });
+          }
+          return idem.response;
+        }
+        return await runAction();
       } catch (err: unknown) {
         // Map engine errors to HTTP 400
         if (
@@ -247,61 +250,63 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: "idempotencyKey is required" });
       }
 
-      // Check idempotency cache
-      const lockKey = `idempotency:addchips:${idempotencyKey}`;
-      const resultKey = `idempotency:result:${lockKey}`;
+      const amountNum = typeof amount === "string" ? parseInt(amount, 10) : amount;
+      const risk = await fastify.riskManager.assertAllowed({
+        userId,
+        endpoint: "add-chips",
+        request,
+        amountCents: amountNum,
+      });
 
-      const cached = await fastify.redis.get(resultKey);
-      if (cached) {
-        fastify.log.info(`Add chips idempotency hit for ${userId} at table ${id}`);
-        return JSON.parse(cached);
+      const idem = await fastify.idempotencyManager.run({
+        key: idempotencyKey,
+        scope: `add-chips:${id}`,
+        userId,
+        requestHash: fastify.idempotencyManager.hash({ id, amount: amountNum }),
+        handler: async () => {
+          // Verify player is seated at table
+          const state = await fastify.gameManager.getState(id, userId);
+          const player = state.players.find((p) => p?.id === userId);
+
+          if (!player) {
+            throw Object.assign(new Error("You must be seated at the table to add chips"), {
+              statusCode: 400,
+              code: "NOT_SEATED",
+            });
+          }
+
+          // Financial transaction (debit from MAIN, credit to IN_PLAY)
+          await fastify.financialManager.buyIn(userId, id, amountNum);
+
+          // Game action (adds to pendingAddOn)
+          await fastify.gameManager.processAction(
+            id,
+            {
+              type: "ADD_CHIPS" as ActionType.ADD_CHIPS,
+              playerId: userId,
+              amount: amountNum,
+            },
+            userId
+          );
+
+          return { success: true };
+        },
+      });
+
+      if (idem.replayed) {
+        fastify.observabilityManager.increment("pokertools_idempotency_hits_total", {
+          scope: "add-chips",
+        });
       }
-
-      const processingKey = `${resultKey}:processing`;
-      const wasProcessing = await fastify.redis.set(processingKey, "1", "EX", 30, "NX");
-
-      if (!wasProcessing) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        const result = await fastify.redis.get(resultKey);
-        if (result) {
-          return JSON.parse(result);
-        }
-      }
-
-      try {
-        // Verify player is seated at table
-        const state = await fastify.gameManager.getState(id, userId);
-        const player = state.players.find((p) => p?.id === userId);
-
-        if (!player) {
-          return reply
-            .code(400)
-            .send({ error: "NOT_SEATED", message: "You must be seated at the table to add chips" });
-        }
-
-        // Financial transaction (debit from MAIN, credit to IN_PLAY)
-        const amountNum = typeof amount === "string" ? parseInt(amount, 10) : amount;
-        await fastify.financialManager.buyIn(userId, id, amountNum);
-
-        // Game action (adds to pendingAddOn)
-        await fastify.gameManager.processAction(
-          id,
-          {
-            type: "ADD_CHIPS" as ActionType.ADD_CHIPS,
-            playerId: userId,
-            amount: amountNum,
-          },
-          userId
-        );
-
-        const response = { success: true };
-        await fastify.redis.set(resultKey, JSON.stringify(response), "EX", 86400);
-        return response;
-      } catch (err: unknown) {
-        throw err;
-      } finally {
-        await fastify.redis.del(processingKey);
-      }
+      await fastify.auditManager.record({
+        actorId: userId,
+        action: "ADD_CHIPS",
+        resource: `table:${id}`,
+        request,
+        riskScore: risk.score,
+        metadata: { amount: amountNum, replayed: idem.replayed },
+      });
+      return idem.response;
     }
   );
 

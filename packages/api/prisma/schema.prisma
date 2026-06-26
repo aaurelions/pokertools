@@ -27,6 +27,8 @@ model User {
   paymentTx     PaymentTransaction[]
   notesWritten  PlayerNote[]         @relation("NoteAuthor")
   notesReceived PlayerNote[]         @relation("NoteTarget")
+  auditLogs     AuditLog[]
+  idempotency   IdempotencyRecord[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -323,4 +325,51 @@ model PlayerNote {
 
   @@unique([authorId, targetId])
   @@index([authorId])
+}
+
+// ============================================================================
+// OPERATIONS, IDEMPOTENCY & AUDITABILITY
+// ============================================================================
+
+model IdempotencyRecord {
+  id          String            @id @default(cuid())
+  key         String
+  scope       String
+  userId      String
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  requestHash String
+  status      IdempotencyStatus @default(PROCESSING)
+  response    Json?
+  statusCode  Int?
+  errorCode   String?
+  expiresAt   DateTime
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@unique([scope, key])
+  @@index([userId, scope])
+  @@index([expiresAt])
+}
+
+enum IdempotencyStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  actor     User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  action    String
+  resource  String
+  ip        String?
+  userAgent String?
+  riskScore Int      @default(0)
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
+  @@index([resource])
 }

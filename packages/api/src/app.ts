@@ -144,9 +144,29 @@ export async function buildApp() {
   await app.register(financeRoutes, { prefix: "/finance" });
   await app.register(notesRoutes, { prefix: "/notes" });
 
-  // Health check
-  app.get("/health", () => {
-    return { status: "ok", timestamp: Date.now() };
+  app.setErrorHandler((error, request, reply) => {
+    const err = error as Error & { statusCode?: number; code?: string };
+    const statusCode = err.statusCode ? Number(err.statusCode) : 500;
+    const code = typeof err.code === "string" ? err.code : "INTERNAL_ERROR";
+    if (code === "RISK_DENIED") {
+      app.observabilityManager.increment("pokertools_risk_denials_total", {
+        route: request.routeOptions.url ?? request.url,
+      });
+    }
+    if (statusCode >= 500) request.log.error({ error: err }, "Unhandled request error");
+    return reply.code(statusCode).send({ error: code, message: err.message });
+  });
+
+  // Production health and Prometheus-compatible metrics endpoints.
+  app.get("/health", async (request, reply) => {
+    const health = await app.observabilityManager.health();
+    if (health.status === "down") return reply.code(503).send(health);
+    if (health.status === "degraded") return reply.code(200).send(health);
+    return health;
+  });
+
+  app.get("/metrics", async (_request, reply) => {
+    return reply.type("text/plain; version=0.0.4").send(app.observabilityManager.metrics());
   });
 
   return app;
