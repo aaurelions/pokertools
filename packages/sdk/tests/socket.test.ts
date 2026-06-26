@@ -10,6 +10,7 @@ class MockWebSocket {
   static CLOSED = 3;
 
   url: string;
+  protocols?: string | string[];
   readyState: number = MockWebSocket.CONNECTING;
   onopen: (() => void) | null = null;
   onclose: ((event: { code: number; reason: string }) => void) | null = null;
@@ -24,8 +25,9 @@ class MockWebSocket {
     }
   });
 
-  constructor(url: string) {
+  constructor(url: string, protocols?: string | string[]) {
     this.url = url;
+    this.protocols = protocols;
 
     // Simulate connection based on URL
     setTimeout(() => {
@@ -64,8 +66,13 @@ describe("PokerSocket", () => {
   });
 
   describe("constructor", () => {
-    it("initializes with correct URL including token", () => {
+    it("initializes without putting the token in the URL", async () => {
       expect(socket.getState()).toBe("disconnected");
+      await socket.connect();
+      const ws = (socket as any).ws as MockWebSocket;
+      expect(ws.url).toBe("ws://test.com/");
+      expect(ws.url).not.toContain("test-token");
+      expect(ws.protocols).toEqual(["pokertools", "jwt.test-token"]);
     });
   });
 

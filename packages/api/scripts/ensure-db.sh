@@ -21,7 +21,10 @@ else
 fi
 
 # Use DATABASE_URL from environment if set, otherwise parse from .env file
-if [ -n "$DATABASE_URL" ]; then
+if [[ -n "$DATABASE_URL" && ( "$DATABASE_URL" == postgresql://* || "$DATABASE_URL" == postgres://* ) ]]; then
+  DB_KIND="postgres"
+elif [ -n "$DATABASE_URL" ]; then
+  DB_KIND="sqlite"
   # Extract path from DATABASE_URL (handles both file:./path and file:path formats)
   DB_PATH=$(echo "$DATABASE_URL" | sed 's|^file:||')
   # Normalize: remove leading ./ if present
@@ -43,6 +46,7 @@ if [ -n "$DATABASE_URL" ]; then
     export DATABASE_URL
   fi
 else
+  DB_KIND="sqlite"
   # Parse DATABASE_URL from appropriate .env file to get the database path
   ENV_DB_URL=$(grep "^DATABASE_URL=" "$ENV_FILE" 2>/dev/null | cut -d'"' -f2 || cut -d'=' -f2- | tr -d ' ' || echo "")
   if [ -n "$ENV_DB_URL" ]; then
@@ -61,25 +65,34 @@ else
   fi
 fi
 
-# Extract absolute path from DATABASE_URL for file operations
-DB_FILE=$(echo "$DATABASE_URL" | sed 's|^file:||')
+if [ "$DB_KIND" = "sqlite" ]; then
+  # Extract absolute path from DATABASE_URL for file operations
+  DB_FILE=$(echo "$DATABASE_URL" | sed 's|^file:||')
 
-# Ensure the directory for the database file exists
-DB_DIR=$(dirname "$DB_FILE")
-mkdir -p "$DB_DIR"
+  # Ensure the directory for the database file exists
+  DB_DIR=$(dirname "$DB_FILE")
+  mkdir -p "$DB_DIR"
 
-# Check if database file exists
-if [ ! -f "$DB_FILE" ]; then
-  echo "📦 Database not found at $DB_FILE, creating..."
+  # Check if database file exists
+  if [ ! -f "$DB_FILE" ]; then
+    echo "📦 Database not found at $DB_FILE, creating..."
+  else
+    echo "✅ Database found at $DB_FILE"
+  fi
 else
-  echo "✅ Database found at $DB_FILE"
+  DB_FILE=""
+  echo "✅ PostgreSQL datasource configured"
 fi
 
 # Always run prisma db push to ensure schema is in sync
 # This is safe because --accept-data-loss only affects data, not schema
 echo "🔄 Syncing database schema..."
 echo "   Using DATABASE_URL: $DATABASE_URL"
-echo "   Database file: $DB_FILE"
+if [ "$DB_KIND" = "sqlite" ]; then
+  echo "   Database file: $DB_FILE"
+else
+  echo "   Database kind: PostgreSQL"
+fi
 
 # Ensure Prisma client is generated (it should be from build, but verify)
 if [ ! -d "generated/prisma" ]; then

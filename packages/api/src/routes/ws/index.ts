@@ -12,12 +12,29 @@ import {
   type SnapshotMessage,
 } from "@pokertools/types";
 
+function tokenFromProtocolHeader(header: string | undefined): string | undefined {
+  if (!header) return undefined;
+  const protocols = header.split(",").map((protocol) => protocol.trim());
+  const bearer = protocols.find((protocol) => protocol.startsWith("jwt."));
+  return bearer?.slice(4);
+}
+
 export const wsRoutes: FastifyPluginAsync = async (fastify) => {
-  fastify.get<{ Querystring: { token?: string } }>(
+  fastify.get(
     "/play",
     { websocket: true },
     async (socket: WebSocket, request) => {
-      const token = request.query.token || request.cookies.token;
+      const token = request.cookies.token || tokenFromProtocolHeader(request.headers["sec-websocket-protocol"]);
+
+      const queuedMessages: Buffer[] = [];
+      let messageHandler: ((data: Buffer) => Promise<void>) | null = null;
+      socket.on("message", (data: Buffer) => {
+        if (messageHandler) {
+          void messageHandler(data);
+        } else {
+          queuedMessages.push(data);
+        }
+      });
 
       let userId: string;
       try {
@@ -66,7 +83,7 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
         isAlive = true;
       });
 
-      socket.on("message", async (data: Buffer) => {
+      messageHandler = async (data: Buffer) => {
         if (data.length > 4096) {
           const errorMsg: ErrorMessage = {
             type: "ERROR",
@@ -150,7 +167,11 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
           };
           sendMessage(errorMsg);
         }
-      });
+      };
+
+      for (const queued of queuedMessages.splice(0)) {
+        void messageHandler(queued);
+      }
 
       socket.on("close", () => {
         clearInterval(heartbeatInterval);

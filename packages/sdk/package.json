@@ -1,6 +1,6 @@
 {
   "name": "@pokertools/sdk",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "TypeScript SDK for PokerTools API - Real-time poker client for browser and Node.js",
   "author": "A.Aurelius",
   "license": "MIT",
@@ -64,11 +64,16 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "@pokertools/types": "1.0.7"
+    "@pokertools/types": "1.0.8"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.0",
     "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "jsdom": "^27.4.0",
     "react": "^19.2.7",
+    "react-dom": "^19.2.7",
     "tsup": "^8.5.1"
   },
   "peerDependencies": {

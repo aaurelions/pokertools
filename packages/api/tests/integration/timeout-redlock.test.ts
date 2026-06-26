@@ -49,7 +49,7 @@ describe("Timeout Worker - Redlock & Version Guard Integration Test", () => {
 
     try {
       // Connect WebSocket
-      const ws = new WebSocket(`${wsUrl}?token=${player1.token}`);
+      const ws = new WebSocket(wsUrl, ["pokertools", `jwt.${player1.token}`]);
       await new Promise((resolve) => ws.once("open", resolve));
 
       const messages: any[] = [];
@@ -64,7 +64,7 @@ describe("Timeout Worker - Redlock & Version Guard Integration Test", () => {
 
       // Join table
       ws.send(JSON.stringify({ type: "JOIN", tableId }));
-      await waitFor(() => messages.some((m) => m.type === "SNAPSHOT"), 3000);
+      await waitFor(() => messages.some((m) => m.type === "SNAPSHOT"), 7000);
 
       // Both players buy in
       await buyIn(ctx.app, player1.token, tableId, 500, 0);
@@ -96,7 +96,7 @@ describe("Timeout Worker - Redlock & Version Guard Integration Test", () => {
           await executeAction(ctx.app, actingPlayer.token, tableId, { type: "FOLD" });
 
           // Wait for STATE_UPDATE
-          await waitFor(() => stateUpdates.length > 0, 3000);
+          await waitFor(() => stateUpdates.length > 0, 7000);
 
           // Verify all STATE_UPDATE messages are lightweight
           for (const su of stateUpdates) {

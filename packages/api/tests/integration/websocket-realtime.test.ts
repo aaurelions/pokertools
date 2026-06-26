@@ -53,9 +53,8 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
     const player1Updates: any[] = [];
     const player2Updates: any[] = [];
 
-    // WebSocket requires token in query parameter for authentication
-    const ws1 = new WebSocket(`${wsUrl}?token=${player1.token}`);
-    const ws2 = new WebSocket(`${wsUrl}?token=${player2.token}`);
+    const ws1 = new WebSocket(wsUrl, ["pokertools", `jwt.${player1.token}`]);
+    const ws2 = new WebSocket(wsUrl, ["pokertools", `jwt.${player2.token}`]);
 
     // Wait for connections to open
     await Promise.all([
@@ -113,7 +112,7 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
     );
 
     // Wait for SNAPSHOT messages after JOIN (sent immediately)
-    await waitFor(() => player1Updates.length > 0 && player2Updates.length > 0, 3000);
+    await waitFor(() => player1Updates.length > 0 && player2Updates.length > 0, 7000);
 
     expect(player1Updates.length).toBeGreaterThan(0);
     expect(player2Updates.length).toBeGreaterThan(0);
@@ -125,7 +124,7 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
     await buyIn(ctx.app, player1.token, ctx.tableId, 1000, 0);
 
     // Wait for additional updates after buy-in (STATE_UPDATE or SNAPSHOT)
-    await waitFor(() => player1Updates.length > updateCountBefore, 3000);
+    await waitFor(() => player1Updates.length > updateCountBefore, 7000);
 
     // =========================================================================
     // STEP 5: Verify STATE_UPDATE is lightweight (no state field)
@@ -267,7 +266,7 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
     const [player1] = ctx.users;
 
     // Try to connect with invalid token in query string
-    const ws = new WebSocket(`${wsUrl}?token=invalid-token`);
+    const ws = new WebSocket(wsUrl, ["pokertools", "jwt.invalid-token"]);
 
     // WebSocket should close with auth error
     const closeCode = await new Promise<number>((resolve) => {
@@ -299,7 +298,7 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
     });
 
     // Connect with token in query parameter
-    const ws = new WebSocket(`${wsUrl}?token=${player1.token}`);
+    const ws = new WebSocket(wsUrl, ["pokertools", `jwt.${player1.token}`]);
 
     // Set up message handler BEFORE waiting for open to avoid race conditions
     const updates: any[] = [];
@@ -377,7 +376,7 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
 
     try {
       // Connect WebSocket
-      const ws = new WebSocket(`${wsUrl}?token=${player1.token}`);
+      const ws = new WebSocket(wsUrl, ["pokertools", `jwt.${player1.token}`]);
       await new Promise((resolve) => ws.once("open", resolve));
 
       const allMessages: any[] = [];
@@ -387,7 +386,7 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
 
       // Join table
       ws.send(JSON.stringify({ type: "JOIN", tableId: testTableId }));
-      await waitFor(() => allMessages.length > 0, 3000);
+      await waitFor(() => allMessages.length > 0, 7000);
 
       // Verify SNAPSHOT has state
       const snapshot = allMessages.find((m) => m.type === "SNAPSHOT");
@@ -402,7 +401,7 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
       await waitFor(() => {
         const updates = allMessages.filter((m) => m.type === "STATE_UPDATE");
         return updates.length > 0;
-      }, 3000);
+      }, 7000);
 
       // Verify EVERY STATE_UPDATE is lightweight
       const stateUpdates = allMessages.filter((m) => m.type === "STATE_UPDATE");

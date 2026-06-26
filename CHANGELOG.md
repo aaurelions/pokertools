@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.8] - 2026-06-26
+
+### Security
+
+- Removed JWTs from WebSocket query strings. Browser clients now authenticate with a `jwt.<token>` WebSocket subprotocol, while cookie auth remains supported.
+- Admin withdrawal approval now re-verifies the wallet signature and timestamp freshness at approval time.
+- Hot-wallet broadcasts now use coordinated nonce allocation to prevent sweeper/withdrawal nonce collisions.
+
+### Fixed
+
+- Added PostgreSQL Prisma driver-adapter support with datasource-aware Prisma schema generation.
+- Next-hand worker Redis writes now use optimistic `_version` guards to avoid overwriting concurrent manual actions.
+- Failed on-chain withdrawal transactions now atomically refund the reserved withdrawal debit and write a refund ledger entry.
+- React `PokerProvider` no longer reconnects because of inline config object identity changes.
+
+### Added
+
+- Admin RPC retry/backoff and circuit-breaker utilities for sweep and withdrawal broadcasts.
+- React hook regression tests covering provider reconnect behavior and core SDK hooks.
+
 ## [1.0.7] - 2026-06-26
 
 ### Changed

@@ -11,14 +11,14 @@ The repository is organized into workspaces managed by NPM.
 
 | Package                                           | Description                                                                                                 | Version |
 | :------------------------------------------------ | :---------------------------------------------------------------------------------------------------------- | :------ |
-| **[@pokertools/engine](./packages/engine)**       | The immutable core logic for Texas Hold'em state management.                                                | `1.0.7` |
-| **[@pokertools/evaluator](./packages/evaluator)** | High-performance hand evaluation and win frequency calculation.                                             | `1.0.7` |
-| **[@pokertools/api](./packages/api)**             | Scalable REST & WebSocket API built with Fastify, Redis, and Prisma (SQLite default, PostgreSQL supported). | `1.0.7` |
-| **[@pokertools/sdk](./packages/sdk)**             | TypeScript SDK with React hooks and real-time socket management.                                            | `1.0.7` |
-| **[@pokertools/admin](./packages/admin)**         | Financial sweeper service, withdrawal processing, and Telegram bot.                                         | `1.0.7` |
-| **[@pokertools/types](./packages/types)**         | Shared TypeScript definitions, Zod schemas, and DTOs.                                                       | `1.0.7` |
-| **[@pokertools/bench](./packages/bench)**         | Performance benchmarking suite for the engine and evaluator.                                                | `1.0.7` |
-| **[@pokertools/e2e](./packages/e2e)**             | Docker-based end-to-end integration tests exercising the full API + blockchain stack.                       | `1.0.7` |
+| **[@pokertools/engine](./packages/engine)**       | The immutable core logic for Texas Hold'em state management.                                                | `1.0.8` |
+| **[@pokertools/evaluator](./packages/evaluator)** | High-performance hand evaluation and win frequency calculation.                                             | `1.0.8` |
+| **[@pokertools/api](./packages/api)**             | Scalable REST & WebSocket API built with Fastify, Redis, and Prisma (SQLite default, PostgreSQL supported). | `1.0.8` |
+| **[@pokertools/sdk](./packages/sdk)**             | TypeScript SDK with React hooks and real-time socket management.                                            | `1.0.8` |
+| **[@pokertools/admin](./packages/admin)**         | Financial sweeper service, withdrawal processing, and Telegram bot.                                         | `1.0.8` |
+| **[@pokertools/types](./packages/types)**         | Shared TypeScript definitions, Zod schemas, and DTOs.                                                       | `1.0.8` |
+| **[@pokertools/bench](./packages/bench)**         | Performance benchmarking suite for the engine and evaluator.                                                | `1.0.8` |
+| **[@pokertools/e2e](./packages/e2e)**             | Docker-based end-to-end integration tests exercising the full API + blockchain stack.                       | `1.0.8` |
 
 ## ✨ Key Features
 
@@ -74,7 +74,7 @@ To use the pre-built image from GitHub Container Registry:
 docker pull ghcr.io/aaurelions/pokertools
 ```
 
-GHCR images are published automatically on each [GitHub release](https://github.com/aaurelions/pokertools/releases), tagged as `latest`, `1`, `1.0`, `1.0.7`, and a full commit SHA for every release-triggered build. See [`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml) for details.
+GHCR images are published automatically on each [GitHub release](https://github.com/aaurelions/pokertools/releases), tagged as `latest`, `1`, `1.0`, `1.0.8`, and a full commit SHA for every release-triggered build. See [`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml) for details.
 
 ### Development Workflow
 

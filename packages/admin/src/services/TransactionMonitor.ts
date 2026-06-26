@@ -47,9 +47,30 @@ export class TransactionMonitor {
           });
           this.logger.info(`Tx Confirmed: ${tx.txHash}`);
         } else {
-          await this.prisma.paymentTransaction.update({
-            where: { id: tx.id },
-            data: { status: "FAILED" },
+          await this.prisma.$transaction(async (db) => {
+            const currentTx = await db.paymentTransaction.findUnique({
+              where: { id: tx.id },
+              include: { ledgerEntry: true },
+            });
+            if (!currentTx || currentTx.status === "FAILED" || !currentTx.ledgerEntry) return;
+
+            await db.account.update({
+              where: { id: currentTx.ledgerEntry.accountId },
+              data: { balance: { increment: Math.abs(currentTx.ledgerEntry.amount) } },
+            });
+            await db.ledgerEntry.create({
+              data: {
+                accountId: currentTx.ledgerEntry.accountId,
+                amount: Math.abs(currentTx.ledgerEntry.amount),
+                type: "REFUND",
+                referenceId: currentTx.ledgerEntry.id,
+                metadata: { reason: "Withdrawal transaction reverted", txHash: tx.txHash },
+              },
+            });
+            await db.paymentTransaction.update({
+              where: { id: tx.id },
+              data: { status: "FAILED", confirmedAt: new Date() },
+            });
           });
           this.logger.error(`Tx Reverted: ${tx.txHash}`);
         }

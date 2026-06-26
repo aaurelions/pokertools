@@ -14,6 +14,7 @@ The official TypeScript SDK for the **PokerTools** platform. Build real-time Tex
 - 🔄 **State Management**: Automatic synchronization of game state (snapshots + delta updates).
 - 💰 **Financials**: Deposit, withdrawal, and chip management utilities.
 - 🔐 **Replay-safe Withdrawals**: Helpers generate nonce/timestamp withdrawal messages for the current API contract.
+- 🔒 **Safer WebSocket Auth**: JWTs are sent as WebSocket subprotocol credentials, not query-string parameters.
 
 ## 📦 Installation
 
@@ -166,6 +167,9 @@ const socket = new PokerSocket({
 });
 
 await socket.connect();
+
+// The SDK does not append token=... to the URL. It connects with
+// Sec-WebSocket-Protocol: pokertools, jwt.<token> to avoid leaking JWTs in logs.
 
 // Subscribe to table updates
 const initialState = await socket.join("table-1");

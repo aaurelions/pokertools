@@ -11,6 +11,7 @@ import {
 import { BlockchainService } from "./BlockchainService.js";
 import { config } from "../config.js";
 import type { Logger } from "pino";
+import { CircuitBreaker, withRetry } from "../utils/resilience.js";
 
 // ABI for the BatchSweeper Contract
 const BATCH_ABI = parseAbi([
@@ -37,6 +38,7 @@ type Candidate = [
 
 export class SweeperService {
   private isRunning = false;
+  private sweepBreaker = new CircuitBreaker("sweep-broadcast");
   // Map Chain ID -> Deployed Contract Address
   private sweeperAddresses: Record<number, string> = {
     137: config.BATCH_SWEEPER_ADDRESS_POLYGON,
@@ -224,14 +226,21 @@ export class SweeperService {
       // 2. Execute Batch
       this.logger.info(`Sweeping ${owners.length} wallets for ${token.symbol}`);
 
-      const hash = await hotWalletClient.writeContract({
-        address: sweeperAddr,
-        abi: BATCH_ABI,
-        functionName: "batchSweep",
-        args: [token.address as `0x${string}`, owners, amounts, deadlines, vs, rs, ss],
-        chain: null,
-        account: hotWalletClient.account!,
-      });
+      const nonce = await this.chainService.getNextHotWalletNonce(chain);
+      const hash = await withRetry(
+        async () => {
+          return hotWalletClient.writeContract({
+            address: sweeperAddr,
+            abi: BATCH_ABI,
+            functionName: "batchSweep",
+            args: [token.address as `0x${string}`, owners, amounts, deadlines, vs, rs, ss],
+            chain: null,
+            account: hotWalletClient.account!,
+            nonce,
+          });
+        },
+        this.sweepBreaker
+      );
 
       this.logger.info(`Sweep Tx Sent: ${hash}`);
 

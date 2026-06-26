@@ -29,7 +29,7 @@ import {
 interface SocketConfig {
   /** WebSocket URL */
   url: string;
-  /** JWT token for authentication */
+  /** JWT token for authentication. Sent as a WebSocket subprotocol, never in the URL. */
   token: string;
   /** Heartbeat interval in ms (default: 25000) */
   heartbeatInterval?: number;
@@ -84,6 +84,7 @@ const DEFAULT_SOCKET_CONFIG = {
 export class PokerSocket {
   private readonly url: string;
   private readonly token: string;
+  private readonly protocolToken: string;
   private readonly heartbeatInterval: number;
   private readonly reconnectAttempts: number;
   private readonly reconnectDelay: number;
@@ -117,11 +118,12 @@ export class PokerSocket {
   private tableVersions = new Map<string, number>();
 
   constructor(config: SocketConfig) {
-    // Construct WebSocket URL with token
+    // Keep authentication material out of URLs so it is not captured by
+    // access logs, proxy logs, or browser history.
     const wsUrl = new URL(config.url);
-    wsUrl.searchParams.set("token", config.token);
     this.url = wsUrl.toString();
     this.token = config.token;
+    this.protocolToken = `jwt.${config.token}`;
 
     this.heartbeatInterval = config.heartbeatInterval ?? DEFAULT_SOCKET_CONFIG.heartbeatInterval;
     this.reconnectAttempts = config.reconnectAttempts ?? DEFAULT_SOCKET_CONFIG.reconnectAttempts;
@@ -184,7 +186,7 @@ export class PokerSocket {
       this.log("Connecting to", this.url);
 
       try {
-        this.ws = new this.WebSocketImpl(this.url);
+        this.ws = new this.WebSocketImpl(this.url, ["pokertools", this.protocolToken]);
 
         this.ws.onopen = () => {
           this.connectionState = "connected";

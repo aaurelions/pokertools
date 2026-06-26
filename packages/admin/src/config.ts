@@ -56,6 +56,14 @@ export const config = cleanEnv(process.env, {
   MIN_SWEEP_VALUE_USD: num({ default: 10 }),
   LOW_GAS_THRESHOLD_ETH: num({ default: 0.1 }),
 
+  // RPC resilience
+  RPC_RETRY_COUNT: num({ default: 3 }),
+  RPC_RETRY_DELAY_MS: num({ default: 1000 }),
+  RPC_TIMEOUT_MS: num({ default: 10_000 }),
+  CIRCUIT_BREAKER_FAILURE_THRESHOLD: num({ default: 5 }),
+  CIRCUIT_BREAKER_OPEN_MS: num({ default: 30_000 }),
+  WITHDRAWAL_SIGNATURE_MAX_AGE_MS: num({ default: 5 * 60 * 1000 }),
+
   // Security
   JWT_SECRET: str(),
 

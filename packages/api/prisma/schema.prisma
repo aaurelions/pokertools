@@ -1,5 +1,5 @@
 // Poker API Database Schema
-// Architected for SQLite (Testing) and PostgreSQL (Production)
+// Architected for SQLite-backed local tests with runtime PostgreSQL driver support.
 
 generator client {
   provider = "prisma-client-js"
@@ -7,7 +7,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite" // Change to "postgresql" for production
+  provider = "sqlite"
 }
 
 // ============================================================================

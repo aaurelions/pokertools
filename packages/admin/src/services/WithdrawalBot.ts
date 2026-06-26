@@ -5,6 +5,7 @@ import { BlockchainService } from "./BlockchainService.js";
 import { config } from "../config.js";
 import type { Logger } from "pino";
 import { parseAbi, verifyMessage } from "viem";
+import { CircuitBreaker, withRetry } from "../utils/resilience.js";
 
 const ERC20_ABI = parseAbi([
   "function transfer(address, uint256) returns (bool)",
@@ -22,6 +23,7 @@ interface WithdrawalMetadata {
 export class WithdrawalBot {
   public bot: Bot;
   private isRunning = false;
+  private withdrawalBreaker = new CircuitBreaker("withdrawal-broadcast");
 
   constructor(
     private prisma: PrismaClient,
@@ -89,21 +91,7 @@ export class WithdrawalBot {
     const amountUsd = Math.abs(tx.amount / 100);
 
     // 1. Verify Signature
-    let isSigValid = false;
-    try {
-      if (meta.proof) {
-        const valid = await verifyMessage({
-          address: meta.proof.signer as `0x${string}`,
-          message: meta.proof.message,
-          signature: meta.proof.signature as `0x${string}`,
-        });
-        if (valid && meta.proof.signer.toLowerCase() === user.address.toLowerCase()) {
-          isSigValid = true;
-        }
-      }
-    } catch (e) {
-      this.logger.warn(e, "Signature verification failed");
-    }
+    const isSigValid = await this.verifyWithdrawalProof(meta, user.address);
 
     // 2. Check Risk Limits
     const dailyTotal = await this.prisma.ledgerEntry.aggregate({
@@ -196,8 +184,16 @@ Dest: <code>${meta.address}</code>
 
   // We pass the context 'ctx' to helper methods to utilize convenient shortcuts
   private async approve(ctx: Context, reqId: string) {
-    const tx = await this.prisma.ledgerEntry.findUniqueOrThrow({ where: { id: reqId } });
+    const tx = await this.prisma.ledgerEntry.findUniqueOrThrow({
+      where: { id: reqId },
+      include: { account: { include: { user: true } } },
+    });
     const meta = tx.metadata as unknown as WithdrawalMetadata;
+
+    if (!(await this.verifyWithdrawalProof(meta, tx.account.user.address))) {
+      await this.rejectWithReason(ctx, reqId, "Invalid or expired withdrawal signature");
+      throw new Error("Invalid or expired withdrawal signature");
+    }
 
     if (Math.abs(tx.amount / 100) > config.MAX_SINGLE_WITHDRAWAL_USD)
       throw new Error("Limit exceeded");
@@ -209,14 +205,21 @@ Dest: <code>${meta.address}</code>
     const client = this.chainService.getHotWalletClient(chain);
 
     // Blockchain Write
-    const hash = await client.writeContract({
-      address: token.address as `0x${string}`,
-      abi: ERC20_ABI,
-      functionName: "transfer",
-      args: [meta.address as `0x${string}`, BigInt(meta.amountRaw)],
-      chain: null,
-      account: client.account!,
-    });
+    const nonce = await this.chainService.getNextHotWalletNonce(chain);
+    const hash = await withRetry(
+      async () => {
+        return client.writeContract({
+          address: token.address as `0x${string}`,
+          abi: ERC20_ABI,
+          functionName: "transfer",
+          args: [meta.address as `0x${string}`, BigInt(meta.amountRaw)],
+          chain: null,
+          account: client.account!,
+          nonce,
+        });
+      },
+      this.withdrawalBreaker
+    );
 
     // DB outbox row was created atomically by the API when the user balance was debited.
     await this.prisma.paymentTransaction.update({
@@ -236,6 +239,15 @@ Dest: <code>${meta.address}</code>
   }
 
   private async reject(ctx: Context, reqId: string) {
+    await this.rejectWithReason(ctx, reqId, "Admin Rejected");
+
+    // Update the message containing the button
+    await ctx.editMessageText("❌ <b>Rejected.</b> Funds returned.", {
+      parse_mode: "HTML",
+    });
+  }
+
+  private async rejectWithReason(ctx: Context, reqId: string, reason: string) {
     const tx = await this.prisma.ledgerEntry.findUniqueOrThrow({ where: { id: reqId } });
 
     await this.prisma.$transaction([
@@ -249,18 +261,36 @@ Dest: <code>${meta.address}</code>
           amount: Math.abs(tx.amount),
           type: "REFUND",
           referenceId: reqId,
-          metadata: { reason: "Admin Rejected" },
+          metadata: { reason },
         },
       }),
       this.prisma.paymentTransaction.update({
         where: { ledgerEntryId: reqId },
-        data: { status: "REJECTED" },
+        data: { status: "REJECTED", confirmedAt: new Date() },
       }),
     ]);
+  }
 
-    // Update the message containing the button
-    await ctx.editMessageText("❌ <b>Rejected.</b> Funds returned.", {
-      parse_mode: "HTML",
-    });
+  private async verifyWithdrawalProof(meta: WithdrawalMetadata, expectedAddress: string): Promise<boolean> {
+    try {
+      if (!meta.proof) return false;
+      const valid = await verifyMessage({
+        address: meta.proof.signer as `0x${string}`,
+        message: meta.proof.message,
+        signature: meta.proof.signature as `0x${string}`,
+      });
+      if (!valid || meta.proof.signer.toLowerCase() !== expectedAddress.toLowerCase()) {
+        return false;
+      }
+
+      const timestampMatch = /Timestamp:\s*(\d+)/i.exec(meta.proof.message);
+      if (!timestampMatch) return false;
+      const timestamp = Number(timestampMatch[1]);
+      if (!Number.isFinite(timestamp)) return false;
+      return Math.abs(Date.now() - timestamp) <= config.WITHDRAWAL_SIGNATURE_MAX_AGE_MS;
+    } catch (e) {
+      this.logger.warn(e, "Signature verification failed");
+      return false;
+    }
   }
 }

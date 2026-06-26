@@ -2,7 +2,7 @@
 
 > Production-ready REST/WebSocket API for real-time poker games with blockchain payments
 
-[![Node.js](https://img.shields.io/badge/Node.js-≥20.0.0-339933?logo=node.js)](https://nodejs.org)
+[![Node.js](https://img.shields.io/badge/Node.js-≥24.0.0-339933?logo=node.js)](https://nodejs.org)
 [![Fastify](https://img.shields.io/badge/Fastify-5.x-000000?logo=fastify)](https://fastify.dev)
 [![Redis](https://img.shields.io/badge/Redis-ioredis-DC382D?logo=redis)](https://redis.io)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -106,7 +106,7 @@
 
 ### Prerequisites
 
-- Node.js ≥ 20.0.0
+- Node.js ≥ 24.0.0
 - Redis server
 - PostgreSQL (production) or SQLite (development)
 
@@ -157,7 +157,8 @@ RPC_TIMEOUT=10000
 ### Database Setup
 
 ```bash
-# Generate Prisma client
+# Generate Prisma client. The Prisma config derives the provider from
+# DATABASE_URL and emits a runtime schema under .runtime/schema.<provider>.prisma.
 npm run db:generate
 
 # Run migrations (development)
@@ -167,7 +168,9 @@ npm run db:migrate
 npm run db:seed
 ```
 
-When running in Docker, the entrypoint (`docker-entrypoint.sh`) applies `prisma db push --accept-data-loss` at container startup, synchronising the Prisma schema with the database without requiring a complete migration history. For PostgreSQL production deployments, replace this with `prisma migrate deploy` after ensuring migration history is complete.
+When `DATABASE_URL` starts with `postgresql://` or `postgres://`, the API uses `@prisma/adapter-pg`; `file:` URLs use the SQLite adapter for local tests. Generate/build with the same datasource family you deploy with so the Prisma client provider matches the runtime adapter. For PostgreSQL production deployments, run `prisma migrate deploy` after ensuring migration history is complete.
+
+WebSocket clients authenticate without URL query tokens. Browser SDK clients send the JWT as the `jwt.<token>` WebSocket subprotocol; server-side clients may also rely on the `token` cookie.
 
 ### Start Server
 

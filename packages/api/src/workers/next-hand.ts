@@ -70,10 +70,42 @@ const worker = new Worker(
       const engine = PokerEngine.restore(snapshot);
       engine.deal();
 
-      // 5. Save new state to Redis
+      // 5. Save new state to Redis with the same optimistic version guard as
+      // player actions. This prevents the auto-dealer from overwriting a
+      // manually-dealt hand that landed after our initial read.
       const newSnapshot: Snapshot = engine.snapshot as any;
-      newSnapshot._version = (snapshot._version || 0) + 1;
-      await redis.set(`table:${tableId}`, JSON.stringify(newSnapshot), "EX", 86400);
+      const expectedVersion = snapshot._version || 0;
+      newSnapshot._version = expectedVersion + 1;
+
+      const updateResult = (await redis.eval(
+        `
+        local key = KEYS[1]
+        local expected = tonumber(ARGV[1])
+        local newValue = ARGV[2]
+        local ttl = tonumber(ARGV[3])
+        local current = redis.call('GET', key)
+        if not current then
+          return {err = 'STATE_NOT_FOUND'}
+        end
+        local decoded = cjson.decode(current)
+        local currentVersion = tonumber(decoded['_version'] or 0)
+        if currentVersion ~= expected then
+          return 0
+        end
+        redis.call('SET', key, newValue, 'EX', ttl)
+        return 1
+        `,
+        1,
+        `table:${tableId}`,
+        expectedVersion.toString(),
+        JSON.stringify(newSnapshot),
+        "86400"
+      )) as number;
+
+      if (updateResult !== 1) {
+        console.log(`⏭️  Table ${tableId} changed concurrently, skipping auto-deal write`);
+        return;
+      }
 
       // 6. Broadcast state update via Redis Pub/Sub
       await redis.publish(

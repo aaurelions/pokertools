@@ -59,9 +59,15 @@ export function PokerProvider({ config, children, autoConnect = true }: PokerPro
   const [connectionState, setConnectionState] = useState<ConnectionState>("disconnected");
   const clientRef = useRef<PokerClient | null>(null);
   const socketRef = useRef<PokerSocket | null>(null);
+  const configRef = useRef(config);
+  const connectPromiseRef = useRef<Promise<void> | null>(null);
 
   // Initialize client
   clientRef.current ??= new PokerClient(config);
+
+  useEffect(() => {
+    configRef.current = config;
+  }, [config]);
 
   // Update token when config changes
   useEffect(() => {
@@ -70,39 +76,48 @@ export function PokerProvider({ config, children, autoConnect = true }: PokerPro
     }
   }, [config.token]);
 
-  // Initialize socket when authenticated
-  useEffect(() => {
-    if (config.token && autoConnect && !socketRef.current) {
-      socketRef.current = PokerSocket.fromConfig(config);
-
+  const ensureSocket = useCallback(() => {
+    if (!socketRef.current) {
+      socketRef.current = PokerSocket.fromConfig(configRef.current);
       socketRef.current.on("connect", () => setConnectionState("connected"));
       socketRef.current.on("disconnect", () => setConnectionState("disconnected"));
       socketRef.current.on("reconnect", () => setConnectionState("reconnecting"));
-
-      void socketRef.current.connect().catch(console.error);
     }
+    return socketRef.current;
+  }, []);
 
+  const connect = useCallback(async () => {
+    if (!configRef.current.token) {
+      throw new Error("Token required to connect");
+    }
+    if (connectPromiseRef.current) return connectPromiseRef.current;
+    const socket = ensureSocket();
+    setConnectionState("connecting");
+    connectPromiseRef.current = socket.connect().finally(() => {
+      connectPromiseRef.current = null;
+    });
+    await connectPromiseRef.current;
+  }, [ensureSocket]);
+
+  // Auto-connect when a token is present, without recreating sockets for inline
+  // config object identity changes.
+  useEffect(() => {
+    if (config.token && autoConnect) {
+      void connect().catch(console.error);
+    } else if (!config.token && socketRef.current) {
+      socketRef.current.disconnect();
+      socketRef.current = null;
+    }
+  }, [config.token, autoConnect, connect]);
+
+  useEffect(() => {
     return () => {
       if (socketRef.current) {
         socketRef.current.disconnect();
         socketRef.current = null;
       }
     };
-  }, [config.token, autoConnect, config]);
-
-  const connect = useCallback(async () => {
-    if (!config.token) {
-      throw new Error("Token required to connect");
-    }
-    if (!socketRef.current) {
-      socketRef.current = PokerSocket.fromConfig(config);
-      socketRef.current.on("connect", () => setConnectionState("connected"));
-      socketRef.current.on("disconnect", () => setConnectionState("disconnected"));
-      socketRef.current.on("reconnect", () => setConnectionState("reconnecting"));
-    }
-    setConnectionState("connecting");
-    await socketRef.current.connect();
-  }, [config]);
+  }, []);
 
   const disconnect = useCallback(() => {
     if (socketRef.current) {
@@ -449,4 +464,3 @@ export type {
   UseTablesResult,
   PokerContextValue,
 };
-

@@ -54,7 +54,7 @@ function main() {
   redis.on("connect", () => logger.info("✅ Redis Connected"));
 
   // 2. Initialize Services
-  const chainService = new BlockchainService(prisma, logger);
+  const chainService = new BlockchainService(prisma, logger, redis);
 
   const sweeper = new SweeperService(prisma, chainService, logger);
   const bot = new WithdrawalBot(prisma, redis, chainService, logger);

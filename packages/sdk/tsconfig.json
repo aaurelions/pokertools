@@ -7,7 +7,7 @@
     "jsx": "react-jsx",
     "noEmit": true
   },
-  "include": ["src/**/*", "tsup.config.ts", "vitest.config.ts"],
-  "exclude": ["node_modules", "dist", "tests"],
+  "include": ["src/**/*", "tests/react.test.tsx", "tsup.config.ts", "vitest.config.ts"],
+  "exclude": ["node_modules", "dist"],
   "references": [{ "path": "../types" }]
 }

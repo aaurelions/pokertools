@@ -16,16 +16,20 @@ import { mnemonicToSeedSync } from "@scure/bip39";
 import { config, SECRETS } from "../config.js";
 import type { Logger } from "pino";
 import { decryptXpub } from "../utils/crypto.js";
+import type { Redis } from "ioredis";
 
 export class BlockchainService {
   private publicClients = new Map<number, PublicClient>();
+  private hotWalletClients = new Map<number, WalletClient>();
+  private localNonceCache = new Map<number, number>();
   private masterHDKey: HDKey;
   public hotWalletAccount: Account;
   private cachedDerivationPath: string | null = null;
 
   constructor(
     private prisma: PrismaClient,
-    private logger: Logger
+    private logger: Logger,
+    private redis?: Redis
   ) {
     const seed = mnemonicToSeedSync(SECRETS.MASTER_MNEMONIC);
     this.masterHDKey = HDKey.fromMasterSeed(seed);
@@ -69,8 +73,12 @@ export class BlockchainService {
 
     const transport =
       rpcUrls.length > 1
-        ? fallback(rpcUrls.map((url) => http(url, { retryCount: 3 })))
-        : http(chain.rpcUrl, { retryCount: 3 });
+        ? fallback(
+            rpcUrls.map((url) =>
+              http(url, { retryCount: config.RPC_RETRY_COUNT, retryDelay: config.RPC_RETRY_DELAY_MS, timeout: config.RPC_TIMEOUT_MS })
+            )
+          )
+        : http(chain.rpcUrl, { retryCount: config.RPC_RETRY_COUNT, retryDelay: config.RPC_RETRY_DELAY_MS, timeout: config.RPC_TIMEOUT_MS });
 
     const client = createPublicClient({
       chain: viemChain,
@@ -82,12 +90,65 @@ export class BlockchainService {
   }
 
   getHotWalletClient(chain: Blockchain): WalletClient {
+    if (this.hotWalletClients.has(chain.chainId)) {
+      return this.hotWalletClients.get(chain.chainId)!;
+    }
+
     const publicClient = this.getPublicClient(chain);
-    return createWalletClient({
+    const client = createWalletClient({
       account: this.hotWalletAccount,
       chain: publicClient.chain,
-      transport: http(chain.rpcUrl),
+      transport: http(chain.rpcUrl, { retryCount: config.RPC_RETRY_COUNT, retryDelay: config.RPC_RETRY_DELAY_MS, timeout: config.RPC_TIMEOUT_MS }),
     });
+
+    this.hotWalletClients.set(chain.chainId, client);
+    return client;
+  }
+
+  async getNextHotWalletNonce(chain: Blockchain): Promise<number> {
+    const publicClient = this.getPublicClient(chain);
+    const key = `nonce:hotwallet:${chain.chainId}:${this.hotWalletAccount.address.toLowerCase()}`;
+
+    if (this.redis) {
+      const pendingNonce = await publicClient.getTransactionCount({
+        address: this.hotWalletAccount.address,
+        blockTag: "pending",
+      });
+      const nonce = (await this.redis.eval(
+        `
+        local key = KEYS[1]
+        local pending = tonumber(ARGV[1])
+        local ttl = tonumber(ARGV[2])
+        local current = redis.call('GET', key)
+        if not current or tonumber(current) < pending then
+          redis.call('SET', key, pending, 'EX', ttl)
+          return pending
+        end
+        local nextNonce = redis.call('INCR', key)
+        redis.call('EXPIRE', key, ttl)
+        return nextNonce
+        `,
+        1,
+        key,
+        pendingNonce.toString(),
+        "3600"
+      )) as number;
+      return nonce;
+    }
+
+    const cached = this.localNonceCache.get(chain.chainId);
+    if (cached === undefined) {
+      const pendingNonce = await publicClient.getTransactionCount({
+        address: this.hotWalletAccount.address,
+        blockTag: "pending",
+      });
+      this.localNonceCache.set(chain.chainId, pendingNonce);
+      return pendingNonce;
+    }
+
+    const next = cached + 1;
+    this.localNonceCache.set(chain.chainId, next);
+    return next;
   }
 
   getExplorerLink(chain: Blockchain, hash: `0x${string}`): string {

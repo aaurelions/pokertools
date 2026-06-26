@@ -2,6 +2,9 @@
 // npm install --save-dev prisma dotenv
 import { config } from "dotenv";
 import { defineConfig } from "prisma/config";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // Load appropriate env file based on NODE_ENV
 if (process.env.NODE_ENV === "test") {
@@ -16,8 +19,29 @@ if (!databaseUrl) {
   throw new Error("DATABASE_URL must be set for Prisma commands");
 }
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+function schemaProviderFor(url: string): "sqlite" | "postgresql" {
+  if (url.startsWith("postgresql://") || url.startsWith("postgres://")) return "postgresql";
+  if (url.startsWith("file:")) return "sqlite";
+  throw new Error("DATABASE_URL must start with file:, postgresql://, or postgres://");
+}
+
+function schemaPathFor(url: string): string {
+  const provider = schemaProviderFor(url);
+  const baseSchemaPath = resolve(__dirname, "prisma/schema.prisma");
+  const runtimeDir = resolve(__dirname, ".runtime");
+  const runtimeSchemaPath = resolve(runtimeDir, `schema.${provider}.prisma`);
+  const baseSchema = readFileSync(baseSchemaPath, "utf8");
+  const schema = baseSchema.replace(/provider\s*=\s*"(?:sqlite|postgresql)"/, `provider = "${provider}"`);
+  mkdirSync(runtimeDir, { recursive: true });
+  writeFileSync(runtimeSchemaPath, schema);
+  return runtimeSchemaPath;
+}
+
 export default defineConfig({
-  schema: "prisma/schema.prisma",
+  schema: schemaPathFor(databaseUrl),
   migrations: {
     path: "prisma/migrations",
   },

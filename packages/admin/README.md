@@ -28,7 +28,7 @@ The service sits between the Blockchain, the Database, and the Admin (via Telegr
 │                    └────────┬────────┘   └──────┬────┬────┘      │
 │                             │                   │    │           │
 │                             ▼                   │    │           │
-│                      [(Prisma / SQLite)] ◄───────────┘    │           │
+│                 [(Prisma / PostgreSQL or SQLite)] ◄──────┘ │           │
 │                                                      │           │
 │                                         [(Redis)] ◄──┘           │
 │                                                                  │
@@ -59,7 +59,8 @@ A Telegram bot that acts as a security gatekeeper for outgoing funds.
   3. Bot notifies the admin channel with details (User, Amount, Risk Score).
   4. Admin clicks **Approve** or **Reject** inline button.
   5. If approved, the bot triggers the Hot Wallet to send funds.
-- **Security Checks**: Verifies nonce/timestamp withdrawal signatures, checks daily withdrawal limits, and processes the DB-backed withdrawal outbox created atomically by the API.
+- **Security Checks**: Verifies nonce/timestamp withdrawal signatures when queued and again at approval time, checks daily withdrawal limits, and processes the DB-backed withdrawal outbox created atomically by the API.
+- **Broadcast Safety**: Hot-wallet sends use coordinated nonces, bounded retry/backoff, and a circuit breaker so withdrawals and sweeps do not race each other during RPC instability.
 
 ### 3. Monitors
 
@@ -80,7 +81,7 @@ A specialized contract deployed on each supported chain.
 
 ### Prerequisites
 
-- Node.js v20+
+- Node.js v24+
 - Foundry (for contract compilation)
 - Redis
 - Telegram Bot Token
@@ -91,7 +92,8 @@ Ensure these are set in your `.env`:
 
 ```bash
 # Infrastructure
-DATABASE_URL="file:../.runtime/app.db"
+DATABASE_URL="postgresql://user:pass@localhost:5432/poker"
+# Or for local SQLite tests: DATABASE_URL="file:../.runtime/app.db"
 REDIS_URL="redis://..."
 
 # Blockchain
@@ -108,6 +110,12 @@ TELEGRAM_ADMIN_CHAT_ID="-100..."
 MAX_GAS_PRICE_GWEI=50
 MAX_SINGLE_WITHDRAWAL_USD=1000
 MAX_DAILY_WITHDRAWAL_USD=10000
+RPC_RETRY_COUNT=3
+RPC_RETRY_DELAY_MS=1000
+RPC_TIMEOUT_MS=10000
+CIRCUIT_BREAKER_FAILURE_THRESHOLD=5
+CIRCUIT_BREAKER_OPEN_MS=30000
+WITHDRAWAL_SIGNATURE_MAX_AGE_MS=300000
 ```
 
 ### Installation
@@ -155,6 +163,8 @@ npm test
 - **Cold Storage**: The Hot Wallet should only hold enough funds for daily withdrawals. The Sweeper can be configured to forward excess funds to a Cold Wallet (Multisig).
 - **Rate Limiting**: The Withdrawal Bot enforces strict daily and per-transaction limits.
 - **Signature Verification**: All withdrawals require a valid signature from the user's wallet to prevent replay or impersonation attacks.
+- **Nonce Coordination**: The hot wallet obtains nonces through Redis when available, with a local fallback for single-process tests.
+- **Failure Reconciliation**: Reverted withdrawal transactions are marked failed and refunded through an auditable `REFUND` ledger entry.
 - **Separated Secrets**: Set `WALLET_ENCRYPTION_SECRET` separately from `JWT_SECRET`; wallet encryption must never reuse auth signing secrets.
 - **Sweeping Coverage**: Wallet sweeping paginates through all user wallets instead of only a fixed first page.
 
