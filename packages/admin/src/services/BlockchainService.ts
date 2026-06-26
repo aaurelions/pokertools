@@ -75,10 +75,18 @@ export class BlockchainService {
       rpcUrls.length > 1
         ? fallback(
             rpcUrls.map((url) =>
-              http(url, { retryCount: config.RPC_RETRY_COUNT, retryDelay: config.RPC_RETRY_DELAY_MS, timeout: config.RPC_TIMEOUT_MS })
+              http(url, {
+                retryCount: config.RPC_RETRY_COUNT,
+                retryDelay: config.RPC_RETRY_DELAY_MS,
+                timeout: config.RPC_TIMEOUT_MS,
+              })
             )
           )
-        : http(chain.rpcUrl, { retryCount: config.RPC_RETRY_COUNT, retryDelay: config.RPC_RETRY_DELAY_MS, timeout: config.RPC_TIMEOUT_MS });
+        : http(chain.rpcUrl, {
+            retryCount: config.RPC_RETRY_COUNT,
+            retryDelay: config.RPC_RETRY_DELAY_MS,
+            timeout: config.RPC_TIMEOUT_MS,
+          });
 
     const client = createPublicClient({
       chain: viemChain,
@@ -98,7 +106,11 @@ export class BlockchainService {
     const client = createWalletClient({
       account: this.hotWalletAccount,
       chain: publicClient.chain,
-      transport: http(chain.rpcUrl, { retryCount: config.RPC_RETRY_COUNT, retryDelay: config.RPC_RETRY_DELAY_MS, timeout: config.RPC_TIMEOUT_MS }),
+      transport: http(chain.rpcUrl, {
+        retryCount: config.RPC_RETRY_COUNT,
+        retryDelay: config.RPC_RETRY_DELAY_MS,
+        timeout: config.RPC_TIMEOUT_MS,
+      }),
     });
 
     this.hotWalletClients.set(chain.chainId, client);

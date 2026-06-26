@@ -20,166 +20,163 @@ function tokenFromProtocolHeader(header: string | undefined): string | undefined
 }
 
 export const wsRoutes: FastifyPluginAsync = async (fastify) => {
-  fastify.get(
-    "/play",
-    { websocket: true },
-    async (socket: WebSocket, request) => {
-      const token = request.cookies.token || tokenFromProtocolHeader(request.headers["sec-websocket-protocol"]);
+  fastify.get("/play", { websocket: true }, async (socket: WebSocket, request) => {
+    const token =
+      request.cookies.token || tokenFromProtocolHeader(request.headers["sec-websocket-protocol"]);
 
-      const queuedMessages: Buffer[] = [];
-      let messageHandler: ((data: Buffer) => Promise<void>) | null = null;
-      socket.on("message", (data: Buffer) => {
-        if (messageHandler) {
-          void messageHandler(data);
-        } else {
-          queuedMessages.push(data);
-        }
+    const queuedMessages: Buffer[] = [];
+    let messageHandler: ((data: Buffer) => Promise<void>) | null = null;
+    socket.on("message", (data: Buffer) => {
+      if (messageHandler) {
+        void messageHandler(data);
+      } else {
+        queuedMessages.push(data);
+      }
+    });
+
+    let userId: string;
+    try {
+      if (!token) throw new Error("No token");
+      const decoded = await fastify.jwt.verify<{ userId: string; address: string; jti: string }>(
+        token
+      );
+      userId = decoded.userId;
+
+      // Check session not revoked
+      const session = await fastify.prisma.session.findUnique({
+        where: { jti: decoded.jti },
       });
+      if (!session || session.revoked) throw new Error("Session revoked");
+    } catch {
+      socket.close(4001, "Unauthorized");
+      return;
+    }
 
-      let userId: string;
-      try {
-        if (!token) throw new Error("No token");
-        const decoded = await fastify.jwt.verify<{ userId: string; address: string; jti: string }>(
-          token
-        );
-        userId = decoded.userId;
+    const subscriptions = new Set<string>();
 
-        // Check session not revoked
-        const session = await fastify.prisma.session.findUnique({
-          where: { jti: decoded.jti },
-        });
-        if (!session || session.revoked) throw new Error("Session revoked");
-      } catch {
-        socket.close(4001, "Unauthorized");
+    /**
+     * Helper to send typed messages to client
+     */
+    const sendMessage = (msg: ServerMessage) => {
+      socket.send(JSON.stringify(msg));
+    };
+
+    // Setup heartbeat/ping-pong mechanism to detect dead connections
+    let isAlive = true;
+    const heartbeatInterval = setInterval(() => {
+      if (!isAlive) {
+        // Client didn't respond to ping, terminate connection
+        clearInterval(heartbeatInterval);
+        socket.terminate();
         return;
       }
 
-      const subscriptions = new Set<string>();
+      // Mark as not alive and send ping
+      isAlive = false;
+      socket.ping();
+    }, 30000); // Ping every 30 seconds
 
-      /**
-       * Helper to send typed messages to client
-       */
-      const sendMessage = (msg: ServerMessage) => {
-        socket.send(JSON.stringify(msg));
-      };
+    socket.on("pong", () => {
+      // Client responded, mark as alive
+      isAlive = true;
+    });
 
-      // Setup heartbeat/ping-pong mechanism to detect dead connections
-      let isAlive = true;
-      const heartbeatInterval = setInterval(() => {
-        if (!isAlive) {
-          // Client didn't respond to ping, terminate connection
-          clearInterval(heartbeatInterval);
-          socket.terminate();
-          return;
-        }
-
-        // Mark as not alive and send ping
-        isAlive = false;
-        socket.ping();
-      }, 30000); // Ping every 30 seconds
-
-      socket.on("pong", () => {
-        // Client responded, mark as alive
-        isAlive = true;
-      });
-
-      messageHandler = async (data: Buffer) => {
-        if (data.length > 4096) {
-          const errorMsg: ErrorMessage = {
-            type: "ERROR",
-            code: "MESSAGE_TOO_LARGE",
-            message: "Message exceeds maximum size of 4KB",
-          };
-          sendMessage(errorMsg);
-          return;
-        }
-
-        try {
-          const parsed = JSON.parse(data.toString());
-          const result = safeParseClientMessage(parsed);
-
-          if (!result.success) {
-            const errorMsg: ErrorMessage = {
-              type: "ERROR",
-              code: "INVALID_MESSAGE",
-              message: "Invalid message format",
-              context: { errors: result.error.issues },
-            };
-            sendMessage(errorMsg);
-            return;
-          }
-
-          const message = result.data;
-
-          if (isJoinMessage(message)) {
-            const { tableId, requestId } = message;
-            subscriptions.add(tableId);
-            fastify.socketManager.joinTable(tableId, socket, userId);
-
-            // Send initial state snapshot
-            const state = await fastify.gameManager.getState(tableId, userId);
-            const snapshot: SnapshotMessage = {
-              type: "SNAPSHOT",
-              tableId,
-              state,
-              version: state.version,
-              timestamp: Date.now(),
-            };
-            sendMessage(snapshot);
-
-            // Send acknowledgment if request ID provided
-            if (requestId) {
-              const ack: AckMessage = {
-                type: "ACK",
-                requestId,
-                message: "Joined table successfully",
-              };
-              sendMessage(ack);
-            }
-          } else if (isLeaveMessage(message)) {
-            const { tableId, requestId } = message;
-            subscriptions.delete(tableId);
-            fastify.socketManager.leaveTable(tableId, socket);
-
-            // Send acknowledgment if request ID provided
-            if (requestId) {
-              const ack: AckMessage = {
-                type: "ACK",
-                requestId,
-                message: "Left table successfully",
-              };
-              sendMessage(ack);
-            }
-          } else if (isPingMessage(message)) {
-            const { requestId } = message;
-            const pong: PongMessage = {
-              type: "PONG",
-              requestId,
-              timestamp: Date.now(),
-            };
-            sendMessage(pong);
-          }
-        } catch (err) {
-          const errorMsg: ErrorMessage = {
-            type: "ERROR",
-            code: "INTERNAL_ERROR",
-            message: err instanceof Error ? err.message : "Unknown error",
-          };
-          sendMessage(errorMsg);
-        }
-      };
-
-      for (const queued of queuedMessages.splice(0)) {
-        void messageHandler(queued);
+    messageHandler = async (data: Buffer) => {
+      if (data.length > 4096) {
+        const errorMsg: ErrorMessage = {
+          type: "ERROR",
+          code: "MESSAGE_TOO_LARGE",
+          message: "Message exceeds maximum size of 4KB",
+        };
+        sendMessage(errorMsg);
+        return;
       }
 
-      socket.on("close", () => {
-        clearInterval(heartbeatInterval);
-        for (const tableId of subscriptions) {
-          fastify.socketManager.leaveTable(tableId, socket);
+      try {
+        const parsed = JSON.parse(data.toString());
+        const result = safeParseClientMessage(parsed);
+
+        if (!result.success) {
+          const errorMsg: ErrorMessage = {
+            type: "ERROR",
+            code: "INVALID_MESSAGE",
+            message: "Invalid message format",
+            context: { errors: result.error.issues },
+          };
+          sendMessage(errorMsg);
+          return;
         }
-        subscriptions.clear();
-      });
+
+        const message = result.data;
+
+        if (isJoinMessage(message)) {
+          const { tableId, requestId } = message;
+          subscriptions.add(tableId);
+          fastify.socketManager.joinTable(tableId, socket, userId);
+
+          // Send initial state snapshot
+          const state = await fastify.gameManager.getState(tableId, userId);
+          const snapshot: SnapshotMessage = {
+            type: "SNAPSHOT",
+            tableId,
+            state,
+            version: state.version,
+            timestamp: Date.now(),
+          };
+          sendMessage(snapshot);
+
+          // Send acknowledgment if request ID provided
+          if (requestId) {
+            const ack: AckMessage = {
+              type: "ACK",
+              requestId,
+              message: "Joined table successfully",
+            };
+            sendMessage(ack);
+          }
+        } else if (isLeaveMessage(message)) {
+          const { tableId, requestId } = message;
+          subscriptions.delete(tableId);
+          fastify.socketManager.leaveTable(tableId, socket);
+
+          // Send acknowledgment if request ID provided
+          if (requestId) {
+            const ack: AckMessage = {
+              type: "ACK",
+              requestId,
+              message: "Left table successfully",
+            };
+            sendMessage(ack);
+          }
+        } else if (isPingMessage(message)) {
+          const { requestId } = message;
+          const pong: PongMessage = {
+            type: "PONG",
+            requestId,
+            timestamp: Date.now(),
+          };
+          sendMessage(pong);
+        }
+      } catch (err) {
+        const errorMsg: ErrorMessage = {
+          type: "ERROR",
+          code: "INTERNAL_ERROR",
+          message: err instanceof Error ? err.message : "Unknown error",
+        };
+        sendMessage(errorMsg);
+      }
+    };
+
+    for (const queued of queuedMessages.splice(0)) {
+      void messageHandler(queued);
     }
-  );
+
+    socket.on("close", () => {
+      clearInterval(heartbeatInterval);
+      for (const tableId of subscriptions) {
+        fastify.socketManager.leaveTable(tableId, socket);
+      }
+      subscriptions.clear();
+    });
+  });
 };

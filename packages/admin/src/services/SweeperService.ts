@@ -227,20 +227,17 @@ export class SweeperService {
       this.logger.info(`Sweeping ${owners.length} wallets for ${token.symbol}`);
 
       const nonce = await this.chainService.getNextHotWalletNonce(chain);
-      const hash = await withRetry(
-        async () => {
-          return hotWalletClient.writeContract({
-            address: sweeperAddr,
-            abi: BATCH_ABI,
-            functionName: "batchSweep",
-            args: [token.address as `0x${string}`, owners, amounts, deadlines, vs, rs, ss],
-            chain: null,
-            account: hotWalletClient.account!,
-            nonce,
-          });
-        },
-        this.sweepBreaker
-      );
+      const hash = await withRetry(async () => {
+        return hotWalletClient.writeContract({
+          address: sweeperAddr,
+          abi: BATCH_ABI,
+          functionName: "batchSweep",
+          args: [token.address as `0x${string}`, owners, amounts, deadlines, vs, rs, ss],
+          chain: null,
+          account: hotWalletClient.account!,
+          nonce,
+        });
+      }, this.sweepBreaker);
 
       this.logger.info(`Sweep Tx Sent: ${hash}`);
 

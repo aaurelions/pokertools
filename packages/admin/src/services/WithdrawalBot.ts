@@ -206,20 +206,17 @@ Dest: <code>${meta.address}</code>
 
     // Blockchain Write
     const nonce = await this.chainService.getNextHotWalletNonce(chain);
-    const hash = await withRetry(
-      async () => {
-        return client.writeContract({
-          address: token.address as `0x${string}`,
-          abi: ERC20_ABI,
-          functionName: "transfer",
-          args: [meta.address as `0x${string}`, BigInt(meta.amountRaw)],
-          chain: null,
-          account: client.account!,
-          nonce,
-        });
-      },
-      this.withdrawalBreaker
-    );
+    const hash = await withRetry(async () => {
+      return client.writeContract({
+        address: token.address as `0x${string}`,
+        abi: ERC20_ABI,
+        functionName: "transfer",
+        args: [meta.address as `0x${string}`, BigInt(meta.amountRaw)],
+        chain: null,
+        account: client.account!,
+        nonce,
+      });
+    }, this.withdrawalBreaker);
 
     // DB outbox row was created atomically by the API when the user balance was debited.
     await this.prisma.paymentTransaction.update({
@@ -271,7 +268,10 @@ Dest: <code>${meta.address}</code>
     ]);
   }
 
-  private async verifyWithdrawalProof(meta: WithdrawalMetadata, expectedAddress: string): Promise<boolean> {
+  private async verifyWithdrawalProof(
+    meta: WithdrawalMetadata,
+    expectedAddress: string
+  ): Promise<boolean> {
     try {
       if (!meta.proof) return false;
       const valid = await verifyMessage({

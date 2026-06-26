@@ -13,9 +13,10 @@ export function createPrismaClient(options: PrismaClientOptions = {}) {
     throw new Error("DATABASE_URL must be set");
   }
 
-  const adapter = databaseUrl.startsWith("postgresql://") || databaseUrl.startsWith("postgres://")
-    ? new PrismaPg({ connectionString: databaseUrl })
-    : new PrismaBetterSqlite3({ url: databaseUrl });
+  const adapter =
+    databaseUrl.startsWith("postgresql://") || databaseUrl.startsWith("postgres://")
+      ? new PrismaPg({ connectionString: databaseUrl })
+      : new PrismaBetterSqlite3({ url: databaseUrl });
 
   return new PrismaClient({
     ...options,

@@ -34,7 +34,10 @@ function schemaPathFor(url: string): string {
   const runtimeDir = resolve(__dirname, ".runtime");
   const runtimeSchemaPath = resolve(runtimeDir, `schema.${provider}.prisma`);
   const baseSchema = readFileSync(baseSchemaPath, "utf8");
-  const schema = baseSchema.replace(/provider\s*=\s*"(?:sqlite|postgresql)"/, `provider = "${provider}"`);
+  const schema = baseSchema.replace(
+    /provider\s*=\s*"(?:sqlite|postgresql)"/,
+    `provider = "${provider}"`
+  );
   mkdirSync(runtimeDir, { recursive: true });
   writeFileSync(runtimeSchemaPath, schema);
   return runtimeSchemaPath;

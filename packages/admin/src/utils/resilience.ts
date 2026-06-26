@@ -34,7 +34,10 @@ export class CircuitBreaker {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export async function withRetry<T>(operation: () => Promise<T>, breaker?: CircuitBreaker): Promise<T> {
+export async function withRetry<T>(
+  operation: () => Promise<T>,
+  breaker?: CircuitBreaker
+): Promise<T> {
   let lastError: unknown;
   for (let attempt = 0; attempt <= config.RPC_RETRY_COUNT; attempt++) {
     try {

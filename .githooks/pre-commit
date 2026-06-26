@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Pre-commit hook: format check, lint, and unit tests (compact output).
+# Skip temporarily with: git commit --no-verify
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+echo "▶ pre-commit: format check"
+npm run --silent format:check
+
+echo "▶ pre-commit: lint"
+npm run --silent lint
+
+echo "▶ pre-commit: unit tests (compact)"
+npm run --silent test:quick
+
+echo "✓ pre-commit checks passed"
