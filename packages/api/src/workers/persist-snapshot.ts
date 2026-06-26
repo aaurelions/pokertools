@@ -22,7 +22,7 @@ const worker = new Worker(
       where: { id: tableId },
       data: {
         state: JSON.stringify(snapshot),
-        status: snapshot.phase === "WAITING" ? "WAITING" : "ACTIVE",
+        status: "ACTIVE",
         updatedAt: new Date(),
       },
     });

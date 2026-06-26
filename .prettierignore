@@ -4,8 +4,6 @@ coverage/
 *.min.js
 *.lock
 package-lock.json
-pnpm-lock.yaml
-yarn.lock
 .DS_Store
 **/*.d.ts
 packages/admin/contracts/lib/forge-std

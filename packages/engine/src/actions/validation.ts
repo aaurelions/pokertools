@@ -12,7 +12,7 @@ import {
   ReserveSeatAction,
 } from "@pokertools/types";
 import { IllegalActionError } from "../errors/illegal-action-error";
-import { ErrorCodes } from "../errors/error-codes";
+import { ErrorCodes } from "@pokertools/types";
 import { getPlayerById } from "../utils/positioning";
 
 /**

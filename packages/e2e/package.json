@@ -7,7 +7,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "pretest:docker": "echo '🐳 Building Docker E2E image...' && npm run contracts:build -w @pokertools/admin --if-present",
+    "pretest:docker": "echo '🐳 Building Docker E2E dependencies...' && npm run build -w @pokertools/types && npm run build -w @pokertools/sdk && npm run contracts:build -w @pokertools/admin --if-present",
     "test:docker": "NODE_ENV=test vitest run --config vitest.config.ts"
   },
   "dependencies": {

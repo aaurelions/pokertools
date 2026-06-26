@@ -36,7 +36,7 @@ function main() {
   });
 
   if (config.NODE_ENV === "development") {
-    prisma.$on("query" as never, (e: unknown) => {
+    prisma.$on("query", (e: unknown) => {
       const event = e as PrismaQueryEvent;
       logger.debug({ query: event.query, params: event.params }, "Prisma Query");
     });

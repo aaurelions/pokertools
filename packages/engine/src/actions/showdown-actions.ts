@@ -8,7 +8,7 @@ import {
   Street,
 } from "@pokertools/types";
 import { IllegalActionError } from "../errors/illegal-action-error";
-import { ErrorCodes } from "../errors/error-codes";
+import { ErrorCodes } from "@pokertools/types";
 
 /**
  * Handle SHOW action - player reveals their cards at showdown

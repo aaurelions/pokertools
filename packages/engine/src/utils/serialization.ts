@@ -113,10 +113,10 @@ export function restoreFromSnapshot(snapshot: Snapshot): GameState {
     ...snapshot,
     currentBets,
     timeBanks,
-    timeBankActiveSeat: snapshot.timeBankActiveSeat ?? null, // Backward compatibility
+    timeBankActiveSeat: snapshot.timeBankActiveSeat,
     previousStates,
     initialChips: snapshot.initialChips,
-    rakeThisHand: snapshot.rakeThisHand ?? 0, // Add missing field with default
+    rakeThisHand: snapshot.rakeThisHand,
   } as GameState & { initialChips?: number };
 }
 

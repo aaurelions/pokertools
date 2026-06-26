@@ -1,5 +1,5 @@
 import { PokerEngineError } from "./poker-engine-error";
-import { ErrorCode } from "./error-codes";
+import { ErrorCode } from "@pokertools/types";
 
 /**
  * Error indicating an illegal or invalid action

@@ -73,8 +73,7 @@ module.exports = tseslint.config(
       "no-case-declarations": "off",
       // Allow re-throwing errors (needed for PokerEngine)
       "no-useless-catch": "off",
-      // Allow require() in specific legacy spots (downgraded to warning)
-      "@typescript-eslint/no-require-imports": "warn",
+      "@typescript-eslint/no-require-imports": "error",
       // Allow enum comparisons with string literals (const enums compile to strings)
       "@typescript-eslint/no-unsafe-enum-comparison": "off",
 

@@ -161,26 +161,6 @@ describe("Serialization - Snapshot Functions", () => {
       expect(restored.timeBanks).toBeInstanceOf(Map);
     });
 
-    test("should handle missing rakeThisHand field", () => {
-      const engine = new PokerEngine({
-        smallBlind: 5,
-        bigBlind: 10,
-        maxPlayers: 2,
-      });
-
-      engine.sit(0, "p0", "Player0", 1000);
-      engine.sit(1, "p1", "Player1", 1000);
-      engine.deal();
-
-      const snapshot = createSnapshot(engine.state);
-      // Remove rakeThisHand to simulate old snapshot format
-      delete (snapshot as any).rakeThisHand;
-
-      const restored = restoreFromSnapshot(snapshot);
-
-      expect(restored.rakeThisHand).toBe(0);
-    });
-
     test("should restore previous states recursively", () => {
       const engine = new PokerEngine({
         smallBlind: 5,

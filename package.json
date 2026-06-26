@@ -95,11 +95,8 @@
   "allowScripts": {
     "@prisma/engines@7.8.0": true,
     "@swc/core@1.15.43": true,
-    "esbuild@0.27.0": true,
     "esbuild@0.28.1": true,
-    "esbuild@0.25.12": true,
     "fsevents@2.3.3": true,
-    "microtime@3.1.1": true,
     "msgpackr-extract@3.0.4": true,
     "prisma@7.8.0": true,
     "unrs-resolver@1.12.2": true,

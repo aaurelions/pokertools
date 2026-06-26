@@ -3,7 +3,7 @@
  */
 
 import { IllegalActionError } from "../errors/illegal-action-error";
-import { ErrorCodes } from "../errors/error-codes";
+import { ErrorCodes } from "@pokertools/types";
 import { TIMESTAMP_FUTURE_TOLERANCE_MS } from "./constants";
 
 /**

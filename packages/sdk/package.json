@@ -5,19 +5,19 @@
   "author": "A.Aurelius",
   "license": "MIT",
   "type": "module",
-  "main": "dist/index.js",
-  "module": "dist/index.mjs",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.js"
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
     },
     "./react": {
       "types": "./dist/react/index.d.ts",
-      "import": "./dist/react/index.mjs",
-      "require": "./dist/react/index.js"
+      "import": "./dist/react/index.js",
+      "require": "./dist/react/index.cjs"
     }
   },
   "files": [
@@ -61,7 +61,7 @@
     "access": "public"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=24.0.0"
   },
   "dependencies": {
     "@pokertools/types": "1.0.10"

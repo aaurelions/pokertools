@@ -1,7 +1,7 @@
 import { PokerEngine } from "../../src/engine/poker-engine";
 import { ActionType } from "@pokertools/types";
 import { IllegalActionError } from "../../src/errors/illegal-action-error";
-import { ErrorCodes } from "../../src/errors/error-codes";
+import { ErrorCodes } from "@pokertools/types";
 
 describe("Management Actions - Extended", () => {
   test("STAND during a live hand folds the player and removes them", () => {

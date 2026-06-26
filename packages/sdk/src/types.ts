@@ -39,19 +39,6 @@ export interface PokerSDKConfig {
 }
 
 /**
- * Authentication state
- */
-export interface AuthState {
-  token: string | null;
-  user: {
-    id: string;
-    username: string;
-    address: string;
-  } | null;
-  isAuthenticated: boolean;
-}
-
-/**
  * User balance information
  */
 export interface UserBalances {

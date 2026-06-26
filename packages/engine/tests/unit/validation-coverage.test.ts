@@ -1,5 +1,5 @@
 import { validateChipAmount, validateTimestamp } from "../../src/utils/validation";
-import { ErrorCodes } from "../../src/errors/error-codes";
+import { ErrorCodes } from "@pokertools/types";
 import { IllegalActionError } from "../../src/errors/illegal-action-error";
 
 describe("Validation Utilities", () => {

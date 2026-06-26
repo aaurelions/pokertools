@@ -48,7 +48,6 @@ export {
 // Types
 export type {
   PokerSDKConfig,
-  AuthState,
   UserBalances,
   UserProfile,
   BlockchainInfo,

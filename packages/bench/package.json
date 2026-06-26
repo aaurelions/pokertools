@@ -31,12 +31,11 @@
     "url": "https://github.com/aaurelions/pokertools/issues"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=24.0.0"
   },
   "dependencies": {
     "@pokertools/evaluator": "1.0.10",
     "benchmark": "^2.1.4",
-    "microtime": "^3.1.1",
     "phe": "^0.6.0",
     "poker-evaluator": "^2.1.1",
     "pokersolver": "^2.1.4",

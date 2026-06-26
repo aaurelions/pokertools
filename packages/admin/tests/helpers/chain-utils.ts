@@ -83,8 +83,6 @@ export async function deployContracts() {
   return { usdcAddress, sweeperAddress };
 }
 
-// parseForgeOutput removed as it is no longer needed
-
 export const publicClient = createPublicClient({
   chain: localChain,
   transport: http(ANVIL_RPC),

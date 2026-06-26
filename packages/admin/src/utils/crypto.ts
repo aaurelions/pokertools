@@ -57,12 +57,6 @@ export function decrypt(encryptedData: string): string {
   const salt = combined.subarray(0, SALT_LENGTH);
   const iv = combined.subarray(SALT_LENGTH, SALT_LENGTH + IV_LENGTH);
 
-  if (iv.length !== IV_LENGTH) {
-    console.error(
-      `[Crypto Debug] IV Length Mismatch. Expected: ${IV_LENGTH}, Got: ${iv.length}. Total Buffer: ${combined.length}`
-    );
-  }
-
   const authTag = combined.subarray(
     SALT_LENGTH + IV_LENGTH,
     SALT_LENGTH + IV_LENGTH + AUTH_TAG_LENGTH
