@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import type { Action } from "@pokertools/engine";
+import type { ActionType } from "@pokertools/types";
 import {
-  ActionType,
   isAllowedGameplayAction,
   CreateTableRequest,
   BuyInRequest,
@@ -142,7 +142,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
         await fastify.gameManager.processAction(
           id,
           {
-            type: ActionType.SIT,
+            type: "SIT" as ActionType.SIT,
             playerId: userId,
             playerName: user.username,
             seat,
@@ -287,7 +287,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
         await fastify.gameManager.processAction(
           id,
           {
-            type: ActionType.ADD_CHIPS,
+            type: "ADD_CHIPS" as ActionType.ADD_CHIPS,
             playerId: userId,
             amount: amountNum,
           },
@@ -437,7 +437,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
         // Only remove from table after successful cash out
         await fastify.gameManager.processAction(
           id,
-          { type: ActionType.STAND, playerId: userId },
+          { type: "STAND" as ActionType.STAND, playerId: userId },
           userId
         );
 

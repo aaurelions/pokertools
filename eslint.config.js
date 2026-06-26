@@ -106,7 +106,7 @@ module.exports = tseslint.config(
   // These files are NOT in your main tsconfig.json, so we must disable
   // type-checked rules for them to prevent parsing errors.
   {
-    files: ["**/tests/**/*.ts", "**/*.test.ts", "packages/bench/**/*.ts", "packages/api/scripts/**/*.ts", "packages/api/examples/**/*.ts", "*.config.js"],
+    files: ["**/tests/**/*.ts", "**/*.test.ts", "packages/bench/**/*.ts", "packages/api/scripts/**/*.ts", "packages/api/scripts/**/*.mjs", "packages/api/examples/**/*.ts", "*.config.js"],
     // This instructs the parser NOT to look for a tsconfig for these files
     extends: [tseslint.configs.disableTypeChecked],
     rules: {

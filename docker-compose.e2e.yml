@@ -32,6 +32,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: ghcr.io/aaurelions/pokertools:e2e
+    pull_policy: build
     restart: unless-stopped
     ports:
       - "3000:3000"
@@ -66,6 +67,7 @@ services:
   # ---- Worker (deposit monitor, game workers) ----
   worker:
     image: ghcr.io/aaurelions/pokertools:e2e
+    pull_policy: never
     restart: unless-stopped
     depends_on:
       redis:

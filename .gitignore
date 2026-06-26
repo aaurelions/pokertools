@@ -4,12 +4,14 @@ node_modules/
 # Build output
 dist/
 generated/
+packages/api/prisma/schema.sql
 .tsbuildinfo
 packages/admin/contracts/out/
 packages/admin/cache/
 
 # Runtime (temp files, logs, databases, Redis data)
 .runtime/
+dump.rdb
 
 # Environment variables
 .env

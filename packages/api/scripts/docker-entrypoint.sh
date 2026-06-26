@@ -27,18 +27,15 @@ RUNTIME_DIR="$(dirname "$(echo "$DATABASE_URL" | sed 's|^file:||')")"
 mkdir -p "/app/packages/api/${RUNTIME_DIR#../}" 2>/dev/null || true
 mkdir -p "/app/packages/api/.runtime" 2>/dev/null || true
 
-# ----- Synchronise Prisma schema ------------------------------------------
+# ----- Synchronise database schema ---------------------------------------
 echo "--- Syncing database schema ---"
 cd /app/packages/api
 
-# prisma db push synchronises the Prisma schema with the database without
-# requiring a complete migration history.  --accept-data-loss allows
-# non-destructive column/table drops that the schema file no longer defines.
-# This is the same approach used by packages/api/scripts/ensure-db.sh and is
-# safe for local development with SQLite.  In a PostgreSQL production
-# environment, replace with `npx prisma migrate deploy` after ensuring a
-# complete migration history exists.
-npx prisma db push --accept-data-loss
+# Runtime sync via the JS helper (better-sqlite3 + schema.sql).
+# For SQLite it bootstraps the database if empty; for other datasources
+# (e.g. PostgreSQL) it logs a message and exits cleanly — external
+# migration tooling should be used in those environments.
+node scripts/sync-db.mjs
 
 echo "--- Schema sync complete ---"
 

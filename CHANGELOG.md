@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.7] - 2026-06-26
+
+### Changed
+
+- Reduced the production Docker image footprint by pruning dev-only workspaces and unused peer dependency tooling from the API runtime image.
+- Docker runtime database bootstrap now uses build-generated SQLite DDL instead of requiring the Prisma CLI in the production image.
+
+### Fixed
+
+- Docker Compose E2E now always reuses the locally built API image for the worker service.
+- Hardened generated SQLite DDL ordering for future trigger/index support.
+
 ## [1.0.6] - 2026-06-26
 
 ### Fixed
@@ -327,6 +339,7 @@ Given a version number MAJOR.MINOR.PATCH:
 - [NPM: @pokertools/evaluator](https://www.npmjs.com/package/@pokertools/evaluator)
 - [NPM: @pokertools/types](https://www.npmjs.com/package/@pokertools/types)
 
+[1.0.7]: https://github.com/aaurelions/pokertools/compare/v1.0.6...v1.0.7
 [1.0.6]: https://github.com/aaurelions/pokertools/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/aaurelions/pokertools/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/aaurelions/pokertools/compare/v1.0.3...v1.0.4
