@@ -1,4 +1,4 @@
-import { PokerEngine } from "../../src/engine/PokerEngine";
+import { PokerEngine } from "../../src/engine/poker-engine";
 import { ActionType, PlayerStatus, Street } from "@pokertools/types";
 
 describe("Special Actions - TIMEOUT and TIME_BANK", () => {

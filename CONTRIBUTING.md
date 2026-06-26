@@ -10,8 +10,8 @@ Be respectful and constructive in all interactions. We're all here to build grea
 
 ### Prerequisites
 
-- Node.js 18.x or higher
-- npm 7.x or higher
+- Node.js 24.x or higher
+- npm 10.x or higher
 - Git
 
 ### Setup Development Environment
@@ -38,6 +38,10 @@ This is a monorepo with multiple packages:
 - `packages/types` - TypeScript type definitions
 - `packages/evaluator` - Hand evaluator
 - `packages/engine` - Poker game engine
+- `packages/api` - REST/WebSocket API service
+- `packages/sdk` - TypeScript and React client SDK
+- `packages/admin` - Fund sweeping and withdrawal administration service
+- `packages/e2e` - Docker-based end-to-end tests
 - `packages/bench` - Performance benchmarks (private)
 
 ## Development Workflow
@@ -157,10 +161,19 @@ describe('Feature Name', () => {
 - Use `readonly` for immutable properties
 - Avoid `any` - use proper types
 
+### File and Import Naming
+
+- Use lowercase kebab-case filenames for TypeScript source, test, helper, and script files (for example, `game-reducer.ts`, `side-pots.test.ts`, and `prisma-client.ts`).
+- Keep conventional entrypoint and config names such as `index.ts`, `index.tsx`, `config.ts`, `app.ts`, `server.ts`, `setup.ts`, `*.config.ts`, `fastify.d.ts`, and `shims.d.ts`.
+- Keep exported TypeScript identifiers in normal TypeScript casing: `UpperCamelCase` for classes/interfaces/types/enums, `lowerCamelCase` for functions/variables/properties, and `CONSTANT_CASE` only for true module-level constants.
+- Update import/export specifiers to match disk casing exactly. Public package imports should flow through package entrypoints unless a subpath export is intentionally supported.
+- Do not rename Solidity contract files as part of TypeScript naming cleanup unless deploy tooling and imports are updated with special care.
+
 ### Formatting
 
-- Run the linter before committing:
+- Run the formatter and linter before committing:
   ```bash
+  npm run format
   npm run lint
   ```
 

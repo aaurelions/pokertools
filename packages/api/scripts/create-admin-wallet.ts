@@ -8,7 +8,7 @@
  *   npx tsx scripts/create-admin-wallet.ts "Production Hot Wallet" "xpub6CUGRUonZS..."
  */
 
-import { createPrismaClient } from "../src/utils/prismaClient.js";
+import { createPrismaClient } from "../src/utils/prisma-client.js";
 import { encryptXpub } from "../src/utils/crypto.js";
 
 const prisma = createPrismaClient();

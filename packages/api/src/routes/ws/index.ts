@@ -19,6 +19,12 @@ function tokenFromProtocolHeader(header: string | undefined): string | undefined
   return bearer?.slice(4);
 }
 
+const MAX_CONNECTIONS_PER_USER = 4;
+const MAX_PRE_AUTH_QUEUE = 8;
+const MAX_BUFFERED_BYTES = 1_000_000;
+
+const userConnectionCounts = new Map<string, number>();
+
 export const wsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/play", { websocket: true }, async (socket: WebSocket, request) => {
     const token =
@@ -30,6 +36,10 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
       if (messageHandler) {
         void messageHandler(data);
       } else {
+        if (queuedMessages.length >= MAX_PRE_AUTH_QUEUE) {
+          socket.close(1008, "Pre-authentication message limit exceeded");
+          return;
+        }
         queuedMessages.push(data);
       }
     });
@@ -46,11 +56,20 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
       const session = await fastify.prisma.session.findUnique({
         where: { jti: decoded.jti },
       });
-      if (!session || session.revoked) throw new Error("Session revoked");
+      if (!session || session.revoked || session.expiresAt <= new Date()) {
+        throw new Error("Session invalid");
+      }
     } catch {
       socket.close(4001, "Unauthorized");
       return;
     }
+
+    const existingConnections = userConnectionCounts.get(userId) ?? 0;
+    if (existingConnections >= MAX_CONNECTIONS_PER_USER) {
+      socket.close(1008, "Connection limit exceeded");
+      return;
+    }
+    userConnectionCounts.set(userId, existingConnections + 1);
 
     const subscriptions = new Set<string>();
 
@@ -58,6 +77,10 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
      * Helper to send typed messages to client
      */
     const sendMessage = (msg: ServerMessage) => {
+      if (socket.bufferedAmount > MAX_BUFFERED_BYTES) {
+        socket.close(1009, "WebSocket backpressure limit exceeded");
+        return;
+      }
       socket.send(JSON.stringify(msg));
     };
 
@@ -173,6 +196,12 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
 
     socket.on("close", () => {
       clearInterval(heartbeatInterval);
+      const currentCount = userConnectionCounts.get(userId) ?? 0;
+      if (currentCount <= 1) {
+        userConnectionCounts.delete(userId);
+      } else {
+        userConnectionCounts.set(userId, currentCount - 1);
+      }
       for (const tableId of subscriptions) {
         fastify.socketManager.leaveTable(tableId, socket);
       }

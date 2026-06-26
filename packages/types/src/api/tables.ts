@@ -1,5 +1,5 @@
-import { TableConfig } from "../Config";
-import { PublicState } from "../PublicState";
+import { TableConfig } from "../config";
+import { PublicState } from "../public-state";
 import { TableStatus } from "./common";
 
 export interface TableListItem {

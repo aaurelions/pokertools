@@ -6,7 +6,14 @@ import {
   ActionType,
 } from "@pokertools/types";
 import { getPlayerById } from "../utils/positioning";
-import { getNextToAct } from "../rules/actionOrder";
+import { getNextToAct } from "../rules/action-order";
+
+function getTotalPot(state: GameState): number {
+  let total = 0;
+  for (const pot of state.pots) total += pot.amount;
+  for (const bet of state.currentBets.values()) total += bet;
+  return total;
+}
 
 /**
  * Handle TIMEOUT action
@@ -49,19 +56,30 @@ export function handleTimeout(state: GameState, action: TimeoutAction): GameStat
     ? state.activePlayers.filter((s) => s !== seat)
     : state.activePlayers;
 
+  const actionRecord = {
+    action,
+    seat,
+    resultingPot: getTotalPot(state),
+    resultingStack: newPlayers[seat]?.stack ?? 0,
+    street: state.street,
+  };
+
   const newState: GameState = {
     ...state,
     players: newPlayers,
     activePlayers: newActivePlayers,
+    actionHistory: [...state.actionHistory, actionRecord],
     timestamp: action.timestamp!,
   };
 
   // Move to next player
   const nextToAct = getNextToAct(newState);
+  const actionableNext =
+    nextToAct !== null && !newPlayers[nextToAct]?.isSittingOut ? nextToAct : null;
 
   return {
     ...newState,
-    actionTo: nextToAct,
+    actionTo: actionableNext === seat ? null : actionableNext,
   };
 }
 

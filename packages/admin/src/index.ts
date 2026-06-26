@@ -1,12 +1,12 @@
-import { createPrismaClient } from "./utils/prismaClient.js";
+import { createPrismaClient } from "./utils/prisma-client.js";
 import Redis from "ioredis";
 import pino from "pino";
 import { config } from "./config.js";
-import { BlockchainService } from "./services/BlockchainService.js";
-import { SweeperService } from "./services/SweeperService.js";
-import { WithdrawalBot } from "./services/WithdrawalBot.js";
-import { GasMonitor } from "./services/GasMonitor.js";
-import { TransactionMonitor } from "./services/TransactionMonitor.js";
+import { BlockchainService } from "./services/blockchain-service.js";
+import { SweeperService } from "./services/sweeper-service.js";
+import { WithdrawalBot } from "./services/withdrawal-bot.js";
+import { GasMonitor } from "./services/gas-monitor.js";
+import { TransactionMonitor } from "./services/transaction-monitor.js";
 
 interface PrismaQueryEvent {
   timestamp: Date;

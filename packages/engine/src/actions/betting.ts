@@ -12,8 +12,8 @@ import {
   Winner,
 } from "@pokertools/types";
 import { getPlayerById } from "../utils/positioning";
-import { getNextToAct } from "../rules/actionOrder";
-import { CriticalStateError } from "../errors/CriticalStateError";
+import { getNextToAct } from "../rules/action-order";
+import { CriticalStateError } from "../errors/critical-state-error";
 import { calculateRake } from "../utils/rake";
 
 /**

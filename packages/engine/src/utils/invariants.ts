@@ -1,5 +1,5 @@
 import { GameState } from "@pokertools/types";
-import { CriticalStateError } from "../errors/CriticalStateError";
+import { CriticalStateError } from "../errors/critical-state-error";
 
 /**
  * Audit chip conservation
@@ -10,7 +10,9 @@ import { CriticalStateError } from "../errors/CriticalStateError";
  * @throws CriticalStateError if chips don't match
  */
 export function auditChipConservation(state: GameState, initialChips: number): void {
-  const currentChips = getInitialChips(state);
+  const handComplete =
+    state.winners !== null && state.pots.length === 0 && state.currentBets.size === 0;
+  const currentChips = calculateTotalChips(state) + (handComplete ? state.rakeThisHand : 0);
 
   if (currentChips !== initialChips) {
     throw new CriticalStateError(
@@ -85,6 +87,11 @@ export function calculateBetTotal(state: GameState): number {
  * - After hand complete: stack + rake (all chips have been distributed, rake removed)
  */
 export function getInitialChips(state: GameState): number {
+  const baseline = (state as GameState & { initialChips?: number }).initialChips;
+  if (typeof baseline === "number") {
+    return baseline;
+  }
+
   let total = 0;
 
   // Hand is complete if winners are declared AND pots/bets have been distributed
@@ -124,7 +131,8 @@ export function validateGameStateIntegrity(state: GameState): void {
   }
 
   // 1. Chip conservation
-  const initialChips = getInitialChips(state);
+  const baseline = (state as GameState & { initialChips?: number }).initialChips;
+  const initialChips = typeof baseline === "number" ? baseline : getInitialChips(state);
   auditChipConservation(state, initialChips);
 
   // 2. No negative stacks

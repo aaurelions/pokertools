@@ -1,7 +1,7 @@
 import { Worker } from "bullmq";
 import { Redis } from "ioredis";
 import { config } from "../config.js";
-import { createPrismaClient } from "../utils/prismaClient.js";
+import { createPrismaClient } from "../utils/prisma-client.js";
 
 const prisma = createPrismaClient();
 const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });

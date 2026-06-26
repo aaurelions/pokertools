@@ -7,9 +7,9 @@ const withdrawSchema = z.object({
   blockchainId: z.string().cuid(),
   tokenId: z.string().cuid(),
   address: z.string().regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address"),
-  message: z.string(),
+  message: z.string().min(1).max(1024),
   signature: z.string().regex(/^0x[a-fA-F0-9]{130}$/, "Invalid signature format"),
-  idempotencyKey: z.string().optional(),
+  idempotencyKey: z.string().min(8).max(128).optional(),
 });
 
 export const userRoutes: FastifyPluginAsync = async (fastify) => {
@@ -77,7 +77,6 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
     if (!validation.success) {
       return reply.code(400).send({
         error: "Validation failed",
-        details: validation.error.issues,
       });
     }
 

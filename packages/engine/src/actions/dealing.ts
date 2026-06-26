@@ -1,8 +1,8 @@
 import { GameState, Street, PlayerStatus, DealAction, Pot, SitInOption } from "@pokertools/types";
 import { createDeck, shuffle, dealCards } from "../utils/deck";
-import { cardCodesToStrings } from "../utils/cardUtils";
+import { cardCodesToStrings } from "../utils/card-utils";
 import { getBlindPositions } from "../rules/blinds";
-import { getFirstToAct } from "../rules/actionOrder";
+import { getFirstToAct } from "../rules/action-order";
 import { getNextOccupiedSeat, getNextSeat } from "../utils/positioning";
 
 /**
@@ -278,7 +278,7 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
     return player.status === PlayerStatus.ACTIVE;
   });
 
-  const newState: GameState = {
+  const newState = {
     ...state,
     handNumber: state.handNumber + 1,
     handId: `hand-${action.timestamp!}-${Math.floor(rng() * 1000000)}`,
@@ -289,6 +289,9 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
     players: newPlayers,
     pots,
     currentBets,
+    initialChips:
+      newPlayers.reduce((sum, player) => sum + (player ? player.stack : 0), 0) +
+      Array.from(currentBets.values()).reduce((sum, amount) => sum + amount, 0),
     minRaise: state.bigBlind,
     lastRaiseAmount: state.bigBlind,
     activePlayers,
@@ -296,7 +299,7 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
     rakeThisHand: 0,
     actionHistory: [],
     timestamp: action.timestamp!,
-  };
+  } as GameState & { initialChips?: number };
 
   // Set first to act
   const firstToAct = getFirstToAct(newState);

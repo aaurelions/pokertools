@@ -1,10 +1,10 @@
 import fp from "fastify-plugin";
 import type { FastifyPluginAsync } from "fastify";
-import { GameManager } from "../services/GameManager.js";
-import { FinancialManager } from "../services/FinancialManager.js";
-import { SocketManager } from "../services/SocketManager.js";
-import { BlockchainManager } from "../services/BlockchainManager.js";
-import { NotesManager } from "../services/NotesManager.js";
+import { GameManager } from "../services/game-manager.js";
+import { FinancialManager } from "../services/financial-manager.js";
+import { SocketManager } from "../services/socket-manager.js";
+import { BlockchainManager } from "../services/blockchain-manager.js";
+import { NotesManager } from "../services/notes-manager.js";
 
 const servicesPlugin: FastifyPluginAsync = async (fastify) => {
   // Initialize services

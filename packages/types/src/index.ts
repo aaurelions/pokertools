@@ -1,15 +1,15 @@
 // Export all types
-export * from "./Player";
-export * from "./Pot";
-export * from "./Config";
-export * from "./Action";
-export * from "./ActionWhitelist";
-export * from "./GameState";
-export * from "./PublicState";
-export * from "./HandHistory";
+export * from "./player";
+export * from "./pot";
+export * from "./config";
+export * from "./action";
+export * from "./action-whitelist";
+export * from "./game-state";
+export * from "./public-state";
+export * from "./hand-history";
 export * from "./schemas";
-export * from "./WebSocketMessages";
-export * from "./ErrorCodes";
+export * from "./web-socket-messages";
+export * from "./error-codes";
 
 // API DTOs
 export * from "./api/common";

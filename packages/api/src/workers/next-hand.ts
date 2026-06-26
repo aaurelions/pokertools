@@ -3,7 +3,7 @@ import { Redis } from "ioredis";
 import Redlock from "redlock";
 import { config } from "../config.js";
 import { PokerEngine, type Snapshot as EngineSnapshot } from "@pokertools/engine";
-import { createPrismaClient } from "../utils/prismaClient.js";
+import { createPrismaClient } from "../utils/prisma-client.js";
 
 const prisma = createPrismaClient();
 const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });

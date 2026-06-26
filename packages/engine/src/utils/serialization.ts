@@ -29,6 +29,7 @@ export interface Snapshot {
   readonly timeBankActiveSeat: number | null;
   readonly actionHistory: ActionRecord[];
   readonly previousStates: Snapshot[]; // Truncated
+  readonly initialChips?: number;
   readonly timestamp: number;
   readonly handId: string;
 }
@@ -49,8 +50,14 @@ export function createSnapshot(state: GameState): Snapshot {
     timeBanks[seat] = time;
   }
 
-  // Truncate previous states (keep last 10 only)
-  const previousStates = state.previousStates.slice(-10).map((s) => createSnapshot(s));
+  // Truncate previous states and do not recursively serialize nested undo
+  // histories, avoiding exponential snapshot growth.
+  const previousStates = state.previousStates.slice(-10).map((s) =>
+    createSnapshot({
+      ...s,
+      previousStates: [],
+    })
+  );
 
   return {
     config: state.config,
@@ -78,6 +85,7 @@ export function createSnapshot(state: GameState): Snapshot {
     timeBankActiveSeat: state.timeBankActiveSeat,
     actionHistory: Array.from(state.actionHistory),
     previousStates,
+    initialChips: (state as GameState & { initialChips?: number }).initialChips,
     timestamp: state.timestamp,
     handId: state.handId,
   };
@@ -107,8 +115,9 @@ export function restoreFromSnapshot(snapshot: Snapshot): GameState {
     timeBanks,
     timeBankActiveSeat: snapshot.timeBankActiveSeat ?? null, // Backward compatibility
     previousStates,
-    rakeThisHand: snapshot.rakeThisHand || 0, // Add missing field with default
-  } as GameState;
+    initialChips: snapshot.initialChips,
+    rakeThisHand: snapshot.rakeThisHand ?? 0, // Add missing field with default
+  } as GameState & { initialChips?: number };
 }
 
 /**

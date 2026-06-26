@@ -11,8 +11,8 @@ import {
   AddChipsAction,
   ReserveSeatAction,
 } from "@pokertools/types";
-import { IllegalActionError } from "../errors/IllegalActionError";
-import { ErrorCodes } from "../errors/ErrorCodes";
+import { IllegalActionError } from "../errors/illegal-action-error";
+import { ErrorCodes } from "../errors/error-codes";
 import { getPlayerById } from "../utils/positioning";
 
 /**
@@ -138,8 +138,12 @@ function validateBettingAction(state: GameState, action: Action): void {
       // Note: We allow BET even when currentBet > 0 because the reducer will auto-convert it to RAISE or CALL
       // This handles UI implementations that don't distinguish between BET and RAISE buttons
       if ("amount" in action) {
+        if (currentBet > 0) {
+          validateBetAsRaise(state, action, seat, playerBet, currentBet, player.stack);
+          break;
+        }
         // Reject bets below the current bet (string bet exploit)
-        if (currentBet > 0 && action.amount < currentBet) {
+        if (action.amount < currentBet) {
           throw new IllegalActionError(
             ErrorCodes.BET_TOO_SMALL,
             `Bet of ${action.amount} is below current bet ${currentBet}`,
@@ -210,6 +214,44 @@ function validateBettingAction(state: GameState, action: Action): void {
         }
       }
       break;
+  }
+}
+
+function validateBetAsRaise(
+  state: GameState,
+  action: Action,
+  seat: number,
+  playerBet: number,
+  currentBet: number,
+  playerStack: number
+): void {
+  if (!("amount" in action)) return;
+  const amount = action.amount;
+  if (typeof amount !== "number") return;
+
+  if (state.lastAggressorSeat === seat) {
+    throw new IllegalActionError(
+      ErrorCodes.CANNOT_RERAISE,
+      "Betting has not been re-opened to you (incomplete raise or no action)",
+      { playerId: action.playerId, seat, lastAggressor: state.lastAggressorSeat }
+    );
+  }
+
+  const isAllIn = amount >= playerBet + playerStack;
+  if (amount <= currentBet && !isAllIn) {
+    throw new IllegalActionError(
+      ErrorCodes.RAISE_TOO_SMALL,
+      `Raise to ${amount} must be greater than current bet ${currentBet}`,
+      { amount, currentBet }
+    );
+  }
+
+  if (!isAllIn && amount < state.minRaise) {
+    throw new IllegalActionError(
+      ErrorCodes.RAISE_TOO_SMALL,
+      `Raise to ${amount} is below minimum ${state.minRaise}`,
+      { amount, currentBet, minRaise: state.minRaise }
+    );
   }
 }
 

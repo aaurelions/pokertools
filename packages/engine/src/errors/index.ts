@@ -1,6 +1,6 @@
 // Export all errors
-export * from "./PokerEngineError";
-export * from "./CriticalStateError";
-export * from "./IllegalActionError";
-export * from "./ConfigError";
+export * from "./poker-engine-error";
+export * from "./critical-state-error";
+export * from "./illegal-action-error";
+export * from "./config-error";
 // ErrorCodes now exported from @pokertools/types

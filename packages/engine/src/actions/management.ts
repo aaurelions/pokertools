@@ -81,6 +81,8 @@ export function handleStand(state: GameState, action: StandAction): GameState {
   }
 
   // 2. Remove player from table (Standard Stand Logic)
+  const chipsLeavingTable = currentState.players[seat]?.stack ?? 0;
+  const currentBaseline = (currentState as GameState & { initialChips?: number }).initialChips;
   const newPlayers = [...currentState.players];
   newPlayers[seat] = null;
 
@@ -98,6 +100,8 @@ export function handleStand(state: GameState, action: StandAction): GameState {
     players: newPlayers,
     activePlayers: newActivePlayers,
     timeBanks: newTimeBanks,
+    initialChips:
+      typeof currentBaseline === "number" ? currentBaseline - chipsLeavingTable : undefined,
     timestamp: action.timestamp!,
   };
 }

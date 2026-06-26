@@ -1,4 +1,4 @@
-import { PokerEngine } from "../../src/engine/PokerEngine";
+import { PokerEngine } from "../../src/engine/poker-engine";
 import { ActionType } from "@pokertools/types";
 import {
   createSnapshot,

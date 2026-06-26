@@ -10,7 +10,7 @@ import crypto from "node:crypto";
 
 // ---- Prisma client (from API generated client) ----
 // @ts-ignore - Cross-package source import; resolved by vitest at runtime
-import { createPrismaClient } from "../../../api/src/utils/prismaClient.js";
+import { createPrismaClient } from "../../../api/src/utils/prisma-client.js";
 
 export { createPrismaClient };
 

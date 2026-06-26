@@ -1,5 +1,5 @@
 import { HDKey } from "@scure/bip32";
-import { createPrismaClient } from "../src/utils/prismaClient.js";
+import { createPrismaClient } from "../src/utils/prisma-client.js";
 
 const prisma = createPrismaClient();
 

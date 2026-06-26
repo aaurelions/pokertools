@@ -8,15 +8,15 @@ import {
   localChain,
 } from "../helpers/chain-utils.js";
 import { type PrismaClient, type User } from "../../../api/generated/prisma/index.js";
-import { createPrismaClient } from "../../src/utils/prismaClient.js";
-import { BlockchainService } from "../../src/services/BlockchainService.js";
-import { SweeperService } from "../../src/services/SweeperService.js";
-import { WithdrawalBot } from "../../src/services/WithdrawalBot.js";
-import { TransactionMonitor } from "../../src/services/TransactionMonitor.js";
+import { createPrismaClient } from "../../src/utils/prisma-client.js";
+import { BlockchainService } from "../../src/services/blockchain-service.js";
+import { SweeperService } from "../../src/services/sweeper-service.js";
+import { WithdrawalBot } from "../../src/services/withdrawal-bot.js";
+import { TransactionMonitor } from "../../src/services/transaction-monitor.js";
 
-import { BlockchainManager } from "../../../api/src/services/BlockchainManager.js";
-import { FinancialManager } from "../../../api/src/services/FinancialManager.js";
-import { GameManager } from "../../../api/src/services/GameManager.js";
+import { BlockchainManager } from "../../../api/src/services/blockchain-manager.js";
+import { FinancialManager } from "../../../api/src/services/financial-manager.js";
+import { GameManager } from "../../../api/src/services/game-manager.js";
 import { createDepositMonitorWorker } from "../../../api/src/workers/deposit-monitor.js";
 import { encryptXpub } from "../../../api/src/utils/crypto.js";
 import { HDKey } from "@scure/bip32";

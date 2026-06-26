@@ -1,5 +1,5 @@
 // Main Engine Class
-export { PokerEngine } from "./engine/PokerEngine";
+export { PokerEngine } from "./engine/poker-engine";
 
 // Types (re-exported from @pokertools/types for convenience)
 export * from "@pokertools/types";
@@ -9,7 +9,7 @@ export * from "./errors";
 
 // Utilities (for advanced usage)
 export { createSnapshot, restoreFromSnapshot, Snapshot } from "./utils/serialization";
-export { createPublicView } from "./utils/viewMasking";
+export { createPublicView } from "./utils/view-masking";
 export { calculateTotalChips, auditChipConservation } from "./utils/invariants";
 
 // Hand History

@@ -8,7 +8,7 @@
  */
 
 import { ActionType } from "@pokertools/types";
-import { PokerEngine } from "../../src/engine/PokerEngine";
+import { PokerEngine } from "../../src/engine/poker-engine";
 
 describe("Heads-up Multi-Hand Bug", () => {
   it("should handle multiple hands in heads-up without ActionTo invariant failure", () => {

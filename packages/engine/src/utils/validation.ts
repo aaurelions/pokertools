@@ -2,8 +2,8 @@
  * Validation utilities for chip amounts and other game values
  */
 
-import { IllegalActionError } from "../errors/IllegalActionError";
-import { ErrorCodes } from "../errors/ErrorCodes";
+import { IllegalActionError } from "../errors/illegal-action-error";
+import { ErrorCodes } from "../errors/error-codes";
 import { TIMESTAMP_FUTURE_TOLERANCE_MS } from "./constants";
 
 /**

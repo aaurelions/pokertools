@@ -1,4 +1,4 @@
-import { PokerEngine } from "../../src/engine/PokerEngine";
+import { PokerEngine } from "../../src/engine/poker-engine";
 import { ActionType, PlayerStatus, SitInOption } from "@pokertools/types";
 
 describe("Management Actions", () => {

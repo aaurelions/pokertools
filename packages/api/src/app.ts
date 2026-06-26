@@ -75,13 +75,11 @@ export async function buildApp() {
     credentials: true,
   });
 
-  // Disable rate limiting in test environment
-  if (config.NODE_ENV !== "test") {
-    await app.register(rateLimit, {
-      max: 100,
-      timeWindow: "1 minute",
-    });
-  }
+  await app.register(rateLimit, {
+    global: config.NODE_ENV !== "test",
+    max: 100,
+    timeWindow: "1 minute",
+  });
 
   // JWT
   await app.register(jwt, {
@@ -125,11 +123,13 @@ export async function buildApp() {
   app.decorate("authenticate", async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       await request.jwtVerify();
-      // Check session not revoked
+      // Check session not revoked or expired. JWT expiry and DB session expiry are
+      // both enforced so server-side revocation/expiry cannot be bypassed with a
+      // still-valid token.
       const { jti } = request.user;
       const session = await app.prisma.session.findUnique({ where: { jti } });
-      if (session === null || session.revoked) {
-        throw new Error("Session revoked");
+      if (session === null || session.revoked || session.expiresAt <= new Date()) {
+        throw new Error("Session invalid");
       }
     } catch (_err) {
       await reply.code(401).send({ error: "Unauthorized" });

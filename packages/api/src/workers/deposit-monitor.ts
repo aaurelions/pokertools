@@ -2,10 +2,10 @@ import { Worker, type Job } from "bullmq";
 import { PrismaClient } from "../../generated/prisma/index.js";
 import { Redis } from "ioredis";
 import { config } from "../config.js";
-import { BlockchainManager } from "../services/BlockchainManager.js";
+import { BlockchainManager } from "../services/blockchain-manager.js";
 import { parseAbi } from "viem";
 import type { FastifyInstance } from "fastify";
-import { createPrismaClient } from "../utils/prismaClient.js";
+import { createPrismaClient } from "../utils/prisma-client.js";
 
 // ABI for ERC20 Transfer event and BalanceOf
 const ERC20_ABI = parseAbi([

@@ -4,11 +4,11 @@ import type { Redis } from "ioredis";
 import type Redlock from "redlock";
 import type { Queue } from "bullmq";
 import type { FastifyRequest, FastifyReply } from "fastify";
-import type { GameManager } from "../src/services/GameManager.js";
-import type { SocketManager } from "../src/services/SocketManager.js";
-import type { FinancialManager } from "../src/services/FinancialManager.js";
-import type { BlockchainManager } from "../src/services/BlockchainManager.js";
-import type { NotesManager } from "../src/services/NotesManager.js";
+import type { GameManager } from "../src/services/game-manager.js";
+import type { SocketManager } from "../src/services/socket-manager.js";
+import type { FinancialManager } from "../src/services/financial-manager.js";
+import type { BlockchainManager } from "../src/services/blockchain-manager.js";
+import type { NotesManager } from "../src/services/notes-manager.js";
 
 declare module "@fastify/jwt" {
   interface FastifyJWT {

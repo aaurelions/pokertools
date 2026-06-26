@@ -1,6 +1,6 @@
 import { calculateTotalChips, auditChipConservation } from "../../src/utils/invariants";
 import { GameState, Player } from "@pokertools/types";
-import { CriticalStateError } from "../../src/errors/CriticalStateError";
+import { CriticalStateError } from "../../src/errors/critical-state-error";
 
 function createTestState(stacks: number[], pots: number[], bets: number[]): GameState {
   const players: Array<Player | null> = stacks.map((stack, i) => ({

@@ -1,6 +1,6 @@
 import { GameState } from "@pokertools/types";
 import { getNextSeat } from "../utils/positioning";
-import { isHeadsUp } from "./headsUp";
+import { isHeadsUp } from "./heads-up";
 
 /**
  * Result of blind posting calculation

@@ -5,7 +5,7 @@
  * and re-exports all engine functionality for use in web applications.
  */
 
-import { PokerEngine } from "./engine/PokerEngine";
+import { PokerEngine } from "./engine/poker-engine";
 import type { TableConfig } from "@pokertools/types";
 
 /**
@@ -53,13 +53,13 @@ export function createBrowserEngine(config: TableConfig): PokerEngine {
 }
 
 // Re-export everything from main engine
-export * from "./engine/PokerEngine";
+export * from "./engine/poker-engine";
 export * from "./actions/betting";
 export * from "./actions/dealing";
 export * from "./actions/management";
-export * from "./actions/showdownActions";
+export * from "./actions/showdown-actions";
 export * from "./actions/special";
-export * from "./utils/viewMasking";
+export * from "./utils/view-masking";
 export * from "./utils/serialization";
-export * from "./utils/cardUtils";
+export * from "./utils/card-utils";
 export * from "./history/exporter";
