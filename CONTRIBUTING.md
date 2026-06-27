@@ -2,6 +2,8 @@
 
 Thank you for your interest in contributing to Pokertools! This document provides guidelines and instructions for contributing.
 
+This repository uses npm workspaces. The root scripts are the source of truth for common workflows; package-level READMEs provide deeper implementation notes for each workspace.
+
 ## Code of Conduct
 
 Be respectful and constructive in all interactions. We're all here to build great poker tools.
@@ -13,6 +15,8 @@ Be respectful and constructive in all interactions. We're all here to build grea
 - Node.js 24.x or higher
 - npm 10.x or higher
 - Git
+- Docker (for Redis-backed local services and Docker E2E tests)
+- Foundry (for admin contract tests and E2E blockchain flows)
 
 ### Setup Development Environment
 
@@ -31,6 +35,13 @@ npm run build
 npm test
 ```
 
+For API/admin work, copy the relevant example environment files before starting services:
+
+```bash
+cp packages/api/.env.example packages/api/.env
+cp packages/admin/.env.example packages/admin/.env
+```
+
 ## Project Structure
 
 This is a monorepo with multiple packages:
@@ -43,6 +54,8 @@ This is a monorepo with multiple packages:
 - `packages/admin` - Fund sweeping and withdrawal administration service
 - `packages/e2e` - Docker-based end-to-end tests
 - `packages/bench` - Performance benchmarks (private)
+
+Before making changes, read the README for the package you are touching. Keep that README accurate whenever you change public APIs, exported types, routes, environment variables, scripts, operational behavior, or security-sensitive flows.
 
 ## Development Workflow
 
@@ -57,6 +70,8 @@ This is a monorepo with multiple packages:
 2. Make your changes and ensure tests pass:
 
    ```bash
+   npm run format:check
+   npm run lint
    npm test
    ```
 
@@ -98,6 +113,9 @@ test(engine): add tests for incomplete raise logic
 # Run all tests
 npm test
 
+# Run fast unit/package tests used by the precommit script
+npm run test:quick
+
 # Run tests for specific package
 npm test -w @pokertools/engine
 npm test -w @pokertools/evaluator
@@ -107,6 +125,19 @@ npm test -- --watch
 
 # Run specific test file
 npm test -- pokerRulesSpec.test.ts
+```
+
+Some service tests require local infrastructure. Use package-specific scripts when needed:
+
+```bash
+# API tests with Redis lifecycle managed by package scripts
+npm run test:stand-alone -w @pokertools/api
+
+# Admin lifecycle test prerequisites include Foundry contracts and API DB preparation
+npm test -w @pokertools/admin
+
+# Docker-based full-stack E2E suite
+npm run e2e:docker
 ```
 
 ### Building Packages
@@ -176,18 +207,35 @@ describe('Feature Name', () => {
   npm run format
   npm run lint
   ```
+- For CI-equivalent local validation, run:
+  ```bash
+  npm run validate
+  ```
 
 ### Best Practices
 
 - Keep functions small and focused
 - Prefer pure functions (no side effects)
 - Use descriptive variable names
-- Add JSDoc comments for public APIs
+- Add or update package README sections for public APIs, exported types, routes, WebSocket messages, environment variables, scripts, and security-relevant behavior
+- Add JSDoc comments for public APIs when they clarify usage or invariants
 - Avoid premature optimization
+
+## Documentation Standards
+
+Package README files are developer documentation, not marketing pages. Keep them:
+
+- **Implementation-backed**: examples and tables must match current source, package exports, tests, and configuration.
+- **Operationally useful**: document prerequisites, scripts, environment variables, dependencies, and failure modes.
+- **Security-aware**: link to [SECURITY.md](./SECURITY.md) and call out secrets, authentication, authorization, randomness, financial integrity, and hidden-information boundaries where relevant.
+- **Current**: update versions, Node/npm requirements, route names, WebSocket messages, and test commands when they change.
+- **Complete but concise**: prefer accurate tables and minimal runnable examples over speculative roadmaps.
+
+Do not add placeholders, TODO-only sections, undocumented claims, generated benchmark numbers without reproduction steps, or examples that cannot compile against current package exports.
 
 ## Pull Request Process
 
-1. **Update Documentation**: If you change APIs, update README files
+1. **Update Documentation**: If you change APIs, routes, env vars, scripts, security behavior, or package exports, update the affected README files
 
 2. **Add Tests**: Ensure all new code has tests
 
@@ -203,9 +251,11 @@ describe('Feature Name', () => {
 ### PR Checklist
 
 - [ ] Tests added/updated
-- [ ] Documentation updated
+- [ ] Documentation updated, including package README(s) where applicable
 - [ ] Changelog updated
 - [ ] All tests pass (`npm test`)
+- [ ] Format check passes (`npm run format:check`)
+- [ ] Lint passes (`npm run lint`)
 - [ ] Build succeeds (`npm run build`)
 - [ ] No TypeScript errors
 - [ ] Follows code style guidelines

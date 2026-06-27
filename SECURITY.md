@@ -50,8 +50,8 @@ The JWT payload contains `userId`, `address`, and `jti` (JWT ID for session revo
 
 WebSocket connections at `/ws/play` accept authentication via:
 
-- `?token=<jwt>` query parameter, or
-- `token` cookie attached by the browser during the WebSocket upgrade.
+- `token` cookie attached by the browser during the WebSocket upgrade, or
+- `Sec-WebSocket-Protocol: jwt.<token>` for non-browser clients that cannot rely on cookies.
 
 The server verifies the JWT, checks session validity, and passes a `userId` into the per-socket table subscription logic.
 
@@ -266,6 +266,8 @@ Before launching to production:
 - [ ] Redis AOF persistence enabled
 - [ ] Non-root container user
 - [ ] Logging enabled (avoid logging sensitive data: JWT payloads, wallet addresses, hole cards)
+- [ ] Admin secrets supplied through environment variables or secret files, not committed `.env` files
+- [ ] WebSocket clients authenticate with signed cookies or the `jwt.<token>` subprotocol, never URL query strings
 
 ---
 
@@ -275,5 +277,5 @@ This security policy is part of the PokerTools project and follows the same MIT 
 
 ---
 
-**Last Updated**: 2026-06-25
-**Version**: 1.0.7
+**Last Updated**: 2026-06-27
+**Version**: 1.0.10

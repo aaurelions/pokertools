@@ -10,6 +10,8 @@ A benchmarking tool that compares `@pokertools/evaluator` against other popular 
 
 ## 📊 Benchmark Results
 
+> **Note:** The results below are illustrative. Actual throughput depends on CPU speed, Node.js version, V8 JIT tier, memory speed, and system load. Run the benchmark on your own hardware for accurate measurements.
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                      BENCHMARK RESULTS (7-card hands)                       │
@@ -32,10 +34,6 @@ A benchmarking tool that compares `@pokertools/evaluator` against other popular 
 | `poker-evaluator`       | 1.3M hands/sec | ~13x slower    |
 | `pokersolver`           | 70K hands/sec  | ~240x slower   |
 
-> **Note:** Results may vary based on hardware and Node.js version. Run the benchmark on your own system for accurate measurements.
-
----
-
 ## 🚀 Running the Benchmark
 
 ### From Monorepo Root
@@ -51,7 +49,28 @@ cd packages/bench
 npm run bench
 ```
 
-### Sample Output
+### Available Scripts
+
+| Script           | Command                                                         | Description                                                                          |
+| ---------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `bench`          | `ts-node index.ts`                                              | Standard evaluator comparison benchmark (1,000 hands).                               |
+| `bench:detailed` | `ts-node index.ts --detailed`                                   | Same as `bench`; the `--detailed` flag is accepted but not parsed.                   |
+| `bench:load`     | `ts-node load.ts`                                               | Short load test against a live API stack (health, queues, optional sockets/actions). |
+| `bench:soak`     | `BENCH_DURATION_MS=300000 BENCH_CONCURRENCY=32 ts-node load.ts` | Extended soak test (5 min, 32 concurrent workers).                                   |
+
+### Load/Soak Environment Variables
+
+| Variable              | Default                  | Description                                         |
+| --------------------- | ------------------------ | --------------------------------------------------- |
+| `POKERTOOLS_API_BASE` | `http://localhost:3000`  | PokerTools API base URL.                            |
+| `POKERTOOLS_WS_URL`   | (derived from API_BASE)  | WebSocket endpoint for real-time benchmarks.        |
+| `POKERTOOLS_TOKEN`    | —                        | JWT for authenticated WebSocket joins and actions.  |
+| `POKERTOOLS_TABLE_ID` | —                        | Table ID for game-action benchmarks.                |
+| `REDIS_URL`           | `redis://localhost:6379` | Redis URL for queue-depth benchmarks.               |
+| `BENCH_DURATION_MS`   | `30000`                  | Duration of load test in ms (soak default: 300000). |
+| `BENCH_CONCURRENCY`   | `16`                     | Number of concurrent workers (soak default: 32).    |
+
+### Sample Output (Evaluator Benchmark)
 
 ```
 Generating 1000 hands...
@@ -91,14 +110,17 @@ pokersolver (Str)         |          70,980 hands/sec | ±0.70%
 
 ```json
 {
-  "@pokertools/evaluator": "*",
+  "@pokertools/evaluator": "1.0.10",
   "benchmark": "^2.1.4",
-  "microtime": "^3.1.1",
+  "bullmq": "^5.79.1",
+  "ws": "^8.21.0",
   "phe": "^0.6.0",
   "poker-evaluator": "^2.1.1",
   "pokersolver": "^2.1.4"
 }
 ```
+
+> **Note:** `ts-node` is required to run the benchmark scripts and is provided by the monorepo root `devDependencies`. The package uses `"type": "commonjs"` (CJS) and is not published — it runs from source via `ts-node`.
 
 ---
 
@@ -215,28 +237,32 @@ The benchmark includes a warm-up phase to ensure:
 
 ---
 
-## 📄 License
+## 📈 API, Worker, and Socket Load/Soak Benchmarks
 
-MIT © A.Aurelius
-
-# API, worker, socket, and game-action load/soak benchmarks
-
-Run short load checks against a live stack:
+Run short load checks against a live PokerTools stack:
 
 ```bash
+# From the monorepo root:
 POKERTOOLS_API_BASE=http://localhost:3000 npm run bench:load -w @pokertools/bench
 ```
 
-To include authenticated WebSocket joins and game actions, provide a JWT and table id:
+To include authenticated WebSocket joins and game actions, provide a JWT and table ID:
 
 ```bash
-POKERTOOLS_TOKEN=<jwt> POKERTOOLS_TABLE_ID=<table-id> npm run bench:load -w @pokertools/bench
+POKERTOOLS_TOKEN=<jwt> POKERTOOLS_TABLE_ID=<table-id> \
+  npm run bench:load -w @pokertools/bench
 ```
 
-Longer soak profile:
+Longer soak profile (5 minutes, 32 workers):
 
 ```bash
 npm run bench:soak -w @pokertools/bench
 ```
 
 Results are emitted as CSV (`name,count,ok,failed,p50_ms,p95_ms,max_ms`) for CI ingestion.
+
+---
+
+## 📄 License
+
+MIT © A.Aurelius

@@ -206,21 +206,21 @@ npm run workers
 
 ### Environment Variables
 
-| Variable                   | Type     | Default                  | Description                                     |
-| -------------------------- | -------- | ------------------------ | ----------------------------------------------- |
-| `NODE_ENV`                 | `string` | `development`            | Environment mode                                |
-| `PORT`                     | `number` | `3000`                   | HTTP server port                                |
-| `HOST`                     | `string` | `0.0.0.0`                | Bind address                                    |
-| `DATABASE_URL`             | `string` | `file:.runtime/app.db`   | Prisma database URL                             |
-| `REDIS_URL`                | `string` | `redis://localhost:6379` | Redis connection                                |
-| `JWT_SECRET`               | `string` | **required**             | JWT signing key                                 |
-| `COOKIE_SECRET`            | `string` | **required**             | Cookie signing key                              |
-| `WALLET_ENCRYPTION_SECRET` | `string` | **required**             | Separate key for encrypted wallet material      |
-| `CORS_ORIGIN`              | `string` | `""`                     | Required in production to allow browser origins |
-| `LOG_LEVEL`                | `string` | `info`                   | Pino log level                                  |
-| `RPC_RETRY_COUNT`          | `number` | `3`                      | Blockchain RPC retries                          |
-| `RPC_RETRY_DELAY`          | `number` | `1000`                   | Retry delay (ms)                                |
-| `RPC_TIMEOUT`              | `number` | `10000`                  | RPC timeout (ms)                                |
+| Variable                   | Type     | Default                  | Description                                                                             |
+| -------------------------- | -------- | ------------------------ | --------------------------------------------------------------------------------------- |
+| `NODE_ENV`                 | `string` | `development`            | Environment mode (`development`, `production`, `test`)                                  |
+| `PORT`                     | `number` | `3000`                   | HTTP server port                                                                        |
+| `HOST`                     | `string` | `0.0.0.0`                | Bind address                                                                            |
+| `DATABASE_URL`             | `string` | **required**             | Prisma database URL (`file:` for SQLite, `postgresql://` for PostgreSQL)                |
+| `REDIS_URL`                | `string` | `redis://localhost:6379` | Redis connection                                                                        |
+| `JWT_SECRET`               | `string` | **required**             | JWT signing key                                                                         |
+| `COOKIE_SECRET`            | `string` | **required**             | Cookie signing key                                                                      |
+| `WALLET_ENCRYPTION_SECRET` | `string` | **required**             | Separate key for encrypted wallet material                                              |
+| `CORS_ORIGIN`              | `string` | `""`                     | CORS origin; must be set in production (empty = deny cross-origin). Dev/test allow all. |
+| `LOG_LEVEL`                | `string` | `info`                   | Pino log level (`debug`, `info`, `warn`, `error`)                                       |
+| `RPC_RETRY_COUNT`          | `number` | `3`                      | Blockchain RPC retries                                                                  |
+| `RPC_RETRY_DELAY`          | `number` | `1000`                   | Retry delay (ms)                                                                        |
+| `RPC_TIMEOUT`              | `number` | `10000`                  | RPC timeout (ms)                                                                        |
 
 ### Validation
 
@@ -657,20 +657,41 @@ Delete note for specific player.
 
 #### `GET /health`
 
-Health check endpoint.
+Health check endpoint with per-dependency status.
 
 ```bash
 curl http://localhost:3000/health
 ```
 
-**Response:**
+**Response (healthy):**
 
 ```json
 {
   "status": "ok",
-  "timestamp": 1705316400000
+  "timestamp": 1705316400000,
+  "uptimeSeconds": 3600,
+  "checks": {
+    "db": { "status": "ok", "latencyMs": 5 },
+    "redis": { "status": "ok", "latencyMs": 1 },
+    "queue": { "status": "ok", "latencyMs": 3 }
+  },
+  "queues": {
+    "gameEvents": { "waiting": 0, "delayed": 0, "failed": 0 }
+  }
 }
 ```
+
+Returns `503` when overall status is `"down"`, `200` when `"degraded"` or `"ok"`.
+
+#### `GET /metrics`
+
+Prometheus-format metrics endpoint for scraping by monitoring systems.
+
+```bash
+curl http://localhost:3000/metrics
+```
+
+Exposes counters: `pokertools_http_requests_total`, `pokertools_game_actions_total`, `pokertools_risk_denials_total`, `pokertools_idempotency_hits_total`, `pokertools_audit_log_failures_total`, plus process uptime gauge.
 
 ---
 
@@ -680,11 +701,14 @@ Connect to `/ws/play` for real-time game updates.
 
 ### Connection
 
-```javascript
-const ws = new WebSocket("ws://localhost:3000/ws/play?token=<jwt>");
+The server authenticates WebSocket clients via the `token` cookie or the `jwt.<token>` WebSocket subprotocol (no query-string tokens).
 
-// Or use cookie authentication
+```javascript
+// Browser: the httpOnly cookie is attached automatically during the upgrade handshake
 const ws = new WebSocket("ws://localhost:3000/ws/play");
+
+// Programmatic / non-browser: supply the JWT via the Sec-WebSocket-Protocol header
+const ws = new WebSocket("ws://localhost:3000/ws/play", "jwt.eyJhbGciOi...");
 ```
 
 ### Client → Server Messages
@@ -729,6 +753,7 @@ const ws = new WebSocket("ws://localhost:3000/ws/play");
   "state": {
     /* full game state */
   },
+  "version": 42,
   "timestamp": 1705316400000
 }
 ```
@@ -967,6 +992,74 @@ class NotesManager {
 }
 ```
 
+### RiskManager
+
+Per-user/IP velocity controls using Redis sorted sets for sliding-window rate limiting.
+
+```typescript
+class RiskManager {
+  async assertAllowed(input: {
+    userId: string;
+    endpoint: string;
+    request: FastifyRequest;
+    amountCents?: number;
+  }): Promise<{ score: number }>;
+}
+```
+
+Throws `RiskDeniedError` (HTTP 429) when per-endpoint thresholds are exceeded or the combined risk score reaches the configured ceiling.
+
+### IdempotencyManager
+
+Durable idempotency using the `IdempotencyRecord` database table for buy-ins, add-chips, and gameplay actions.
+
+```typescript
+class IdempotencyManager {
+  hash(payload: unknown): string;
+
+  async run<T extends Record<string, unknown>>(input: {
+    key: string;
+    scope: string;
+    userId: string;
+    requestHash: string;
+    ttlSeconds?: number;
+    handler: () => Promise<T>;
+  }): Promise<{ replayed: boolean; response: T }>;
+}
+```
+
+Conflicting keys (different user or hash) throw `IdempotencyConflictError` (409). In-progress keys throw `IdempotencyInProgressError` (409).
+
+### AuditManager
+
+Structured `AuditLog` writes for every financial and gameplay event. Failures increment a Prometheus counter but never block the response.
+
+```typescript
+class AuditManager {
+  async record(input: {
+    actorId?: string;
+    action: string;
+    resource: string;
+    request?: FastifyRequest;
+    riskScore?: number;
+    metadata?: Record<string, unknown>;
+  }): Promise<void>;
+}
+```
+
+### ObservabilityManager
+
+In-process Prometheus metrics and structured health checks.
+
+```typescript
+class ObservabilityManager {
+  increment(name: string, labels?: Record<string, string>, value?: number): void;
+  async health(): Promise<HealthResponse>;
+  metrics(): string;
+  attachHttpMetrics(): void;
+}
+```
+
 ---
 
 ## ⚙️ Background Workers
@@ -1101,15 +1194,17 @@ Scans blockchain for incoming deposits.
 
 ```bash
 # Start all workers (separate process)
-node dist/workers/index.js
+node dist/workers.js
 
-# Or use ts-node in development
-tsx src/workers/index.ts
+# Or use tsx in development
+tsx src/workers.ts
 ```
 
 ---
 
 ## 🗄️ Database Schema
+
+> The diagrams below show the core entities and relationships. Additional operational models (`Session`, `IdempotencyRecord`, `AuditLog`, `AdminWallet`, `UserWallet`, `DepositSession`) exist in the schema for session management, durable idempotency, audit trails, and HD-wallet deposit tracking.
 
 ### Entity Relationship Diagram
 
@@ -1186,20 +1281,24 @@ tsx src/workers/index.ts
 
 ### Transaction Types
 
-| Type           | Description              | Account Effect  |
-| -------------- | ------------------------ | --------------- |
-| `DEPOSIT`      | Crypto deposit confirmed | +MAIN           |
-| `WITHDRAWAL`   | Crypto withdrawal        | -MAIN           |
-| `BUY_IN`       | Join table               | -MAIN, +IN_PLAY |
-| `CASH_OUT`     | Leave table              | -IN_PLAY, +MAIN |
-| `RAKE`         | House rake               | +HOUSE MAIN     |
-| `HAND_WIN`     | Won a pot                | +IN_PLAY        |
-| `HAND_LOSS`    | Lost chips               | -IN_PLAY        |
-| `UNCALLED_BET` | Returned uncalled bet    | +IN_PLAY        |
+| Type           | Description              | Account Effect    |
+| -------------- | ------------------------ | ----------------- |
+| `DEPOSIT`      | Crypto deposit confirmed | +MAIN             |
+| `WITHDRAWAL`   | Crypto withdrawal        | -MAIN             |
+| `BUY_IN`       | Join table               | -MAIN, +IN_PLAY   |
+| `CASH_OUT`     | Leave table              | -IN_PLAY, +MAIN   |
+| `RAKE`         | House rake               | +HOUSE MAIN       |
+| `REFUND`       | Rejected withdrawal      | +MAIN             |
+| `HAND_WIN`     | Won a pot                | +IN_PLAY          |
+| `HAND_LOSS`    | Lost chips               | -IN_PLAY          |
+| `UNCALLED_BET` | Returned uncalled bet    | +IN_PLAY          |
+| `SWEEP`        | Admin swept deposit      | — (metadata only) |
 
 ---
 
 ## 🔐 Authentication
+
+> See also the root [SECURITY.md](../../SECURITY.md) for cryptographic RNG guidance, view masking, chip-conservation auditing, and the full security deployment checklist.
 
 ### SIWE (Sign-In with Ethereum)
 
@@ -1482,16 +1581,18 @@ export async function initTestContext(
 ### Test Coverage
 
 ```
- Test Files  18 passed (18)
-      Tests  121 passed (121)
-   Duration  32.69s
+ Test Files  23 passed (23)
+      Tests  100+ passed
+   Duration  30-45s
 
 Coverage:
-  - Integration tests for all routes
-  - Unit tests for services
-  - Worker job processing tests
-  - WebSocket real-time tests
-  - Financial integrity tests
+  - Integration tests for all routes (auth, tables, user, finance, notes, WS)
+  - Financial integrity tests (double-entry, chip conservation)
+  - WebSocket real-time tests (join/leave, limits, concurrency)
+  - Worker job processing tests (settle, archive, deposit-monitor, timeout)
+  - Timeout / Redlock interaction tests
+  - Security tests (rate-limiting, withdrawal signatures, deposit replay)
+  - Tournament lifecycle and production-readiness tests
 ```
 
 ---

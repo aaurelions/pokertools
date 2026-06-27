@@ -122,6 +122,9 @@ interface GameState {
   actionHistory: readonly ActionRecord[];
   previousStates: readonly GameState[];
 
+  // Chip Conservation
+  initialChips?: number; // Baseline for auditing (set at deal)
+
   // Metadata
   timestamp: number;
   handId: string;
@@ -1096,12 +1099,7 @@ interface NonceResponse {
 ### Table Types
 
 ```typescript
-import {
-  TableListItem,
-  GetTablesResponse,
-  StandRequest,
-  TableStateResponse,
-} from "@pokertools/types";
+import { TableListItem, GetTablesResponse } from "@pokertools/types";
 
 interface TableListItem {
   id: string;
@@ -1113,26 +1111,12 @@ interface TableListItem {
 interface GetTablesResponse {
   tables: TableListItem[];
 }
-
-interface TableStateResponse {
-  state: PublicState;
-}
 ```
 
 ### Common Types
 
 ```typescript
-import { ApiErrorResponse, SuccessResponse, GameMode, TableStatus } from "@pokertools/types";
-
-interface ApiErrorResponse {
-  error: string;
-  message?: string;
-  code?: string;
-}
-
-interface SuccessResponse {
-  success: true;
-}
+import { GameMode, TableStatus } from "@pokertools/types";
 
 type GameMode = "CASH" | "TOURNAMENT";
 type TableStatus = "WAITING" | "ACTIVE" | "FINISHED";

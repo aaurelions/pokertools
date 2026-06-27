@@ -5,7 +5,7 @@
 [![npm version](https://img.shields.io/npm/v/@pokertools/engine.svg)](https://www.npmjs.com/package/@pokertools/engine)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/tests-320%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-349%20passed-brightgreen.svg)]()
 
 A **production-ready** poker game engine featuring immutable state management, chip conservation auditing, side pot calculation, rake handling, tournament support, and comprehensive rule enforcement.
 
@@ -562,6 +562,7 @@ enum ActionType {
   // Special
   TIMEOUT = "TIMEOUT",
   TIME_BANK = "TIME_BANK",
+  UNCALLED_BET_RETURNED = "UNCALLED_BET_RETURNED",
 
   // Tournament
   NEXT_BLIND_LEVEL = "NEXT_BLIND_LEVEL",
@@ -670,16 +671,15 @@ const restored = restoreFromSnapshot(JSON.parse(json));
 
 ## 🧪 Testing
 
-The engine includes 320 tests across multiple categories:
+The engine includes 349 tests across 37 suites:
 
 | Category       | Files | Description                  |
 | -------------- | ----- | ---------------------------- |
-| Unit           | 24    | Individual component tests   |
+| Unit           | 26    | Individual component tests   |
 | Integration    | 4     | Full game flow tests         |
 | Property       | 3     | Randomized invariant testing |
 | Bug Regression | 2     | Fixed bug verification       |
-| Security       | 1     | Anti-cheat/exploit tests     |
-| Debug          | 4     | Detailed trace tests         |
+| Security       | 2     | Anti-cheat/exploit tests     |
 
 ```bash
 npm test -w @pokertools/engine
@@ -729,6 +729,9 @@ interface GameState {
   // History
   actionHistory: ActionRecord[];
   previousStates: GameState[]; // For undo
+
+  // Chip Conservation
+  initialChips?: number; // Baseline for auditing (set at deal)
 
   // Metadata
   timestamp: number;

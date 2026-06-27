@@ -8,14 +8,6 @@ import { WithdrawalBot } from "./services/withdrawal-bot.js";
 import { GasMonitor } from "./services/gas-monitor.js";
 import { TransactionMonitor } from "./services/transaction-monitor.js";
 
-interface PrismaQueryEvent {
-  timestamp: Date;
-  query: string;
-  params: string;
-  duration: number;
-  target: string;
-}
-
 const logger = pino({
   level: config.LOG_LEVEL,
   transport:
@@ -31,16 +23,9 @@ function main() {
   const prisma = createPrismaClient({
     log:
       config.NODE_ENV === "development"
-        ? [{ emit: "event", level: "query" }]
-        : [{ emit: "event", level: "error" }],
+        ? [{ emit: "stdout", level: "query" }]
+        : [{ emit: "stdout", level: "error" }],
   });
-
-  if (config.NODE_ENV === "development") {
-    prisma.$on("query", (e: unknown) => {
-      const event = e as PrismaQueryEvent;
-      logger.debug({ query: event.query, params: event.params }, "Prisma Query");
-    });
-  }
 
   const redis = new Redis(config.REDIS_URL, {
     maxRetriesPerRequest: 3,
