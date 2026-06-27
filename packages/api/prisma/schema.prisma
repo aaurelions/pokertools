@@ -89,7 +89,7 @@ model LedgerEntry {
 
   // Polymorphic reference (TableID, HandID, or PaymentTransactionID)
   referenceId String?
-  metadata    Json? // Changed from String to Json for DB flexibility
+  metadata    Json?
 
   // Optional: direct link to external payment if this entry represents a deposit/withdraw
   paymentTx PaymentTransaction?

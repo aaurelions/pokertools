@@ -13,44 +13,36 @@ import { getNextOccupiedSeat, getNextSeat } from "../utils/positioning";
  * - Sets action to first to act
  */
 export function handleDeal(state: GameState, action: DealAction): GameState {
-  // Move button (Dead Button logic: moves to next seat index regardless of occupancy)
+  // Dead Button rule: advances to next seat index regardless of occupancy.
   let newButtonSeat = moveButton(state);
 
-  // Determine if this is a tournament
   const isTournament = !!state.config.blindStructure;
   const isClient = !!state.config.isClient;
 
-  // Create and shuffle deck (server only)
-  // In client mode, we use an empty deck and deal masked cards
+  // Client mode: empty deck, cards dealt as masked (null).
   const rng = state.config.randomProvider ?? Math.random;
   const deck = isClient ? [] : shuffle(createDeck(), rng);
 
-  // Create a copy of timeBanks to modify
   const newTimeBanks = new Map(state.timeBanks);
 
-  // First, merge pendingAddOn into stack for all players
+  // Merge pending add-ons; expire stale reservations.
   const newPlayers = state.players.map((player) => {
     if (!player) return null;
 
-    // Skip reserved players (they haven't confirmed yet)
     if (player.status === PlayerStatus.RESERVED) {
-      // Check if reservation has expired
       if (player.reservationExpiry && action.timestamp! >= player.reservationExpiry) {
-        // Reservation expired, remove player
         newTimeBanks.delete(player.seat);
         return null;
       }
-      // Keep reserved player as-is
       return player;
     }
 
-    // Merge pendingAddOn into stack
     const newStack = player.stack + player.pendingAddOn;
 
     return {
       ...player,
       stack: newStack,
-      pendingAddOn: 0, // Clear pending add-on
+      pendingAddOn: 0,
     };
   });
 
@@ -59,43 +51,39 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
     players: newPlayers,
   });
 
-  // Get blind positions for this hand
+  // Recompute blind positions with updated button/players.
   const blindPositions = getBlindPositions({
     ...state,
     buttonSeat: newButtonSeat,
     players: newPlayers,
   });
 
-  // Get players who will be dealt in
+  // Determine which players receive cards.
   const playersToReceive: number[] = [];
 
   for (let seat = 0; seat < newPlayers.length; seat++) {
     const player = newPlayers[seat];
 
-    // Basic eligibility checks
     if (!player || player.stack <= 0 || player.status === PlayerStatus.RESERVED) {
       continue;
     }
 
-    // We check WAIT_FOR_BB *before* checking isSittingOut.
-    // This allows us to "unsit" a player if they hit the Big Blind.
-
+    // WAIT_FOR_BB check: sit player IN when they reach the Big Blind,
+    // sit player OUT when they haven't reached it yet.
     let shouldPlay = true;
 
     if (!isTournament && player.sitInOption === SitInOption.WAIT_FOR_BB) {
       const isInBigBlind = blindPositions?.bigBlindSeat === seat;
 
       if (isInBigBlind) {
-        // PLAYER RE-ENTRY: They are in the Big Blind. Force them active.
-        // We must update the player object in newPlayers to reflect they are back.
+        // PLAYER RE-ENTRY: Force them active when they are in the Big Blind.
         newPlayers[seat] = {
           ...player,
           isSittingOut: false,
         };
         shouldPlay = true;
       } else {
-        // Not in BB yet. Force them to sit out.
-        // Only update if not already sitting out to avoid object churn
+        // Not yet in BB; force sit-out (avoids object churn if already sitting out).
         if (!player.isSittingOut) {
           newPlayers[seat] = {
             ...player,
@@ -105,7 +93,6 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
         shouldPlay = false;
       }
     } else if (player.isSittingOut) {
-      // Standard sitting out check
       shouldPlay = false;
     }
 
@@ -114,31 +101,29 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
     }
   }
 
-  // Deal 2 cards to each player
   let remainingDeck = deck;
 
-  // Initialize hands for receiving players (active, not sitting out)
   for (const seat of playersToReceive) {
     newPlayers[seat] = {
       ...newPlayers[seat]!,
-      hand: [], // Initialize empty array
-      shownCards: null, // Reset from previous hand
+      hand: [],
+      shownCards: null,
       status: PlayerStatus.ACTIVE,
       betThisStreet: 0,
       totalInvestedThisHand: 0,
     };
   }
 
-  // In tournaments, initialize sitting-out players too (they must post blinds/antes)
+  // Tournament: sitting-out players initialized as FOLDED (must post blinds/antes).
   if (isTournament) {
     for (let seat = 0; seat < newPlayers.length; seat++) {
       const player = newPlayers[seat];
       if (player && player.stack > 0 && player.isSittingOut && !playersToReceive.includes(seat)) {
         newPlayers[seat] = {
           ...player,
-          hand: null, // No cards dealt
+          hand: null,
           shownCards: null,
-          status: PlayerStatus.FOLDED, // Start as folded
+          status: PlayerStatus.FOLDED,
           betThisStreet: 0,
           totalInvestedThisHand: 0,
         };
@@ -146,24 +131,21 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
     }
   }
 
-  // Deal 2 cards, one by one, in circle (standard poker procedure)
+  // Deal 2 hole cards, one at a time, clockwise.
   for (let round = 0; round < 2; round++) {
     for (const seat of playersToReceive) {
       let cardStrings: Array<string | null>;
 
       if (isClient) {
-        // Client mode: Deal masked cards
         cardStrings = [null];
       } else {
-        // Server mode: Deal from deck
         const [cards, nextDeck] = dealCards(remainingDeck, 1);
         remainingDeck = nextDeck;
         cardStrings = cardCodesToStrings(cards);
       }
 
-      // Append to existing hand
       const currentPlayer = newPlayers[seat]!;
-      const currentHand = currentPlayer.hand ?? []; // Should be [] from initialization
+      const currentHand = currentPlayer.hand ?? [];
 
       newPlayers[seat] = {
         ...currentPlayer,
@@ -172,8 +154,7 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
     }
   }
 
-  // Post blinds and antes
-  // Recalculate blind positions with the new button seat
+  // Post blinds and antes.
   const finalBlindPositions = getBlindPositions({
     ...state,
     buttonSeat: newButtonSeat,
@@ -185,9 +166,6 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
   if (finalBlindPositions) {
     const { smallBlindSeat, bigBlindSeat } = finalBlindPositions;
 
-    // Post small blind
-    // In tournaments: sitting-out players MUST post to prevent "blinding off" exploit
-    // In cash games: sitting-out SB is treated as "Dead Small Blind" (no post)
     const sbPlayer = newPlayers[smallBlindSeat];
     if (sbPlayer && sbPlayer.stack > 0) {
       const shouldPostSB = isTournament || !sbPlayer.isSittingOut;
@@ -203,18 +181,17 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
             sbAmount === sbPlayer.stack
               ? PlayerStatus.ALL_IN
               : sbPlayer.isSittingOut
-                ? PlayerStatus.FOLDED // Sitting-out player posts blind then auto-folds
+                ? PlayerStatus.FOLDED
                 : PlayerStatus.ACTIVE,
         };
       }
     }
-    // If sbPlayer is null or (cash game && sitting out), Dead Small Blind applies
+    // Dead Small Blind: sbPlayer is null or (cash game && sitting out).
 
-    // Post big blind (Must exist for hand to start)
     const bbPlayer = newPlayers[bigBlindSeat];
     if (bbPlayer) {
-      // In Cash Games: sitting-out players should NEVER post blinds (they are skipped by getBlindPositions)
-      // In Tournaments: sitting-out players MUST post blinds to prevent "blinding off" exploit
+      // In cash games sitting-out players are skipped by getBlindPositions.
+      // In tournaments sitting-out players MUST post blinds (anti-blinding-off).
       const shouldPostBB = isTournament || !bbPlayer.isSittingOut;
 
       if (shouldPostBB) {
@@ -229,16 +206,14 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
             bbAmount === bbPlayer.stack
               ? PlayerStatus.ALL_IN
               : bbPlayer.isSittingOut
-                ? PlayerStatus.FOLDED // Sitting-out player posts blind then auto-folds
+                ? PlayerStatus.FOLDED
                 : PlayerStatus.ACTIVE,
         };
       }
     }
   }
 
-  // Post antes if configured
-  // In tournaments: ALL players with chips must post (including sitting-out)
-  // In cash games: Only active players post
+  // Antes: tournament — all players with chips (incl. sitting-out); cash — active only.
   if (state.ante > 0) {
     const playersToAnteFrom = isTournament
       ? state.players.map((p, idx) => (p && p.stack > 0 ? idx : -1)).filter((idx) => idx >= 0)
@@ -262,17 +237,14 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
             newStack === 0
               ? PlayerStatus.ALL_IN
               : player.isSittingOut && isTournament
-                ? PlayerStatus.FOLDED // Sitting-out tournament player posts ante then auto-folds
+                ? PlayerStatus.FOLDED
                 : player.status,
         };
       }
     }
   }
 
-  // Start with empty pots (bets will be collected when street progresses)
   const pots: Pot[] = [];
-
-  // Get active players
   const activePlayers = playersToReceive.filter((seat) => {
     const player = newPlayers[seat]!;
     return player.status === PlayerStatus.ACTIVE;
@@ -301,7 +273,6 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
     timestamp: action.timestamp!,
   } as GameState & { initialChips?: number };
 
-  // Set first to act
   const firstToAct = getFirstToAct(newState);
 
   return {
@@ -316,7 +287,6 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
  */
 function moveButton(state: GameState): number {
   if (state.buttonSeat === null) {
-    // First hand, find first seated player
     for (let seat = 0; seat < state.maxPlayers; seat++) {
       if (state.players[seat] !== null) {
         return seat;
@@ -325,8 +295,7 @@ function moveButton(state: GameState): number {
     return 0;
   }
 
-  // Simply increment seat index (Dead Button)
-  // We do not skip empty seats here.
+  // Dead Button: advance to next seat index regardless of occupancy.
   return getNextSeat(state.buttonSeat, state.maxPlayers);
 }
 

@@ -52,7 +52,7 @@ export async function startAnvil(): Promise<void> {
         detached: false,
       }
     );
-    // Give Anvil time to start
+    // Give Anvil time to start up
     setTimeout(() => resolve(), 1500);
   });
 }
@@ -61,7 +61,6 @@ export async function stopAnvil(): Promise<void> {
   if (anvilProcess) {
     anvilProcess.kill("SIGTERM");
     anvilProcess = null;
-    // Give it a moment to clean up
     await new Promise((r) => setTimeout(r, 500));
   }
 }
@@ -75,7 +74,6 @@ export async function deployContracts(): Promise<DeployedContracts> {
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
 
-  // Read artifacts from the admin package forge output
   const contractsDir = path.resolve(__dirname, "../../../admin/contracts/out");
 
   const usdcArtifactPath = path.join(contractsDir, "MockUSDC.sol/MockUSDC.json");

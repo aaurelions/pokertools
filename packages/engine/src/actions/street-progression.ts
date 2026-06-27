@@ -10,38 +10,30 @@ import { getFirstToAct, isActionComplete } from "../rules/action-order";
  * - Resets action
  */
 export function progressStreet(state: GameState): GameState {
-  // Determine next street
   const nextStreet = getNextStreet(state.street);
 
   if (nextStreet === null) {
-    // Already at showdown or beyond
     return state;
   }
 
-  // Check if we should auto-runout (all remaining players all-in)
-  const shouldAutoRunout = checkAutoRunout(state);
-
-  if (shouldAutoRunout) {
+  if (checkAutoRunout(state)) {
     return handleAutoRunout(state);
   }
 
-  // Deal community cards
   const { board, deck } = dealCommunityCards(state, nextStreet);
 
-  // Reset for new street
-  // Note: Pots are calculated by recalculatePots() before progressStreet() is called
+  // Pots are recalculated by recalculatePots() before progressStreet() is called.
   const newState: GameState = {
     ...state,
     street: nextStreet,
     board,
     deck,
-    pots: state.pots, // Keep existing pots (already updated by recalculatePots)
+    pots: state.pots,
     currentBets: new Map(),
     lastAggressorSeat: null,
-    // Keep timestamp from last action (street progression is not a user action)
+    // Street progression is not a user action, keep last timestamp.
   };
 
-  // Set first to act
   const firstToAct = getFirstToAct(newState);
 
   return {
@@ -120,7 +112,6 @@ function checkAutoRunout(state: GameState): boolean {
     }
   }
 
-  // Auto-runout if ≤1 active player with chips (rest are all-in or folded)
   return activeCount <= 1 && allInCount > 0;
 }
 
@@ -132,28 +123,24 @@ function handleAutoRunout(state: GameState): GameState {
   let currentState = state;
   let currentStreet = state.street;
 
-  // Deal remaining streets manually (FLOP -> TURN -> RIVER)
   while (currentStreet !== Street.RIVER) {
     const nextStreet = getNextStreet(currentStreet);
     if (nextStreet === null || nextStreet === Street.SHOWDOWN) break;
 
-    // Deal community cards for this street
     const { board, deck } = dealCommunityCards(currentState, nextStreet);
 
-    // Update state with new street and board
     currentState = {
       ...currentState,
       street: nextStreet,
       board,
       deck,
-      currentBets: new Map(), // Clear bets between streets
+      currentBets: new Map(),
       lastAggressorSeat: null,
     };
 
     currentStreet = nextStreet;
   }
 
-  // Move to showdown
   return {
     ...currentState,
     street: Street.SHOWDOWN,
@@ -166,14 +153,8 @@ function handleAutoRunout(state: GameState): GameState {
  * (All players have acted and matched bets)
  */
 export function shouldProgressStreet(state: GameState): boolean {
-  if (state.actionTo !== null) {
-    return false; // Action still in progress
-  }
+  if (state.actionTo !== null) return false;
+  if (state.street === Street.SHOWDOWN) return false;
 
-  if (state.street === Street.SHOWDOWN) {
-    return false; // Already at showdown
-  }
-
-  // Check if all active players have acted
   return isActionComplete(state);
 }

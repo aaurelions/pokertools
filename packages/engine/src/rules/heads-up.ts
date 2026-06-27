@@ -38,7 +38,6 @@ export function getHeadsUpActionOrder(state: GameState, street: Street): number[
   // Find the two seats
   const [seat1, seat2] = activePlayers.sort((a, b) => a - b);
 
-  // Check if button is one of the active players
   const isButtonActive = activePlayers.includes(buttonSeat);
 
   if (!isButtonActive) {

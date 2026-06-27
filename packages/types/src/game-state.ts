@@ -3,9 +3,7 @@ import { Pot } from "./pot";
 import { TableConfig } from "./config";
 import { ActionRecord } from "./action";
 
-/**
- * Street in the hand
- */
+/** Street in the hand. */
 export const enum Street {
   PREFLOP = "PREFLOP",
   FLOP = "FLOP",
@@ -14,63 +12,67 @@ export const enum Street {
   SHOWDOWN = "SHOWDOWN",
 }
 
-/**
- * Winner of a pot
- */
+/** Winner of a pot. */
 export interface Winner {
   readonly seat: number;
   readonly amount: number;
-  readonly hand: readonly string[] | null; // Best 5-card hand or null if uncontested
-  readonly handRank: string | null; // Hand description ("Full House, Aces full of Kings")
+  /** Best 5-card hand, or null if uncontested. */
+  readonly hand: readonly string[] | null;
+  /** Hand description, e.g. "Full House, Aces full of Kings". */
+  readonly handRank: string | null;
 }
 
-/**
- * Central immutable game state
- */
+/** Central immutable game state. */
 export interface GameState {
-  // Table Configuration
   readonly config: TableConfig;
 
-  // Players (indexed by seat number 0-9, null if empty)
+  /** Players indexed by seat 0-9; null = empty seat. */
   readonly players: ReadonlyArray<Player | null>;
   readonly maxPlayers: number;
 
-  // Hand State
   readonly handNumber: number;
   readonly buttonSeat: number | null;
-  readonly deck: readonly number[]; // Remaining cards (integer codes)
-  readonly board: readonly string[]; // Community cards ["As", "Kd", ...]
+  /** Remaining cards as integer codes. */
+  readonly deck: readonly number[];
+  /** Community cards, e.g. ["As", "Kd", ...]. */
+  readonly board: readonly string[];
   readonly street: Street;
 
-  // Betting State
-  readonly pots: readonly Pot[]; // Main pot + side pots
-  readonly currentBets: ReadonlyMap<number, number>; // Seat -> bet amount this street
-  readonly minRaise: number; // Minimum raise size
-  readonly lastRaiseAmount: number; // Last raise increment (for incomplete raise rule)
-  readonly actionTo: number | null; // Seat number of acting player
+  /** Main pot + side pots. */
+  readonly pots: readonly Pot[];
+  /** Seat → amount bet this street. */
+  readonly currentBets: ReadonlyMap<number, number>;
+  readonly minRaise: number;
+  /** Last raise increment (for the incomplete-raise rule). */
+  readonly lastRaiseAmount: number;
+  /** Seat of the acting player, or null when no action pending. */
+  readonly actionTo: number | null;
   readonly lastAggressorSeat: number | null;
 
-  // Hand Progress
-  readonly activePlayers: readonly number[]; // Seats that are not folded/busted
+  /** Seats not folded or busted. */
+  readonly activePlayers: readonly number[];
   readonly winners: readonly Winner[] | null;
-  readonly rakeThisHand: number; // Total rake collected this hand
+  readonly rakeThisHand: number;
 
-  // Blind Tracking
   readonly smallBlind: number;
   readonly bigBlind: number;
   readonly ante: number;
-  readonly blindLevel: number; // Tournament blind level index
+  /** Index into the tournament blind schedule. */
+  readonly blindLevel: number;
 
-  // Time Bank (per-player resource)
-  readonly timeBanks: ReadonlyMap<number, number>; // Seat -> seconds remaining
-  readonly timeBankActiveSeat: number | null; // Seat currently using time bank (null if none active)
+  /** Seat → time bank seconds remaining. */
+  readonly timeBanks: ReadonlyMap<number, number>;
+  /** Seat currently using time bank (null if none active). */
+  readonly timeBankActiveSeat: number | null;
 
-  // History
   readonly actionHistory: readonly ActionRecord[];
-  readonly previousStates: readonly GameState[]; // For undo (circular buffer)
+  /** Previous states for undo (circular buffer). */
+  readonly previousStates: readonly GameState[];
 
-  // Metadata
-  readonly initialChips?: number; // Baseline for chip-conservation checks during a hand
-  readonly timestamp: number; // Unix timestamp
-  readonly handId: string; // Unique identifier for this hand
+  /** Baseline chip count for conservation checks during a hand. */
+  readonly initialChips?: number;
+  /** Unix timestamp in milliseconds. */
+  readonly timestamp: number;
+  /** Unique identifier for this hand. */
+  readonly handId: string;
 }

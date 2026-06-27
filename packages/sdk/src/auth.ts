@@ -76,20 +76,17 @@ export function createSiweMessage(params: SiweMessageParams): string {
     resources,
   } = params;
 
-  // Build message following EIP-4361 spec
+  // Build message following EIP-4361
   const lines: string[] = [];
 
-  // Header
   lines.push(`${domain} wants you to sign in with your Ethereum account:`);
   lines.push(address);
 
-  // Statement (optional)
   if (statement) {
     lines.push("");
     lines.push(statement);
   }
 
-  // Required fields
   lines.push("");
   lines.push(`URI: ${uri}`);
   lines.push(`Version: ${version}`);
@@ -97,7 +94,6 @@ export function createSiweMessage(params: SiweMessageParams): string {
   lines.push(`Nonce: ${nonce}`);
   lines.push(`Issued At: ${issuedAt}`);
 
-  // Optional fields
   if (expirationTime) {
     lines.push(`Expiration Time: ${expirationTime}`);
   }
@@ -124,18 +120,15 @@ export function parseSiweMessage(message: string): Partial<SiweMessageParams> {
   const lines = message.split("\n");
   const result: Partial<SiweMessageParams> = {};
 
-  // First line: domain
   const domainMatch = /^(.+) wants you to sign in with your Ethereum account:$/.exec(lines[0]);
   if (domainMatch) {
     result.domain = domainMatch[1];
   }
 
-  // Second line: address
   if (lines[1]) {
     result.address = lines[1];
   }
 
-  // Parse key-value pairs
   for (const line of lines) {
     if (line.startsWith("URI: ")) {
       result.uri = line.slice(5);
@@ -156,7 +149,7 @@ export function parseSiweMessage(message: string): Partial<SiweMessageParams> {
     }
   }
 
-  // Parse statement (lines between address and URI)
+  // Statement is the text block between the address line and "URI:"
   const uriIndex = lines.findIndex((l) => l.startsWith("URI: "));
   if (uriIndex > 3) {
     const statementLines = lines.slice(3, uriIndex - 1).filter((l) => l.trim());

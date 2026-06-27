@@ -21,14 +21,11 @@ import { MAX_UNDO_HISTORY } from "../utils/constants";
  * @returns New game state
  */
 export function gameReducer(state: GameState, action: Action): GameState {
-  // Validate action
   validateAction(state, action);
 
-  // Apply action based on type
   let newState: GameState;
 
   switch (action.type) {
-    // Management actions
     case ActionType.SIT:
       newState = handleSit(state, action);
       break;
@@ -45,12 +42,10 @@ export function gameReducer(state: GameState, action: Action): GameState {
       newState = handleReserveSeat(state, action);
       break;
 
-    // Dealing
     case ActionType.DEAL:
       newState = handleDeal(state, action);
       break;
 
-    // Betting actions
     case ActionType.FOLD:
       newState = handleFold(state, action);
       break;
@@ -63,14 +58,12 @@ export function gameReducer(state: GameState, action: Action): GameState {
       newState = handleCall(state, action);
       break;
 
+    // Auto-convert BET to RAISE/CALL when there's already a wager.
+    // Note: action.amount is the TOTAL bet, not the increment.
     case ActionType.BET:
-      // Auto-convert BET to appropriate action if there's already a bet
-      // This handles UI implementations that don't distinguish between BET/CALL/RAISE buttons
-      // Note: action.amount is the TOTAL bet size, not the amount to add
       const currentBet = Math.max(...Array.from(state.currentBets.values()), 0);
       if (currentBet > 0 && "amount" in action) {
         if (action.amount === currentBet) {
-          // Amount equals current bet -> Convert to CALL
           const callAction: Action = {
             type: ActionType.CALL,
             playerId: action.playerId,
@@ -78,7 +71,6 @@ export function gameReducer(state: GameState, action: Action): GameState {
           };
           newState = handleCall(state, callAction);
         } else if (action.amount > currentBet) {
-          // Amount exceeds current bet -> Convert to RAISE
           const raiseAction: Action = {
             type: ActionType.RAISE,
             playerId: action.playerId,
@@ -87,7 +79,7 @@ export function gameReducer(state: GameState, action: Action): GameState {
           };
           newState = handleRaise(state, raiseAction);
         } else {
-          // Amount is less than current bet -> Keep as BET (will fail validation)
+          // amount < currentBet: pass through (will fail validation)
           newState = handleBet(state, action);
         }
       } else {
@@ -99,7 +91,6 @@ export function gameReducer(state: GameState, action: Action): GameState {
       newState = handleRaise(state, action);
       break;
 
-    // Showdown actions
     case ActionType.SHOW:
       newState = handleShow(state, action);
       break;
@@ -108,7 +99,6 @@ export function gameReducer(state: GameState, action: Action): GameState {
       newState = handleMuck(state, action);
       break;
 
-    // Special actions
     case ActionType.TIMEOUT:
       newState = handleTimeout(state, action);
       break;
@@ -122,24 +112,17 @@ export function gameReducer(state: GameState, action: Action): GameState {
       break;
 
     default:
-      // Unknown action type
       newState = state;
       break;
   }
 
-  // Check if we should progress to next street
+  // Recalculate pots, then progress street.
   if (shouldProgressStreet(newState)) {
-    // Recalculate pots before progressing
     newState = recalculatePots(newState);
     newState = progressStreet(newState);
   }
 
-  // Check if we should go to showdown
   if (shouldShowdown(newState)) {
-    newState = {
-      ...newState,
-      street: newState.street, // Keep current street for showdown
-    };
     newState = determineWinners(newState);
   }
 
@@ -147,13 +130,11 @@ export function gameReducer(state: GameState, action: Action): GameState {
     newState = { ...newState, actionTo: null };
   }
 
-  // Audit chip conservation (throws on failure)
-  // Enabled by default, can be disabled via config (not recommended for production)
+  // Integrity check; can be disabled via config (not recommended for production).
   if (newState.config.validateIntegrity !== false) {
     validateGameStateIntegrity(newState);
   }
 
-  // Add to previous states for undo
   const previousStates = [...newState.previousStates, state].slice(-MAX_UNDO_HISTORY);
 
   return {

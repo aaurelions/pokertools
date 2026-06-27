@@ -14,7 +14,6 @@ import { ErrorCodes } from "@pokertools/types";
  * Handle SHOW action - player reveals their cards at showdown
  */
 export function handleShow(state: GameState, action: ShowAction): GameState {
-  // Find player
   const player = state.players.find((p) => p?.id === action.playerId);
   if (!player) {
     throw new IllegalActionError(
@@ -24,7 +23,6 @@ export function handleShow(state: GameState, action: ShowAction): GameState {
     );
   }
 
-  // Can only show at showdown
   if (state.street !== Street.SHOWDOWN) {
     throw new IllegalActionError(
       ErrorCodes.INVALID_ACTION,
@@ -33,7 +31,6 @@ export function handleShow(state: GameState, action: ShowAction): GameState {
     );
   }
 
-  // Player must not have folded
   if (player.status === PlayerStatus.FOLDED) {
     throw new IllegalActionError(ErrorCodes.INVALID_ACTION, `Cannot show cards after folding`, {
       playerId: action.playerId,
@@ -41,27 +38,20 @@ export function handleShow(state: GameState, action: ShowAction): GameState {
     });
   }
 
-  // Player must have cards
   if (!player.hand) {
     throw new IllegalActionError(ErrorCodes.INVALID_ACTION, `Player has no cards to show`, {
       playerId: action.playerId,
     });
   }
 
-  // Determine which cards to show
   let cardIndices: number[];
   if (action.cardIndices && action.cardIndices.length > 0) {
-    // Validate indices are within bounds
     cardIndices = action.cardIndices.filter((i) => i >= 0 && i < player.hand!.length);
-    if (cardIndices.length === 0) {
-      return state; // Invalid indices
-    }
+    if (cardIndices.length === 0) return state;
   } else {
-    // Default: show all cards
     cardIndices = Array.from({ length: player.hand.length }, (_, i) => i);
   }
 
-  // Update player's shown cards
   const newPlayers = [...state.players];
   newPlayers[player.seat] = {
     ...player,
@@ -93,7 +83,6 @@ export function handleShow(state: GameState, action: ShowAction): GameState {
  * Handle MUCK action - player hides their cards at showdown
  */
 export function handleMuck(state: GameState, action: MuckAction): GameState {
-  // Find player
   const player = state.players.find((p) => p?.id === action.playerId);
   if (!player) {
     throw new IllegalActionError(
@@ -103,7 +92,6 @@ export function handleMuck(state: GameState, action: MuckAction): GameState {
     );
   }
 
-  // Can only muck at showdown
   if (state.street !== Street.SHOWDOWN) {
     throw new IllegalActionError(
       ErrorCodes.INVALID_ACTION,
@@ -112,7 +100,6 @@ export function handleMuck(state: GameState, action: MuckAction): GameState {
     );
   }
 
-  // Player must not have folded
   if (player.status === PlayerStatus.FOLDED) {
     throw new IllegalActionError(ErrorCodes.INVALID_ACTION, `Cannot muck cards after folding`, {
       playerId: action.playerId,
@@ -120,7 +107,6 @@ export function handleMuck(state: GameState, action: MuckAction): GameState {
     });
   }
 
-  // Cannot muck if you're a winner (winners must show)
   const isWinner = state.winners?.some((w) => w.seat === player.seat);
   if (isWinner) {
     throw new IllegalActionError(
@@ -130,11 +116,10 @@ export function handleMuck(state: GameState, action: MuckAction): GameState {
     );
   }
 
-  // Set shown cards to null (mucked) - hand is preserved in player.hand
   const newPlayers = [...state.players];
   newPlayers[player.seat] = {
     ...player,
-    shownCards: null, // Muck cards (hide them, but preserve hand data)
+    shownCards: null,
   };
 
   const actionRecord: ActionRecord = {

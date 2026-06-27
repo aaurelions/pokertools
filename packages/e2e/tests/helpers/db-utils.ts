@@ -8,13 +8,11 @@
 
 import crypto from "node:crypto";
 
-// ---- Prisma client (from API generated client) ----
 // @ts-ignore - Cross-package source import; resolved by vitest at runtime
 import { createPrismaClient } from "../../../api/src/utils/prisma-client.js";
 
 export { createPrismaClient };
 
-// ---- xpub encryption (mirrors packages/api/src/utils/crypto.ts) ----
 const ALGORITHM = "aes-256-gcm";
 const IV_LENGTH = 16;
 const AUTH_TAG_LENGTH = 16;

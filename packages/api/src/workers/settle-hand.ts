@@ -35,7 +35,7 @@ const worker = new Worker(
           where: { referenceId: handId, type: { in: ["HAND_WIN", "HAND_LOSS", "RAKE"] } },
         });
         if (existingSettlement) return;
-        // 1. Credit House (Rake)
+
         if (rakeAmount > 0) {
           const houseUserId = await getHouseUserId(prisma);
           const houseAccount = await tx.account.findUniqueOrThrow({
@@ -64,7 +64,7 @@ const worker = new Worker(
           });
         }
 
-        // 2. Process player changes
+        // Process player changes
         for (const [userId, netChangeStr] of Object.entries(playerNetChanges)) {
           const netChange = Number(netChangeStr);
           if (netChange === 0) continue;

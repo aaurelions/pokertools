@@ -68,7 +68,7 @@ export class BlockchainService {
       },
     });
 
-    // Build transport with failover if backup URL exists
+    // Build transport with failover when backup RPC URL exists
     const rpcUrls = [chain.rpcUrl, chain.rpcUrlBackup].filter((url): url is string => Boolean(url));
 
     const transport =
@@ -200,8 +200,7 @@ export class BlockchainService {
       throw new Error("No active AdminWallet found");
     }
 
-    // Decrypt the xpriv
-    const xpriv = decryptXpub(adminWallet.xpub); // Contains xpriv now
+    const xpriv = decryptXpub(adminWallet.xpub);
     const hdKey = HDKey.fromExtendedKey(xpriv);
     const childKey = hdKey.deriveChild(derivationIndex);
 

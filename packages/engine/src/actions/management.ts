@@ -36,7 +36,6 @@ export function handleSit(state: GameState, action: SitAction): GameState {
   const newPlayers = [...state.players];
   newPlayers[action.seat] = newPlayer;
 
-  // Add to time banks
   const newTimeBanks = new Map(state.timeBanks);
   newTimeBanks.set(action.seat, newPlayer.timeBank);
 

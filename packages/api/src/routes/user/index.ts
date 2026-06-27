@@ -83,7 +83,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
     const { amount, blockchainId, tokenId, address, message, signature, idempotencyKey } =
       validation.data;
 
-    // 1. Idempotency check: if idempotencyKey is provided, return the existing
+    // Idempotency check: if idempotencyKey is provided, return the existing
     // DB-backed outbox row instead of relying on recent JSON metadata scans.
     if (idempotencyKey) {
       const existingPayment = await fastify.prisma.paymentTransaction.findUnique({
@@ -105,13 +105,13 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       }
     }
 
-    // 2. Get user and verify they own the signing address
+    // Get user and verify they own the signing address
     const user = await fastify.prisma.user.findUniqueOrThrow({
       where: { id: userId },
       select: { address: true, username: true },
     });
 
-    // 3. Verify the signature
+    // Verify the signature
     let isValid: boolean;
     try {
       isValid = await verifyMessage({
@@ -128,7 +128,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: "Signature verification failed" });
     }
 
-    // 4. Verify the message contains withdrawal details with nonce/timestamp to prevent replay.
+    // Verify the message contains withdrawal details with nonce/timestamp to prevent replay.
     // Format: "Withdraw {amount} USD to {address}\nNonce: {nonce}\nTimestamp: {timestamp}"
     const hasNonceAndTimestamp =
       message.includes(`Withdraw ${amount} USD to ${address}\nNonce: `) &&
@@ -182,7 +182,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
 
-    // 5. Verify blockchain and token exist
+    // Verify blockchain and token exist
     const [blockchain, token] = await Promise.all([
       fastify.prisma.blockchain.findUnique({
         where: { id: blockchainId, isEnabled: true },
@@ -200,7 +200,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: "Token not found or does not match blockchain" });
     }
 
-    // 6. Get user's MAIN account
+    // Get user's MAIN account
     const mainAccount = await fastify.prisma.account.findUnique({
       where: {
         userId_currency_type: {
@@ -215,7 +215,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: "Account not found" });
     }
 
-    // 7. Check balance (amount is in USD cents, i.e., 100 = $1.00)
+    // Check balance (amount is in USD cents, i.e., 100 = $1.00)
     const amountInCents = Math.floor(amount * 100);
     const risk = await fastify.riskManager.assertAllowed({
       userId,
@@ -231,11 +231,10 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
 
-    // 8. Calculate raw amount for blockchain (convert USD to token amount)
-    // For now, assuming 1:1 for USDC (6 decimals)
+    // Convert USD cents to on-chain token amount using token's configured decimals
     const amountRaw = (BigInt(amountInCents) * BigInt(10 ** token.decimals)) / BigInt(100);
 
-    // 9. Enforce minimum withdrawal amount from token configuration
+    // Enforce minimum withdrawal amount from token configuration
     const minDepositBigInt = BigInt(token.minDeposit);
     if (amountRaw < minDepositBigInt) {
       return reply.code(400).send({
@@ -243,7 +242,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
 
-    // 10. Create withdrawal request in database (atomic transaction with PaymentTransaction)
+    // Create withdrawal request in database (atomic transaction with PaymentTransaction)
     const result = await fastify.prisma.$transaction(
       async (
         tx: Omit<
@@ -251,13 +250,11 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
           "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends"
         >
       ) => {
-        // Debit from MAIN account
         await tx.account.update({
           where: { id: mainAccount.id },
           data: { balance: { decrement: amountInCents } },
         });
 
-        // Create ledger entry for withdrawal
         const entry = await tx.ledgerEntry.create({
           data: {
             accountId: mainAccount.id,
@@ -299,7 +296,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       }
     );
 
-    // 11. Queue withdrawal for admin approval (best-effort, PaymentTransaction is already in DB)
+    // Queue withdrawal for admin approval (best-effort, PaymentTransaction is already in DB)
     await fastify.redis.rpush("withdrawal_queue", result.ledgerEntry.id).catch((err: Error) => {
       fastify.log.warn(
         { err, paymentTxId: result.paymentTx.id },

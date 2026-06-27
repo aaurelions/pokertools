@@ -112,9 +112,8 @@ function groupActionsByStreet(state: GameState): Map<Street, HandHistoryActionRe
   grouped.set(Street.RIVER, []);
   grouped.set(Street.SHOWDOWN, []);
 
-  // Group action history by street
   for (const record of state.actionHistory) {
-    if (record.seat === null) continue; // Skip table-level actions
+    if (record.seat === null) continue;
 
     const street = (record.street as Street) ?? state.street;
     const existing = grouped.get(street) ?? [];

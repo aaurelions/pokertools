@@ -46,10 +46,9 @@ export async function buildApp() {
           },
   });
 
-  // Add custom serializer to handle BigInt values safely
+  // Serialize BigInt values as strings to avoid JSON serialization errors.
   app.addHook("preSerialization", async (_request, _reply, payload: unknown) => {
     if (payload && typeof payload === "object") {
-      // Safe: We're serializing and deserializing to handle BigInt
       const serialized = JSON.stringify(payload, (_, value) =>
         // eslint-disable-next-line @typescript-eslint/no-unsafe-return
         typeof value === "bigint" ? value.toString() : value
@@ -60,7 +59,6 @@ export async function buildApp() {
     return payload;
   });
 
-  // Security plugins
   await app.register(helmet, {
     contentSecurityPolicy: false,
   });
@@ -70,8 +68,8 @@ export async function buildApp() {
       config.NODE_ENV === "production" && config.CORS_ORIGIN
         ? config.CORS_ORIGIN
         : config.NODE_ENV === "production"
-          ? false // In production without explicit CORS_ORIGIN, deny cross-origin
-          : true, // In dev/test, allow all origins
+          ? false
+          : true,
     credentials: true,
   });
 
@@ -81,7 +79,6 @@ export async function buildApp() {
     timeWindow: "1 minute",
   });
 
-  // JWT
   await app.register(jwt, {
     secret: config.JWT_SECRET,
     cookie: {
@@ -94,10 +91,8 @@ export async function buildApp() {
     secret: config.COOKIE_SECRET,
   });
 
-  // WebSocket
   await app.register(websocket);
 
-  // Documentation
   await app.register(swagger, {
     openapi: {
       info: {
@@ -112,20 +107,17 @@ export async function buildApp() {
     routePrefix: "/docs",
   });
 
-  // Infrastructure plugins
   await app.register(prismaPlugin);
   await app.register(redisPlugin);
   await app.register(redlockPlugin);
   await app.register(queuePlugin);
   await app.register(servicesPlugin);
 
-  // Auth decorator
+  // Authenticate decorator: validates JWT AND DB session so server-side
+  // revocation/expiry cannot be bypassed with a still-valid token.
   app.decorate("authenticate", async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       await request.jwtVerify();
-      // Check session not revoked or expired. JWT expiry and DB session expiry are
-      // both enforced so server-side revocation/expiry cannot be bypassed with a
-      // still-valid token.
       const { jti } = request.user;
       const session = await app.prisma.session.findUnique({ where: { jti } });
       if (session === null || session.revoked || session.expiresAt <= new Date()) {
@@ -157,7 +149,6 @@ export async function buildApp() {
     return reply.code(statusCode).send({ error: code, message: err.message });
   });
 
-  // Production health and Prometheus-compatible metrics endpoints.
   app.get("/health", async (request, reply) => {
     const health = await app.observabilityManager.health();
     if (health.status === "down") return reply.code(503).send(health);

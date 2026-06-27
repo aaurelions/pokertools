@@ -1,4 +1,3 @@
-// Main Engine Class
 export { PokerEngine } from "./engine/poker-engine";
 
 // Types (re-exported from @pokertools/types for convenience)

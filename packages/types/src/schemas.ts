@@ -290,8 +290,8 @@ export const GameActionRequestSchema = z.object({
 // Type Inference Helpers
 // ============================================================================
 
-// Note: Individual action types are already exported from Action.ts
-// We only export the validated action union type here to avoid conflicts
+// Action types are defined in action.ts; here we only export the
+// Zod-inferred union type to avoid duplicate type declarations.
 
 export type ValidatedAction = z.infer<typeof ActionSchema>;
 export type ValidatedBlindLevel = z.infer<typeof BlindLevelSchema>;

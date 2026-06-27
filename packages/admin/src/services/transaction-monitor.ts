@@ -75,7 +75,7 @@ export class TransactionMonitor {
           this.logger.error(`Tx Reverted: ${tx.txHash}`);
         }
       } catch (_error) {
-        // Ignored: Tx likely still pending
+        // Transaction still pending; will be re-checked on next poll
       }
     }
   }

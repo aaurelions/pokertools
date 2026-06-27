@@ -44,7 +44,7 @@ export function createDepositMonitorWorker(
     async (job: Job) => {
       logger.info("Scanning active deposit sessions...");
 
-      // 1. Get active sessions
+      // Get active sessions
       const now = new Date();
       const sessions = await prisma.depositSession.findMany({
         where: { expiresAt: { gt: now } },
@@ -66,13 +66,13 @@ export function createDepositMonitorWorker(
 
       logger.info({ walletCount: uniqueWallets.size }, "Scanning unique wallet addresses");
 
-      // 2. Get enabled blockchains and tokens
+      // Get enabled blockchains and tokens
       const blockchains = await prisma.blockchain.findMany({
         where: { isEnabled: true },
         include: { tokens: { where: { isEnabled: true } } },
       });
 
-      // 3. Build a Set of active wallet addresses for O(1) lookup
+      // Build a Set of active wallet addresses for O(1) lookup
       // We use the map for checking existence to ensure case-insensitivity
       const walletToUserMap = new Map(
         Array.from(uniqueWallets.entries()).map(([addr, session]) => [
@@ -83,7 +83,7 @@ export function createDepositMonitorWorker(
 
       logger.info({ activeWalletCount: walletToUserMap.size }, "Built active wallet lookup map");
 
-      // 4. Scan by BLOCK (not by user) - O(Chains × Tokens) RPC calls
+      // Scan by BLOCK (not by user) - O(Chains × Tokens) RPC calls
       for (const chain of blockchains) {
         try {
           const client = await blockchainManager.getClient(chain.id);
@@ -139,14 +139,6 @@ export function createDepositMonitorWorker(
                 const fromAddress = log.args.from?.toLowerCase();
                 const toAddress = log.args.to?.toLowerCase();
 
-                // Debug logging
-                if (toAddress) {
-                  logger.info(
-                    { toAddress, isActive: walletToUserMap.has(toAddress) },
-                    "Checking log address"
-                  );
-                }
-
                 if (!toAddress || !walletToUserMap.has(toAddress)) {
                   continue; // Not one of our users
                 }
@@ -173,7 +165,6 @@ export function createDepositMonitorWorker(
 
                 if (existingDeposit) continue;
 
-                // PROCESS NEW DEPOSIT
                 // Convert token amount to Chips (cents) using BigInt arithmetic ONLY
                 const amountBigInt = BigInt(amount);
                 const decimalsBigInt = 10n ** BigInt(token.decimals);
@@ -187,7 +178,6 @@ export function createDepositMonitorWorker(
 
                 if (chips <= 0) continue;
 
-                // Enforce minimum deposit amount from token configuration
                 const minDepositBigInt = BigInt(token.minDeposit);
                 if (amountBigInt < minDepositBigInt) {
                   logger.info(
@@ -202,7 +192,6 @@ export function createDepositMonitorWorker(
                   continue;
                 }
 
-                // Calculate confirmations
                 const confirmations = Number(currentBlock - txBlockNumber);
                 const requiredConfirmations = chain.confirmations;
 
@@ -318,7 +307,7 @@ export function createDepositMonitorWorker(
         }
       }
 
-      // 4. Check PENDING deposits for confirmation upgrades
+      // Check PENDING deposits for confirmation upgrades
       await checkPendingDeposits(prisma, blockchainManager, logger);
     },
     {
@@ -368,7 +357,6 @@ async function checkPendingDeposits(
       if (confirmations >= requiredConfirmations) {
         // Upgrade to CONFIRMED and credit user
         await prisma.$transaction(async (tx) => {
-          // Credit Ledger
           const mainAccount = await tx.account.findUniqueOrThrow({
             where: {
               userId_currency_type: {

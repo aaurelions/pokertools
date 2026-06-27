@@ -13,7 +13,6 @@ import type { TableConfig } from "@pokertools/types";
  * Falls back to Math.random() only in environments without crypto
  */
 export function getBrowserRNG(): () => number {
-  // Check for Web Crypto API
   if (typeof window !== "undefined" && window.crypto?.getRandomValues) {
     return () => {
       const buffer = new Uint32Array(1);

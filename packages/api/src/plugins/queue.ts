@@ -10,7 +10,6 @@ const queuePlugin: FastifyPluginAsync = async (fastify) => {
   fastify.decorate("queue", queue);
   fastify.log.info("BullMQ queue initialized");
 
-  // Cleanup on shutdown
   fastify.addHook("onClose", async (app) => {
     await app.queue.close().catch((error: unknown) => {
       if (!(error instanceof Error) || !error.message.includes("Connection is closed")) {
@@ -20,8 +19,7 @@ const queuePlugin: FastifyPluginAsync = async (fastify) => {
     fastify.log.info("BullMQ queue closed");
   });
 
-  // Note: Function is async to support potential future async initialization
-  return Promise.resolve();
+  await Promise.resolve();
 };
 
 export default fp(queuePlugin, {

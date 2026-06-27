@@ -20,7 +20,6 @@ export class SocketManager {
   private tableSubscriptions = new Map<string, Set<AuthenticatedWebSocket>>();
 
   constructor(private app: FastifyInstance) {
-    // Single Redis subscriber for ALL tables
     this.subscriber = app.redis.duplicate();
     this.initSubscriber();
 
@@ -57,7 +56,6 @@ export class SocketManager {
       if (!sockets || sockets.size === 0) return;
 
       try {
-        // Parse the lightweight notification published via Redis
         let payload: { type: string; tableId: string; version: number; timestamp?: number };
         try {
           payload = JSON.parse(message);
@@ -66,7 +64,6 @@ export class SocketManager {
           return;
         }
 
-        // Ensure timestamp is present (publishers should include it)
         const broadcastMessage = JSON.stringify({
           type: "STATE_UPDATE",
           tableId: payload.tableId || tableId,
@@ -74,10 +71,8 @@ export class SocketManager {
           timestamp: payload.timestamp ?? Date.now(),
         });
 
-        // Forward lightweight STATE_UPDATE to all subscribers
         for (const socket of sockets) {
           if (socket.readyState === 1) {
-            // OPEN
             socket.send(broadcastMessage);
           }
         }

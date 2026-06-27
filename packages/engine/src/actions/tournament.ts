@@ -4,21 +4,18 @@ import { GameState, NextBlindLevelAction, ActionRecord, ActionType } from "@poke
  * Handle NEXT_BLIND_LEVEL action - advance to next blind level in tournament
  */
 export function handleNextBlindLevel(state: GameState, action: NextBlindLevelAction): GameState {
-  // Only applicable for tournaments
   if (!state.config.blindStructure) {
     return state;
   }
 
   const nextLevel = state.blindLevel + 1;
 
-  // Check if we're at max level
   if (nextLevel >= state.config.blindStructure.length) {
-    return state; // At max level, no change
+    return state;
   }
 
   const blindLevel = state.config.blindStructure[nextLevel];
 
-  // Record action to history
   const actionRecord: ActionRecord = {
     action: {
       type: ActionType.NEXT_BLIND_LEVEL,

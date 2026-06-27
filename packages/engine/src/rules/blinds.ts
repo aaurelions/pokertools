@@ -94,7 +94,7 @@ function getNextActiveOrOccupiedSeat(
     seat = getNextSeat(seat, maxPlayers);
   }
 
-  return null; // No eligible seats
+  return null;
 }
 
 /**

@@ -8,7 +8,6 @@ import { getBlindPositions } from "./blinds";
  * Returns seat number or null if action is complete
  */
 export function getNextToAct(state: GameState): number | null {
-  // Special case: heads-up has different rules
   if (isHeadsUp(state)) {
     return getNextToActHeadsUp(state);
   }
@@ -46,13 +45,11 @@ function getNextToActNormal(state: GameState): number | null {
     const playerBet = state.currentBets.get(seat) ?? 0;
 
     if (playerBet < currentBet) {
-      return seat; // Player needs to respond to bet
+      return seat;
     }
 
-    // Player has matched current bet
-    // Check if they've already acted
     if (!hasActedThisStreet(state, seat)) {
-      return seat; // Player hasn't acted yet
+      return seat;
     }
 
     foundActionable = true;
@@ -149,7 +146,6 @@ function getNextActionableSeat(startSeat: number, state: GameState): number | nu
   let seat = getNextSeat(startSeat, state.maxPlayers);
   const endSeat = startSeat;
 
-  // Scan full circle
   while (seat !== endSeat) {
     const player = state.players[seat];
 
@@ -221,7 +217,6 @@ export function isActionComplete(state: GameState): boolean {
  * This is tracked by checking if they appear in the action history for this street
  */
 function hasActedThisStreet(state: GameState, seat: number): boolean {
-  // Find actions from current street
   const streetStartIndex = findStreetStartIndex(state);
 
   for (let i = streetStartIndex; i < state.actionHistory.length; i++) {

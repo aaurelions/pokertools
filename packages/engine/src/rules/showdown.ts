@@ -46,8 +46,8 @@ export function determineWinners(state: GameState): GameState {
     const share = Math.floor(potAfterRake / potWinners.length);
     const remainder = potAfterRake % potWinners.length;
 
-    // Sort winners by position (worst to best) for odd chip distribution
-    // TDA Rule: Odd chips go to first player(s) clockwise from button
+    // Sort winners by position for odd chip distribution.
+    // TDA Rule: odd chips go to first player(s) clockwise from the button.
     const sortedWinners = [...potWinners].sort((a, b) => {
       if (state.buttonSeat === null) return 0;
 
@@ -62,23 +62,20 @@ export function determineWinners(state: GameState): GameState {
       const evaluation = sortedWinners[i];
       let award = share;
 
-      // Distribute odd chips one at a time to worst positions
-      // (first N winners in sorted order get the extra chips)
+      // First N winners (worst position) each get one extra chip.
       if (i < remainder) {
         award += 1;
       }
 
-      // Track winner seats
       winnerSeats.add(evaluation.seat);
 
-      // Award chips to player
       const player = newPlayers[evaluation.seat]!;
       newPlayers[evaluation.seat] = {
         ...player,
         stack: player.stack + award,
       };
 
-      // Record winner
+      // Record winner with hand description.
       winners.push({
         seat: evaluation.seat,
         amount: award,
@@ -125,7 +122,6 @@ export function determineWinners(state: GameState): GameState {
  * Evaluate a single pot and return winner(s)
  */
 function evaluatePot(state: GameState, pot: Pot): HandEvaluation[] {
-  // Get eligible players (not folded)
   const eligible = pot.eligibleSeats
     .map((seat) => state.players[seat])
     .filter(
@@ -133,7 +129,7 @@ function evaluatePot(state: GameState, pot: Pot): HandEvaluation[] {
         player && (player.status === PlayerStatus.ACTIVE || player.status === PlayerStatus.ALL_IN)
     );
 
-  // If only one player, they win without showing
+  // Single remaining player wins uncontested.
   if (eligible.length === 1) {
     const player = eligible[0]!;
     return [
@@ -146,26 +142,20 @@ function evaluatePot(state: GameState, pot: Pot): HandEvaluation[] {
     ];
   }
 
-  // Evaluate all hands
   const evaluations: HandEvaluation[] = [];
 
   for (const player of eligible) {
     if (!player?.hand) continue;
 
-    // Skip masked hands (client mode)
+    // Skip masked hands in client mode.
     if (player.hand.some((c) => c === null)) {
       continue;
     }
 
-    // Combine hole cards + board (7 cards total for river)
     const allCards = [...(player.hand as string[]), ...state.board];
 
-    if (allCards.length < 5) {
-      // Not enough cards (shouldn't happen)
-      continue;
-    }
+    if (allCards.length < 5) continue;
 
-    // Evaluate using @pokertools/evaluator
     const cardCodes = getCardCodes(allCards);
     const score = evaluate(cardCodes);
     const handRank = rank(cardCodes);
@@ -183,11 +173,8 @@ function evaluatePot(state: GameState, pot: Pot): HandEvaluation[] {
     return [];
   }
 
-  // Find best hand(s)
   const bestScore = Math.min(...evaluations.map((e) => e.score));
-  const winners = evaluations.filter((e) => e.score === bestScore);
-
-  return winners;
+  return evaluations.filter((e) => e.score === bestScore);
 }
 
 /**
@@ -233,22 +220,11 @@ function getBestFiveCardHand(cards: readonly string[]): string[] {
  * Check if hand should go to showdown
  */
 export function shouldShowdown(state: GameState): boolean {
-  // Showdown if:
-  // 1. We're at SHOWDOWN street
-  // 2. Multiple players remain (not folded)
-  // 3. Winners haven't been determined yet
-
-  if (state.street !== Street.SHOWDOWN) {
-    return false;
-  }
-
-  if (state.winners !== null) {
-    return false; // Already determined winners
-  }
+  if (state.street !== Street.SHOWDOWN) return false;
+  if (state.winners !== null) return false;
 
   const activePlayers = state.players.filter(
     (p) => p && (p.status === PlayerStatus.ACTIVE || p.status === PlayerStatus.ALL_IN)
   );
-
   return activePlayers.length >= 2;
 }

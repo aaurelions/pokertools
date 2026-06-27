@@ -40,7 +40,7 @@ const worker = new Worker(
     }
 
     try {
-      // 1. Load state from Redis, recovering from durable DB snapshot if Redis expired.
+      // Load state from Redis, recovering from durable DB snapshot if Redis expired
       let stateJson = await redis.get(`table:${tableId}`);
       if (!stateJson) {
         const table = await prisma.table.findUnique({
@@ -57,13 +57,13 @@ const worker = new Worker(
 
       const snapshot: Snapshot = JSON.parse(stateJson);
 
-      // 2. Check if already in a hand (manual DEAL happened)
+      // Check if already in a hand (manual DEAL happened)
       if (snapshot.street !== "SHOWDOWN" || !snapshot.winners) {
         console.log(`⏭️  Table ${tableId} already started next hand, skipping`);
         return;
       }
 
-      // 3. Check if enough players to continue
+      // Check if enough players to continue
       const activePlayers = snapshot.players.filter((p) => p !== null && p.stack > 0);
       if (activePlayers.length < 2) {
         console.log(`⏸️  Table ${tableId} has < 2 players, pausing game`);
@@ -74,11 +74,11 @@ const worker = new Worker(
         return;
       }
 
-      // 4. Restore engine and deal new hand
+      // Restore engine and deal new hand
       const engine = PokerEngine.restore(snapshot);
       engine.deal();
 
-      // 5. Save new state to Redis with the same optimistic version guard as
+      // Save new state to Redis with the same optimistic version guard as
       // player actions. This prevents the auto-dealer from overwriting a
       // manually-dealt hand that landed after our initial read.
       const newSnapshot: Snapshot = engine.snapshot as any;
@@ -120,7 +120,6 @@ const worker = new Worker(
         data: { state: JSON.stringify(newSnapshot) },
       });
 
-      // 6. Broadcast state update via Redis Pub/Sub
       await redis.publish(
         `pubsub:table:${tableId}`,
         JSON.stringify({

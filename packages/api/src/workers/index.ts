@@ -51,15 +51,15 @@ const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
 const redis = new Redis(redisUrl, { maxRetriesPerRequest: null });
 const queue = new Queue("deposit-monitor", { connection: redis as any });
 
-// Schedule deposit monitor to run every 15 seconds
+// Schedule deposit monitor as a repeatable cron-style job.
 (async () => {
   try {
     await queue.add(
       "deposit-monitor",
       {},
       {
-        repeat: { every: 15000 }, // Check every 15 seconds
-        jobId: "deposit-monitor-singleton", // Ensure only one cron exists
+        repeat: { every: 15000 },
+        jobId: "deposit-monitor-singleton",
       }
     );
     logger.info("Deposit monitor scheduled: every 15 seconds");
@@ -68,7 +68,6 @@ const queue = new Queue("deposit-monitor", { connection: redis as any });
   }
 })();
 
-// Graceful shutdown
 process.on("SIGTERM", async () => {
   logger.info("Shutting down workers...");
   await Promise.all(workers.map((w) => w.close()));

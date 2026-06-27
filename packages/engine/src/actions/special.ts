@@ -30,7 +30,6 @@ export function handleTimeout(state: GameState, action: TimeoutAction): GameStat
 
   const { player, seat } = result;
 
-  // Determine if player needs to call
   const currentBet = getCurrentBet(state);
   const playerBet = state.currentBets.get(seat) ?? 0;
   const needsToCall = currentBet > playerBet;
@@ -38,14 +37,12 @@ export function handleTimeout(state: GameState, action: TimeoutAction): GameStat
   const newPlayers = [...state.players];
 
   if (needsToCall) {
-    // Player must fold
     newPlayers[seat] = {
       ...player,
       status: PlayerStatus.FOLDED,
       isSittingOut: true,
     };
   } else {
-    // Player can check, but mark as sitting out
     newPlayers[seat] = {
       ...player,
       isSittingOut: true,
@@ -72,7 +69,6 @@ export function handleTimeout(state: GameState, action: TimeoutAction): GameStat
     timestamp: action.timestamp!,
   };
 
-  // Move to next player
   const nextToAct = getNextToAct(newState);
   const actionableNext =
     nextToAct !== null && !newPlayers[nextToAct]?.isSittingOut ? nextToAct : null;

@@ -17,7 +17,6 @@ const worker = new Worker(
   async (job) => {
     const { tableId, handId, snapshot } = job.data;
 
-    // Restore engine to export formatted history
     const engine = PokerEngine.restore(snapshot);
     const historyData = engine.history({ format: "json" });
 

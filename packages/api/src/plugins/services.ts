@@ -11,7 +11,6 @@ import { RiskManager } from "../services/risk-manager.js";
 import { IdempotencyManager } from "../services/idempotency-manager.js";
 
 const servicesPlugin: FastifyPluginAsync = async (fastify) => {
-  // Initialize services
   // The decorated properties (redis, redlock, queue, prisma) are typed in fastify.d.ts,
   // but TypeScript doesn't recognize them in plugin context before decoration.
   // This is a known limitation of Fastify's plugin system.
@@ -32,7 +31,6 @@ const servicesPlugin: FastifyPluginAsync = async (fastify) => {
 
   const socketManager = new SocketManager(fastify);
 
-  // Decorate fastify instance
   fastify.decorate("gameManager", gameManager);
   fastify.decorate("financialManager", financialManager);
   fastify.decorate("socketManager", socketManager);
@@ -47,8 +45,7 @@ const servicesPlugin: FastifyPluginAsync = async (fastify) => {
 
   fastify.log.info("Services initialized");
 
-  // Note: Function is async to support potential future async initialization
-  return Promise.resolve();
+  await Promise.resolve();
 };
 
 export default fp(servicesPlugin, {

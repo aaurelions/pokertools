@@ -54,7 +54,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
 
       const { message, signature } = validation.data;
 
-      // 1. Parse and verify nonce
+      // Parse and verify nonce
       let siweMessage: ReturnType<typeof parseSiweMessage>;
       try {
         siweMessage = parseSiweMessage(message);
@@ -76,7 +76,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(401).send({ error: "Invalid or expired nonce" });
       }
 
-      // 2. Verify signature
+      // Verify signature
       if (!siweMessage.address) {
         return reply.code(400).send({ error: "Invalid SIWE message: missing address" });
       }
@@ -91,7 +91,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(401).send({ error: "Invalid signature" });
       }
 
-      // 3. Upsert user (store address in lowercase)
+      // Upsert user (store address in lowercase)
       const addressLower = siweMessage.address.toLowerCase();
 
       const user = await fastify.prisma.user.upsert({
@@ -106,15 +106,15 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       // Ensure user has accounts
       await fastify.financialManager.ensureAccounts(user.id);
 
-      // 4. Create session
+      // Create session
       const jti = crypto.randomUUID();
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
       await fastify.prisma.session.create({
         data: { userId: user.id, jti, expiresAt },
       });
 
-      // 5. Issue JWT
+      // Issue JWT
       const token = await reply.jwtSign(
         { userId: user.id, address: user.address, jti },
         { jti, expiresIn: "7d" }

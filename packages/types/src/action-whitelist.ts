@@ -23,9 +23,6 @@ export const ALLOWED_GAMEPLAY_ACTIONS: readonly ActionType[] = [
   ActionType.NEXT_BLIND_LEVEL, // Tournament blind progression
 ] as const;
 
-/**
- * Type guard to check if an action type is allowed
- */
 export function isAllowedGameplayAction(type: ActionType): boolean {
   return ALLOWED_GAMEPLAY_ACTIONS.includes(type);
 }

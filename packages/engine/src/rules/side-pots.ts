@@ -44,12 +44,10 @@ export function calculateSidePots(state: GameState): Pot[] {
     }
   }
 
-  // If no investments, return empty
   if (investments.length === 0) {
     return [];
   }
 
-  // Sort by investment (ascending)
   investments.sort((a, b) => a.amount - b.amount);
 
   const pots: Pot[] = [];
@@ -60,16 +58,13 @@ export function calculateSidePots(state: GameState): Pot[] {
     const allAtThisLevel = investments.slice(i); // Current + all higher investors
     const increment = current.amount - prevAmount;
 
-    // Create pot for this level
     if (increment > 0) {
-      // Pot includes chips from ALL players at this level (including folded)
+      // Pot includes ALL players at this level (folded players' chips stay in).
       const potAmount = increment * allAtThisLevel.length;
 
-      // But only non-folded players are eligible to win
+      // Only non-folded players are eligible to win.
       const eligibleSeats = allAtThisLevel.filter((inv) => !inv.folded).map((inv) => inv.seat);
 
-      // Must have at least one eligible player
-      // If everyone folded at this level, something went wrong in the game logic
       if (eligibleSeats.length === 0) {
         throw new CriticalStateError(
           `Side pot has no eligible players - all ${allAtThisLevel.length} players at this level have folded`,
@@ -107,11 +102,8 @@ export function calculateSidePots(state: GameState): Pot[] {
  * @returns Tuple of [uncalled amount, seat to return to]
  */
 export function calculateUncalledBet(state: GameState): [number, number] | null {
-  if (state.currentBets.size === 0) {
-    return null;
-  }
+  if (state.currentBets.size === 0) return null;
 
-  // Find highest bet
   let maxBet = 0;
   let maxBetSeat = -1;
   let secondMaxBet = 0;
@@ -148,11 +140,8 @@ export function returnUncalledBet(state: GameState): GameState {
   const [amount, seat] = uncalled;
   const player = state.players[seat];
 
-  if (!player) {
-    return state;
-  }
+  if (!player) return state;
 
-  // Return chips to player
   const newPlayers = [...state.players];
   newPlayers[seat] = {
     ...player,
@@ -160,12 +149,10 @@ export function returnUncalledBet(state: GameState): GameState {
     totalInvestedThisHand: player.totalInvestedThisHand - amount,
   };
 
-  // Reduce current bet
   const newCurrentBets = new Map(state.currentBets);
   const currentBet = newCurrentBets.get(seat) ?? 0;
   newCurrentBets.set(seat, currentBet - amount);
 
-  // Record to action history
   const actionRecord: ActionRecord = {
     action: {
       type: ActionType.UNCALLED_BET_RETURNED,
@@ -192,13 +179,11 @@ export function returnUncalledBet(state: GameState): GameState {
  * This is called before progressing to next street
  */
 export function recalculatePots(state: GameState): GameState {
-  // First, return any uncalled bet
   const newState = returnUncalledBet(state);
 
-  // Calculate side pots based on all investments
   const pots = calculateSidePots(newState);
 
-  // Reset betThisStreet for all players (bets collected into pots)
+  // Reset betThisStreet after collecting bets into pots.
   const newPlayers = newState.players.map((p) => (p ? { ...p, betThisStreet: 0 } : null));
 
   return {

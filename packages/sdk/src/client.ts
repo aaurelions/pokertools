@@ -82,7 +82,7 @@ export class PokerClient {
   private token: string | null;
 
   constructor(config: PokerSDKConfig) {
-    this.baseUrl = config.baseUrl.replace(/\/$/, ""); // Remove trailing slash
+    this.baseUrl = config.baseUrl.replace(/\/$/, "");
     this.timeout = config.timeout ?? DEFAULT_CONFIG.timeout;
     this.retry = {
       count: config.retry?.count ?? DEFAULT_CONFIG.retry.count,
@@ -183,7 +183,7 @@ export class PokerClient {
       return response.state;
     } catch (error) {
       if (error instanceof PokerSDKError && error.statusCode === 304) {
-        return null; // Not modified
+        return null;
       }
       throw error;
     }

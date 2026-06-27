@@ -22,15 +22,12 @@ export function exportToPokerStars(
 ): string {
   const lines: string[] = [];
 
-  // Header line
   lines.push(buildHeader(history));
   lines.push(buildTableInfo(history));
 
-  // Button and seats
   lines.push(`Button: seat #${history.buttonSeat + 1}`);
   lines.push("");
 
-  // Player stacks
   for (const player of history.players) {
     lines.push(
       `Seat ${player.seat + 1}: ${player.name} ($${player.startingStack.toFixed(2)} in chips)`
@@ -38,16 +35,13 @@ export function exportToPokerStars(
   }
   lines.push("");
 
-  // Blinds and antes
   lines.push(buildBlindsLine(history));
   if (history.stakes.ante > 0) {
     lines.push(buildAntesLine(history));
   }
 
-  // Hole cards (dealt to)
   lines.push(buildHoleCardsLine(history, options));
 
-  // Each street
   for (const street of history.streets) {
     lines.push("");
     lines.push(buildStreetHeader(street));
@@ -57,7 +51,6 @@ export function exportToPokerStars(
     }
   }
 
-  // Summary
   lines.push("");
   lines.push(buildSummary(history));
 
@@ -87,7 +80,6 @@ function buildTableInfo(history: HandHistory): string {
 function buildBlindsLine(history: HandHistory): string {
   const lines: string[] = [];
 
-  // Find SB and BB seats (button+1 and button+2)
   const sbSeat = (history.buttonSeat + 1) % history.maxPlayers;
   const bbSeat = (history.buttonSeat + 2) % history.maxPlayers;
 

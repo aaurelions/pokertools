@@ -18,17 +18,14 @@ export const localChain = defineChain({
 let anvilProcess: ChildProcess | null = null;
 
 export async function startAnvil() {
-  // If already running, skip
   if (anvilProcess) return;
 
   await new Promise<void>((resolve) => {
-    // Start Anvil on a specific port
     anvilProcess = spawn("anvil", ["--port", "8545", "--block-time", "1"], {
-      stdio: "ignore", // Keep console clean
+      stdio: "ignore",
       detached: false,
     });
 
-    // Give it 1 second to spin up
     setTimeout(() => resolve(), 1000);
   });
 
@@ -48,7 +45,6 @@ import fs from "fs";
 import path from "path";
 
 export async function deployContracts() {
-  // Read artifacts
   const usdcArtifactPath = path.join(process.cwd(), "contracts/out/MockUSDC.sol/MockUSDC.json");
   const usdcArtifact = JSON.parse(fs.readFileSync(usdcArtifactPath, "utf8"));
 
@@ -69,12 +65,11 @@ export async function deployContracts() {
   const usdcReceipt = await publicClient.waitForTransactionReceipt({ hash: usdcHash });
   const usdcAddress = usdcReceipt.contractAddress!;
 
-  // 2. Deploy BatchSweeper
   const sweeperHash = await walletClient.deployContract({
     abi: sweeperArtifact.abi,
     bytecode: sweeperArtifact.bytecode.object,
     account: walletClient.account,
-    args: [walletClient.account.address], // Owner
+    args: [walletClient.account.address],
   });
 
   const sweeperReceipt = await publicClient.waitForTransactionReceipt({ hash: sweeperHash });

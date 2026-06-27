@@ -140,7 +140,6 @@ export function deserializeSnapshot(json: string): Snapshot {
  */
 export function validateSnapshot(snapshot: Snapshot): boolean {
   try {
-    // Basic validation
     if (!snapshot.handId) return false;
     if (snapshot.maxPlayers < 2 || snapshot.maxPlayers > 10) return false;
     if (snapshot.players.length !== snapshot.maxPlayers) return false;

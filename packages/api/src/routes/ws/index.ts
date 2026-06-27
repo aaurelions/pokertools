@@ -88,19 +88,16 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
     let isAlive = true;
     const heartbeatInterval = setInterval(() => {
       if (!isAlive) {
-        // Client didn't respond to ping, terminate connection
         clearInterval(heartbeatInterval);
         socket.terminate();
         return;
       }
 
-      // Mark as not alive and send ping
       isAlive = false;
       socket.ping();
-    }, 30000); // Ping every 30 seconds
+    }, 30000);
 
     socket.on("pong", () => {
-      // Client responded, mark as alive
       isAlive = true;
     });
 

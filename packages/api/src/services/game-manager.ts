@@ -51,28 +51,26 @@ export class GameManager {
     userId: string,
     options: { skipLock?: boolean } = {}
   ): Promise<PublicState> {
-    // 1. Acquire distributed lock (15s TTL in test, 10s in production for safety)
     const lockTTL = process.env.NODE_ENV === "test" ? 15000 : 10000;
     const lock = options.skipLock
       ? null
       : await this.redlock.acquire([`lock:table:${tableId}`], lockTTL);
 
-    // Track if we need to extend lock for long operations
     const lockStartTime = Date.now();
-    const lockExtendThreshold = lockTTL * 0.6; // Extend at 60% of TTL
+    const lockExtendThreshold = lockTTL * 0.6;
 
     try {
-      // 2. Load state from Redis, recovering from the DB snapshot if hot cache expired.
+      // Load state from Redis, recovering from the DB snapshot if hot cache expired
       const previousSnapshot = await this.loadSnapshot(tableId);
       const initialVersion = previousSnapshot._version || 0;
       const engine = PokerEngine.restore(previousSnapshot);
 
-      // 4. Identity validation (API responsibility)
+      // Identity validation (API responsibility)
       if ("playerId" in action && action.playerId !== userId && action.type !== "TIMEOUT") {
         throw new Error("Identity mismatch: Cannot act for another player");
       }
 
-      // 5. Execute action (Engine responsibility - validates rules)
+      // Execute action (Engine responsibility - validates rules)
       engine.act(action);
 
       // Check if we need to extend lock before expensive operations
@@ -85,7 +83,7 @@ export class GameManager {
         }
       }
 
-      // 6. Persist new state with optimistic concurrency check
+      // Persist new state with optimistic concurrency check
       const newSnapshot: Snapshot = engine.snapshot;
       const currentVersion = initialVersion + 1;
       newSnapshot._version = currentVersion;
@@ -144,7 +142,6 @@ export class GameManager {
         throw err;
       }
 
-      // Schedule async cold storage
       await this.queue.add("persist-snapshot", {
         tableId,
         snapshot: newSnapshot,
@@ -154,14 +151,14 @@ export class GameManager {
         data: { state: JSON.stringify(newSnapshot) },
       });
 
-      // 7. Handle side effects
+      // Handle side effects
       if (engine.state.winners) {
         await this.handleHandCompletion(tableId, engine, previousSnapshot);
       } else {
         await this.scheduleTimeout(tableId, engine.state, currentVersion);
       }
 
-      // 8. Publish lightweight event for WebSocket subscribers
+      // Publish lightweight event for WebSocket subscribers
       await this.redis.publish(
         `pubsub:table:${tableId}`,
         JSON.stringify({
@@ -179,9 +176,6 @@ export class GameManager {
     }
   }
 
-  /**
-   * Create a new table
-   */
   async createTable(config: {
     name: string;
     mode: "CASH" | "TOURNAMENT";
@@ -191,7 +185,6 @@ export class GameManager {
     minBuyIn?: number;
     maxBuyIn?: number;
   }): Promise<string> {
-    // Create database record
     const table = await this.prisma.table.create({
       data: {
         name: config.name,
@@ -201,7 +194,6 @@ export class GameManager {
       },
     });
 
-    // Initialize engine state in Redis
     const engineConfig: {
       smallBlind: number;
       bigBlind: number;
@@ -303,7 +295,6 @@ export class GameManager {
   ): Promise<void> {
     const handId = crypto.randomUUID();
 
-    // A. Calculate net changes per player
     const playerNetChanges: Record<string, string> = {};
 
     for (const player of engine.state.players) {
@@ -319,7 +310,7 @@ export class GameManager {
       }
     }
 
-    // B. Schedule settlement (Engine calculated rake already)
+    // Schedule settlement (Engine calculated rake already)
     await this.queue.add("settle-hand", {
       tableId,
       handId,
@@ -327,14 +318,14 @@ export class GameManager {
       rakeTotal: engine.state.rakeThisHand.toString(),
     });
 
-    // C. Archive hand history
+    // Archive hand history
     await this.queue.add("archive-hand", {
       tableId,
       handId,
       snapshot: engine.snapshot,
     });
 
-    // D. Auto-deal next hand if enough players
+    // Auto-deal next hand if enough players
     const activePlayers = engine.state.players.filter((p) => p && p.stack > 0).length;
     if (activePlayers >= 2) {
       await this.queue.add("next-hand", { tableId }, { delay: 5000 });

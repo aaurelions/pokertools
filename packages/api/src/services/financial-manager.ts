@@ -22,7 +22,6 @@ export class FinancialManager {
           "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends"
         >
       ) => {
-        // 1. Get MAIN account
         const mainAccount = await tx.account.findUnique({
           where: {
             userId_currency_type: {
@@ -44,7 +43,7 @@ export class FinancialManager {
           );
         }
 
-        // 2. Get or create IN_PLAY account
+        // Get or create IN_PLAY account
         const inPlayAccount = await tx.account.upsert({
           where: {
             userId_currency_type: {
@@ -62,7 +61,7 @@ export class FinancialManager {
           update: {},
         });
 
-        // 3. Create ledger entries (double-entry)
+        // Create ledger entries (double-entry)
         await tx.ledgerEntry.createMany({
           data: [
             {
@@ -80,7 +79,7 @@ export class FinancialManager {
           ],
         });
 
-        // 4. Update cached balances (using Prisma atomic operations)
+        // Update cached balances
         await tx.account.update({
           where: { id: mainAccount.id },
           data: { balance: { decrement: amount } },
@@ -137,7 +136,6 @@ export class FinancialManager {
           },
         });
 
-        // Ledger entries
         await tx.ledgerEntry.createMany({
           data: [
             {
@@ -155,7 +153,7 @@ export class FinancialManager {
           ],
         });
 
-        // Update balances (using Prisma atomic operations)
+        // Update balances
         await tx.account.update({
           where: { id: inPlayAccount.id },
           data: { balance: { decrement: amount } },

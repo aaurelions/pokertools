@@ -17,7 +17,6 @@ const worker = new Worker(
   async (job) => {
     const { tableId, snapshot } = job.data;
 
-    // Save state to database (Prisma handles JSON serialization)
     await prisma.table.update({
       where: { id: tableId },
       data: {

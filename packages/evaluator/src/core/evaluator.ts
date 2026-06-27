@@ -84,7 +84,7 @@ export function evaluate5Cards(cards: number[]): number {
     c5 = cards[4];
   resetBuffers();
 
-  // 1. Calculate Suit Hash
+  // Populate suit hash
   const suitHash =
     SUITBIT_BY_ID[c1] +
     SUITBIT_BY_ID[c2] +
@@ -92,14 +92,14 @@ export function evaluate5Cards(cards: number[]): number {
     SUITBIT_BY_ID[c4] +
     SUITBIT_BY_ID[c5];
 
-  // 2. Populate Rank Frequency (Quinary)
+  // Populate rank frequency (quinary)
   quinary[c1 >> 2]++;
   quinary[c2 >> 2]++;
   quinary[c3 >> 2]++;
   quinary[c4 >> 2]++;
   quinary[c5 >> 2]++;
 
-  // 3. Check for Flush using DP Table
+  // Check for flush; if found, use the flush lookup table
   if (SUITS_HASH[suitHash]) {
     suitBinary[c1 & 0x3] |= BINARIES_BY_ID[c1];
     suitBinary[c2 & 0x3] |= BINARIES_BY_ID[c2];
@@ -110,7 +110,6 @@ export function evaluate5Cards(cards: number[]): number {
     return FLUSH_LOOKUP[suitBinary[SUITS_HASH[suitHash] - 1]];
   }
 
-  // 4. Check Hash Table
   const hash = hashQuinary(quinary, 13, 5);
   return NO_FLUSH_5[hash];
 }

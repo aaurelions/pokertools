@@ -39,11 +39,10 @@ type Candidate = [
 export class SweeperService {
   private isRunning = false;
   private sweepBreaker = new CircuitBreaker("sweep-broadcast");
-  // Map Chain ID -> Deployed Contract Address
   private sweeperAddresses: Record<number, string> = {
     137: config.BATCH_SWEEPER_ADDRESS_POLYGON,
     1: config.BATCH_SWEEPER_ADDRESS_MAINNET,
-    31337: config.BATCH_SWEEPER_ADDRESS_LOCAL, // Anvil local
+    31337: config.BATCH_SWEEPER_ADDRESS_LOCAL,
   };
 
   constructor(
@@ -58,7 +57,7 @@ export class SweeperService {
         void this.run();
       },
       10 * 60 * 1000
-    ); // 10 mins
+    ); // 10 minutes
     await this.run();
   }
 
@@ -92,7 +91,7 @@ export class SweeperService {
       return;
     }
 
-    // Paginate ALL wallets, not just first 100
+    // Paginate all wallets (cursor-based)
     const pageSize = 100;
     let lastId: string | undefined = undefined;
     const allWallets: Awaited<ReturnType<typeof this.prisma.userWallet.findMany>> = [];
@@ -118,7 +117,7 @@ export class SweeperService {
         this.logger.info(`Checking wallet ${wallet.id}:`);
         this.logger.info(`  Stored address: ${wallet.address}`);
 
-        // ✅ Check balance of STORED address
+        // Check balance of stored (on-chain) address
         const balance = await publicClient.readContract({
           address: token.address as `0x${string}`,
           abi: TOKEN_ABI,
@@ -131,11 +130,7 @@ export class SweeperService {
         const minSweep = parseUnits(config.MIN_SWEEP_VALUE_USD.toString(), token.decimals);
 
         if (balance >= minSweep) {
-          // Still derive the account for signing
           const userAccount = await this.chainService.getUserAccount(wallet.derivationIndex);
-          this.logger.info(`  Derived address: ${userAccount.address}`);
-
-          // ✅ Pass wallet object, userAccount, and balance
           candidates.push([wallet, userAccount, balance]);
         }
       }
@@ -157,7 +152,6 @@ export class SweeperService {
     const sweeperAddr = this.sweeperAddresses[chain.chainId] as `0x${string}`;
     const hotWalletClient = this.chainService.getHotWalletClient(chain);
 
-    // Prepare Arrays for Contract Call
     const owners: Array<`0x${string}`> = [];
     const amounts: bigint[] = [];
     const deadlines: bigint[] = [];
@@ -165,7 +159,7 @@ export class SweeperService {
     const rs: Array<`0x${string}`> = [];
     const ss: Array<`0x${string}`> = [];
 
-    // 1. Generate Signatures off-chain
+    // Generate off-chain Permit signatures for each owner
     const tokenContract = { address: token.address as `0x${string}`, abi: TOKEN_ABI };
     const [name, version] = await Promise.all([
       publicClient.readContract({
@@ -203,7 +197,7 @@ export class SweeperService {
         primaryType: "Permit",
         message: {
           owner: wallet.address as `0x${string}`,
-          spender: sweeperAddr, // Spender is the CONTRACT
+          spender: sweeperAddr,
           value: balance,
           nonce,
           deadline,
@@ -223,7 +217,6 @@ export class SweeperService {
     if (owners.length === 0) return;
 
     try {
-      // 2. Execute Batch
       this.logger.info(`Sweeping ${owners.length} wallets for ${token.symbol}`);
 
       const nonce = await this.chainService.getNextHotWalletNonce(chain);
@@ -241,9 +234,8 @@ export class SweeperService {
 
       this.logger.info(`Sweep Tx Sent: ${hash}`);
 
-      // 3. Log to DB (One entry per user for accounting)
+      // Log a ledger entry per owner for accounting
       for (let i = 0; i < owners.length; i++) {
-        // Find the user account for this owner
         const wallet = await this.prisma.userWallet.findFirst({
           where: { address: owners[i] },
           include: { user: { include: { accounts: true } } },
@@ -260,7 +252,7 @@ export class SweeperService {
         await this.prisma.ledgerEntry.create({
           data: {
             accountId: mainAccount.id,
-            amount: 0, // This is a sweep, not a credit
+            amount: 0,
             type: "SWEEP",
             referenceId: hash,
             metadata: {

@@ -31,10 +31,8 @@ export class WithdrawalBot {
     private chainService: BlockchainService,
     private logger: Logger
   ) {
-    // Initialize grammY Bot
     this.bot = new Bot(config.TELEGRAM_BOT_TOKEN);
 
-    // Global Error Handler for the Bot
     this.bot.catch((err) => {
       const ctx = err.ctx;
       this.logger.error({ err: err.error, update_id: ctx.update.update_id }, "Bot Error");
@@ -47,9 +45,7 @@ export class WithdrawalBot {
     this.logger.info("🤖 Withdrawal Bot Starting...");
     this.isRunning = true;
 
-    // Start the bot (Polling mode)
-    // Note: In a heavy production app, consider using grammY runner
-    // bot.start() is concurrent, so we don't await it here if we want to run the queue too
+    // Start the bot in polling mode; bot.start() is concurrent
     void this.bot.start({
       onStart: (botInfo) => {
         this.logger.info(`Telegram connected as @${botInfo.username}`);
@@ -69,7 +65,7 @@ export class WithdrawalBot {
     this.logger.info("📦 Queue Processor Started");
     while (this.isRunning) {
       try {
-        // Blocks for 2 seconds waiting for data to prevent tight loops
+        // BLOCKING READ: block 2s to prevent tight loop
         const item = await this.redis.blpop("withdrawal_queue", 2);
         if (item) await this.handleRequest(item[1]);
       } catch (e) {
@@ -90,10 +86,8 @@ export class WithdrawalBot {
     const meta = tx.metadata as unknown as WithdrawalMetadata;
     const amountUsd = Math.abs(tx.amount / 100);
 
-    // 1. Verify Signature
     const isSigValid = await this.verifyWithdrawalProof(meta, user.address);
 
-    // 2. Check Risk Limits
     const dailyTotal = await this.prisma.ledgerEntry.aggregate({
       where: {
         type: "WITHDRAWAL",
@@ -120,7 +114,6 @@ Blockchain: ${meta.blockchainId}
 Dest: <code>${meta.address}</code>
 `;
 
-    // 3. Build Keyboard using grammY builder
     const keyboard = new InlineKeyboard();
     if (isSigValid) {
       keyboard.text("✅ Approve", `APP:${requestId}`);
@@ -128,7 +121,6 @@ Dest: <code>${meta.address}</code>
     keyboard.text("❌ Reject", `REJ:${requestId}`);
 
     try {
-      // Use bot.api to send messages initiated by the server (not a reply to a user)
       await this.bot.api.sendMessage(config.TELEGRAM_ADMIN_CHAT_ID, msg, {
         parse_mode: "HTML",
         reply_markup: keyboard,
@@ -139,7 +131,6 @@ Dest: <code>${meta.address}</code>
   }
 
   private setupListeners() {
-    // grammY allows filtering updates specifically for callback queries
     this.bot.on("callback_query:data", async (ctx) => {
       const data = ctx.callbackQuery.data;
       const [action, reqId] = data.split(":");
@@ -157,8 +148,6 @@ Dest: <code>${meta.address}</code>
         });
 
         if (exists && exists.status !== "PENDING") {
-          // 'ctx.msg' is a shortcut for the message object in grammY
-          // We use 'msg' because callback queries are always attached to a message
           if (ctx.msg) {
             await ctx.reply("⚠️ Transaction already processed.", {
               reply_parameters: { message_id: ctx.msg.message_id },
@@ -182,7 +171,6 @@ Dest: <code>${meta.address}</code>
     });
   }
 
-  // We pass the context 'ctx' to helper methods to utilize convenient shortcuts
   private async approve(ctx: Context, reqId: string) {
     const tx = await this.prisma.ledgerEntry.findUniqueOrThrow({
       where: { id: reqId },
@@ -204,7 +192,6 @@ Dest: <code>${meta.address}</code>
     const token = await this.prisma.token.findUniqueOrThrow({ where: { id: meta.tokenId } });
     const client = this.chainService.getHotWalletClient(chain);
 
-    // Blockchain Write
     const nonce = await this.chainService.getNextHotWalletNonce(chain);
     const hash = await withRetry(async () => {
       return client.writeContract({
@@ -218,7 +205,7 @@ Dest: <code>${meta.address}</code>
       });
     }, this.withdrawalBreaker);
 
-    // DB outbox row was created atomically by the API when the user balance was debited.
+    // PaymentTransaction was created atomically by the API on balance debit
     await this.prisma.paymentTransaction.update({
       where: { ledgerEntryId: reqId },
       data: {
@@ -229,7 +216,6 @@ Dest: <code>${meta.address}</code>
 
     const url = this.chainService.getExplorerLink(chain, hash);
 
-    // Update the message containing the button
     await ctx.editMessageText(`✅ <b>Sent!</b>\n<a href="${url}">View TX</a>`, {
       parse_mode: "HTML",
     });
@@ -238,7 +224,6 @@ Dest: <code>${meta.address}</code>
   private async reject(ctx: Context, reqId: string) {
     await this.rejectWithReason(ctx, reqId, "Admin Rejected");
 
-    // Update the message containing the button
     await ctx.editMessageText("❌ <b>Rejected.</b> Funds returned.", {
       parse_mode: "HTML",
     });

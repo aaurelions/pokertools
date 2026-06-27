@@ -56,11 +56,9 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
 
       const state = await fastify.gameManager.getState(id, userId);
 
-      // If client provides 'since' version, check if state is stale
       if (since !== undefined) {
         const sinceVersion = parseInt(since, 10);
         if (!isNaN(sinceVersion) && state.version <= sinceVersion) {
-          // Client is up-to-date, return 304 Not Modified
           return reply.code(304).send();
         }
       }

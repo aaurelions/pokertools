@@ -37,13 +37,9 @@ export class PokerEngine {
   private timeProvider: TimeProvider;
 
   constructor(config: TableConfig, timeProvider: TimeProvider = () => Date.now()) {
-    // Validate config
     this.validateConfig(config);
-
-    // Initialize time provider
     this.timeProvider = timeProvider;
 
-    // Initialize state
     this.currentState = this.createInitialState(config);
   }
 
@@ -51,7 +47,6 @@ export class PokerEngine {
    * Add a player to the table
    */
   sit(seat: number, id: string, name: string, stack: number): void {
-    // Validate chip amount is a non-negative integer
     validateChipAmount(stack, "Sit stack");
 
     const action: SitAction = {
@@ -96,15 +91,12 @@ export class PokerEngine {
    * If action.timestamp is not provided, the engine will automatically set it
    */
   act(action: Action): GameState {
-    // Ensure timestamp is set
     const timestamp = action.timestamp ?? this.timeProvider();
 
-    // Validate timestamp if provided by caller
     if (action.timestamp !== undefined) {
       validateTimestamp(timestamp, this.currentState.timestamp);
     }
 
-    // Validate chip amounts for betting actions
     if ("amount" in action && typeof action.amount === "number") {
       validateChipAmount(action.amount, `${action.type} amount`);
     }
@@ -124,9 +116,7 @@ export class PokerEngine {
    */
   validate(action: Action): { valid: true } | { valid: false; error: string; code?: string } {
     try {
-      // Dry-run the reducer
-      // We don't need to deep clone state because reducer is immutable
-      // and pure, and we discard the result.
+      // Dry-run the reducer; we discard the result since it's immutable and pure.
       gameReducer(this.currentState, action);
       return { valid: true };
     } catch (err: unknown) {
@@ -148,11 +138,8 @@ export class PokerEngine {
     // Hydrate PublicState into GameState if needed
     const newState: GameState = {
       ...serverState,
-      // Ensure deck exists (empty for client/public state)
       deck: "deck" in serverState ? serverState.deck : [],
-      // Ensure players map correctly (PublicPlayer.hand is compatible with Player.hand)
-      players: serverState.players, // Type assertion needed due to deep readonly/mutable mismatch potential
-      // Ensure config carries isClient flag if set locally
+      players: serverState.players,
       config: {
         ...serverState.config,
         isClient: this.currentState.config.isClient,
@@ -223,8 +210,6 @@ export class PokerEngine {
    */
   on(callback: EventListener): () => void {
     this.listeners.push(callback);
-
-    // Return unsubscribe function
     return () => {
       const index = this.listeners.indexOf(callback);
       if (index > -1) {
@@ -244,10 +229,9 @@ export class PokerEngine {
     const nextLevel = this.currentState.blindLevel + 1;
 
     if (nextLevel >= this.currentState.config.blindStructure.length) {
-      return; // At max level
+      return;
     }
 
-    // Dispatch NEXT_BLIND_LEVEL action to notify listeners
     this.dispatch({
       type: ActionType.NEXT_BLIND_LEVEL,
       timestamp: this.timeProvider(),
@@ -282,12 +266,10 @@ export class PokerEngine {
     try {
       this.currentState = gameReducer(this.currentState, action);
 
-      // Notify listeners
       for (const listener of this.listeners) {
         listener(action, oldState, this.currentState);
       }
     } catch (error) {
-      // Re-throw error but keep old state
       throw error;
     }
   }

@@ -22,22 +22,19 @@ import { calculateRake } from "../utils/rake";
 export function handleFold(state: GameState, action: FoldAction): GameState {
   const result = getPlayerById(state, action.playerId);
   if (!result) {
-    return state; // Should have been caught by validation
+    return state;
   }
 
   const { seat } = result;
   const newPlayers = [...state.players];
 
-  // Set player status to FOLDED
   newPlayers[seat] = {
     ...newPlayers[seat]!,
     status: PlayerStatus.FOLDED,
   };
 
-  // Remove from active players
   const newActivePlayers = state.activePlayers.filter((s) => s !== seat);
 
-  // Add to action history
   const actionRecord: ActionRecord = {
     action,
     seat,
@@ -51,26 +48,18 @@ export function handleFold(state: GameState, action: FoldAction): GameState {
     players: newPlayers,
     activePlayers: newActivePlayers,
     actionHistory: [...state.actionHistory, actionRecord],
-    timeBankActiveSeat: null, // Clear time bank flag on any action
+    timeBankActiveSeat: null,
     timestamp: action.timestamp!,
   };
 
-  // Check if only one player with a live hand remains
-  // Count players who have not folded (Active + All-In)
   const playersWithLiveHands = currentState.players.filter(
     (p) => p && p.status !== PlayerStatus.FOLDED
   );
 
-  // Only end the hand if exactly one player has cards
   if (playersWithLiveHands.length === 1 && playersWithLiveHands[0]) {
-    // Award remaining pots to last player with live hand
     return awardPotToLastPlayer(currentState, playersWithLiveHands[0].seat);
   }
 
-  // If we have 1 Active player but multiple Live players (others are All-In),
-  // the game should naturally progress to Showdown via progressStreet/checkAutoRunout
-
-  // Move to next player
   const nextToAct = getNextToAct(currentState);
 
   return {
@@ -90,7 +79,6 @@ export function handleCheck(state: GameState, action: CheckAction): GameState {
 
   const { seat } = result;
 
-  // Add to action history
   const actionRecord: ActionRecord = {
     action,
     seat,
@@ -102,11 +90,9 @@ export function handleCheck(state: GameState, action: CheckAction): GameState {
   const newState: GameState = {
     ...state,
     actionHistory: [...state.actionHistory, actionRecord],
-    timeBankActiveSeat: null, // Clear time bank flag on any action
     timestamp: action.timestamp!,
   };
 
-  // Move to next player
   const nextToAct = getNextToAct(newState);
 
   return {
@@ -126,16 +112,13 @@ export function handleCall(state: GameState, action: CallAction): GameState {
 
   const { player, seat } = result;
 
-  // Calculate amount to call
   const currentBet = getCurrentBet(state);
   const playerBet = state.currentBets.get(seat) ?? 0;
   const toCall = currentBet - playerBet;
 
-  // Determine actual call amount (may be all-in)
   const callAmount = Math.min(toCall, player.stack);
   const isAllIn = callAmount === player.stack;
 
-  // Update player
   const newPlayers = [...state.players];
   newPlayers[seat] = {
     ...player,
@@ -145,13 +128,11 @@ export function handleCall(state: GameState, action: CallAction): GameState {
     status: isAllIn ? PlayerStatus.ALL_IN : PlayerStatus.ACTIVE,
   };
 
-  // Update current bets
   const newCurrentBets = new Map(state.currentBets);
   newCurrentBets.set(seat, playerBet + callAmount);
 
-  // Add to action history (include actual call amount in the action)
   const actionRecord: ActionRecord = {
-    action: { ...action, amount: callAmount }, // Populate amount field for history
+    action: { ...action, amount: callAmount },
     seat,
     resultingPot: getTotalPot(state) + callAmount,
     resultingStack: newPlayers[seat].stack,
@@ -163,11 +144,9 @@ export function handleCall(state: GameState, action: CallAction): GameState {
     players: newPlayers,
     currentBets: newCurrentBets,
     actionHistory: [...state.actionHistory, actionRecord],
-    timeBankActiveSeat: null, // Clear time bank flag on any action
     timestamp: action.timestamp!,
   };
 
-  // Move to next player
   const nextToAct = getNextToAct(newState);
 
   return {
@@ -189,7 +168,6 @@ export function handleBet(state: GameState, action: BetAction): GameState {
   const betAmount = Math.min(action.amount, player.stack);
   const isAllIn = betAmount === player.stack;
 
-  // Update player
   const newPlayers = [...state.players];
   newPlayers[seat] = {
     ...player,
@@ -199,11 +177,9 @@ export function handleBet(state: GameState, action: BetAction): GameState {
     status: isAllIn ? PlayerStatus.ALL_IN : PlayerStatus.ACTIVE,
   };
 
-  // Update current bets
   const newCurrentBets = new Map(state.currentBets);
   newCurrentBets.set(seat, betAmount);
 
-  // Add to action history
   const actionRecord: ActionRecord = {
     action,
     seat,
@@ -216,15 +192,13 @@ export function handleBet(state: GameState, action: BetAction): GameState {
     ...state,
     players: newPlayers,
     currentBets: newCurrentBets,
-    minRaise: betAmount + betAmount, // Min raise is current bet + raise increment
+    minRaise: betAmount + betAmount,
     lastRaiseAmount: betAmount,
     lastAggressorSeat: seat,
     actionHistory: [...state.actionHistory, actionRecord],
-    timeBankActiveSeat: null, // Clear time bank flag on any action
     timestamp: action.timestamp!,
   };
 
-  // Move to next player
   const nextToAct = getNextToAct(newState);
 
   return {
@@ -250,10 +224,8 @@ export function handleRaise(state: GameState, action: RaiseAction): GameState {
   const addedChips = raiseAmount - playerBet;
   const isAllIn = addedChips === player.stack;
 
-  // Calculate raise increment
   const raiseIncrement = raiseAmount - currentBet;
 
-  // Update player
   const newPlayers = [...state.players];
   newPlayers[seat] = {
     ...player,
@@ -263,11 +235,9 @@ export function handleRaise(state: GameState, action: RaiseAction): GameState {
     status: isAllIn ? PlayerStatus.ALL_IN : PlayerStatus.ACTIVE,
   };
 
-  // Update current bets
   const newCurrentBets = new Map(state.currentBets);
   newCurrentBets.set(seat, raiseAmount);
 
-  // Add to action history
   const actionRecord: ActionRecord = {
     action,
     seat,
@@ -276,13 +246,10 @@ export function handleRaise(state: GameState, action: RaiseAction): GameState {
     street: state.street,
   };
 
-  // Determine if this reopens betting (incomplete raise rule)
+  // Incomplete-raise rule: does this raise reopen the betting?
   const reopensBetting = raiseIncrement >= state.lastRaiseAmount;
 
-  // Min-raise calculation:
-  // - If reopens betting: new currentBet + new increment
-  // - If incomplete raise: new currentBet + old increment (TDA/WSOP rule)
-  //   Example: P1 bets 100, P2 all-in 120, P3 must raise to 120+100=220 minimum
+  // When reopened, min raise = new bet + new increment; otherwise, new bet + old increment.
   const newMinRaise = reopensBetting
     ? raiseAmount + raiseIncrement
     : raiseAmount + state.lastRaiseAmount;
@@ -295,11 +262,9 @@ export function handleRaise(state: GameState, action: RaiseAction): GameState {
     lastRaiseAmount: reopensBetting ? raiseIncrement : state.lastRaiseAmount,
     lastAggressorSeat: reopensBetting ? seat : state.lastAggressorSeat,
     actionHistory: [...state.actionHistory, actionRecord],
-    timeBankActiveSeat: null, // Clear time bank flag on any action
     timestamp: action.timestamp!,
   };
 
-  // Move to next player
   const nextToAct = getNextToAct(newState);
 
   return {
@@ -336,35 +301,29 @@ function getTotalPot(state: GameState): number {
 }
 
 /**
- * Award pots to remaining eligible players when hand ends by folds
- * Properly handles side pot eligibility and uncalled bets
+ * Award pots to remaining eligible players when hand ends by folds.
  *
  * Key principle: Uncalled bets are NOT raked and are returned to the bettor immediately.
- * Only the contested portion of the pot (money actually at risk) is subject to rake.
+ * Only the contested portion is subject to rake.
  */
 function awardPotToLastPlayer(state: GameState, winningSeat: number): GameState {
   const newPlayers = [...state.players];
   const newActionHistory = [...state.actionHistory];
   const winners: Winner[] = [];
-
-  // Process each pot separately, checking eligibility
   let totalRakeFromPots = 0;
 
   for (const pot of state.pots) {
-    // Find all non-folded players eligible for this pot
     const eligibleNonFolded = pot.eligibleSeats.filter((seat) => {
       const player = state.players[seat];
       return player && player.status !== PlayerStatus.FOLDED;
     });
 
-    // Calculate rake for this pot - GLOBAL cap applied across all pots
     const { rake: potRake } = calculateRake(state, pot.amount, totalRakeFromPots);
     totalRakeFromPots += potRake;
     const potAfterRake = pot.amount - potRake;
 
     if (eligibleNonFolded.length === 0) {
-      // No eligible players remain - should not happen, but defensive
-      // Award to last player to fold from eligible seats (fallback)
+      // Defensive fallback: no eligible players remain.
       const lastEligible = pot.eligibleSeats[pot.eligibleSeats.length - 1];
       const player = newPlayers[lastEligible];
       if (player) {
@@ -380,7 +339,6 @@ function awardPotToLastPlayer(state: GameState, winningSeat: number): GameState 
         });
       }
     } else if (eligibleNonFolded.length === 1) {
-      // Exactly one eligible player - they win this pot
       const winnerSeat = eligibleNonFolded[0];
       const player = newPlayers[winnerSeat]!;
       newPlayers[winnerSeat] = {
@@ -394,8 +352,6 @@ function awardPotToLastPlayer(state: GameState, winningSeat: number): GameState 
         handRank: null,
       });
     } else {
-      // Multiple eligible players remain - this means awardPotToLastPlayer was called incorrectly
-      // The hand should have gone to showdown instead
       throw new CriticalStateError(
         "awardPotToLastPlayer called with multiple eligible players remaining",
         {
@@ -408,12 +364,11 @@ function awardPotToLastPlayer(state: GameState, winningSeat: number): GameState 
     }
   }
 
-  // Handle current bets with proper uncalled bet logic
+  // Uncalled bet logic: three-step process.
   if (state.currentBets.size > 0) {
     const winnersBet = state.currentBets.get(winningSeat) ?? 0;
 
-    // Find the second-highest bet (highest opponent bet)
-    // This determines how much of the winner's bet was actually "called"
+    // Second-highest bet determines how much of winner's bet was actually "called".
     let maxOpponentBet = 0;
     for (const [seat, amount] of state.currentBets.entries()) {
       if (seat !== winningSeat && amount > maxOpponentBet) {
@@ -421,11 +376,10 @@ function awardPotToLastPlayer(state: GameState, winningSeat: number): GameState 
       }
     }
 
-    // Calculate uncalled and called portions
     const uncalledAmount = winnersBet > maxOpponentBet ? winnersBet - maxOpponentBet : 0;
     const calledPortion = winnersBet > maxOpponentBet ? maxOpponentBet : winnersBet;
 
-    // Step 1: Return uncalled bet immediately (NO RAKE on uncalled bets)
+    // Step 1: Return uncalled bet immediately (NO RAKE on uncalled bets).
     if (uncalledAmount > 0) {
       const player = newPlayers[winningSeat]!;
       newPlayers[winningSeat] = {
@@ -433,7 +387,6 @@ function awardPotToLastPlayer(state: GameState, winningSeat: number): GameState 
         stack: player.stack + uncalledAmount,
       };
 
-      // Record the uncalled bet return
       newActionHistory.push({
         action: {
           type: ActionType.UNCALLED_BET_RETURNED,
@@ -448,7 +401,7 @@ function awardPotToLastPlayer(state: GameState, winningSeat: number): GameState 
       });
     }
 
-    // Step 2: Calculate contested pot (winner's called portion + all opponent bets)
+    // Step 2: Contested pot = winner's called portion + all opponent bets.
     let contestedPot = calledPortion;
     for (const [seat, amount] of state.currentBets.entries()) {
       if (seat !== winningSeat) {
@@ -456,7 +409,7 @@ function awardPotToLastPlayer(state: GameState, winningSeat: number): GameState 
       }
     }
 
-    // Step 3: Rake and award the contested portion only
+    // Step 3: Rake and award the contested portion only.
     if (contestedPot > 0) {
       const { rake } = calculateRake(state, contestedPot, totalRakeFromPots);
       const totalRake = totalRakeFromPots + rake;
@@ -468,8 +421,6 @@ function awardPotToLastPlayer(state: GameState, winningSeat: number): GameState 
         stack: player.stack + winnings,
       };
 
-      // Update winners array
-      // Only count actual winnings (contested pot after rake, minus winner's own contribution)
       const actualWinnings = winnings - calledPortion;
 
       if (actualWinnings > 0) {
@@ -489,18 +440,14 @@ function awardPotToLastPlayer(state: GameState, winningSeat: number): GameState 
         }
       }
 
-      // Update total rake for the hand
       totalRakeFromPots = totalRake;
     }
   }
 
-  // NOTE: We do NOT reset totalInvestedThisHand here because it's used by getInitialChips()
-  // to calculate total chips in the game. It will be reset when a new hand is dealt.
-
   return {
     ...state,
     players: newPlayers,
-    street: Street.SHOWDOWN, // Mark hand as complete
+    street: Street.SHOWDOWN,
     pots: [],
     currentBets: new Map(),
     winners,

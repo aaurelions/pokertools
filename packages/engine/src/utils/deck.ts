@@ -25,10 +25,8 @@ export function createDeck(): number[] {
  * be used for production poker games. Always provide a secure RNG.
  */
 function getSecureRandom(): () => number {
-  // Check if we're in Node.js environment
   if (typeof process !== "undefined" && process.versions?.node) {
     try {
-      // Use Node.js crypto for production
       // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
       const crypto = require("crypto");
       return () => {
@@ -84,12 +82,11 @@ function getSecureRandom(): () => number {
  */
 export function shuffle(deck: readonly number[], rng?: () => number): number[] {
   const random = rng ?? getSecureRandom();
-  const shuffled = [...deck]; // Create mutable copy
+  const shuffled = [...deck];
 
   // Fisher-Yates shuffle
   for (let i = shuffled.length - 1; i > 0; i--) {
     const j = Math.floor(random() * (i + 1));
-    // Swap elements
     const temp = shuffled[i];
     shuffled[i] = shuffled[j];
     shuffled[j] = temp;

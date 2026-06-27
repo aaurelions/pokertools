@@ -20,7 +20,6 @@ import { getPlayerById } from "../utils/positioning";
  * Throws IllegalActionError if action is invalid
  */
 export function validateAction(state: GameState, action: Action): void {
-  // Type-specific validation
   switch (action.type) {
     case ActionType.FOLD:
     case ActionType.CHECK:
@@ -78,7 +77,6 @@ function validateBettingAction(state: GameState, action: Action): void {
 
   const { player, seat } = result;
 
-  // Check if it's player's turn
   if (state.actionTo !== seat) {
     throw new IllegalActionError(
       ErrorCodes.NOT_YOUR_TURN,
@@ -92,7 +90,6 @@ function validateBettingAction(state: GameState, action: Action): void {
     );
   }
 
-  // Check player status
   if (player.status !== PlayerStatus.ACTIVE) {
     throw new IllegalActionError(
       ErrorCodes.PLAYER_NOT_ACTIVE,
@@ -101,14 +98,12 @@ function validateBettingAction(state: GameState, action: Action): void {
     );
   }
 
-  // Check player has chips
   if (player.stack === 0 && action.type !== ActionType.FOLD) {
     throw new IllegalActionError(ErrorCodes.NO_CHIPS, `Player ${action.playerId} has no chips`, {
       playerId: action.playerId,
     });
   }
 
-  // Action-specific validation
   const currentBet = getCurrentBet(state);
   const playerBet = state.currentBets.get(seat) ?? 0;
   const toCall = currentBet - playerBet;
@@ -267,7 +262,6 @@ function validateDealAction(state: GameState): void {
     }
   }
 
-  // Check we have enough players
   const activePlayers = state.players.filter((p) => p && p.stack > 0 && !p.isSittingOut);
 
   if (activePlayers.length < 2) {

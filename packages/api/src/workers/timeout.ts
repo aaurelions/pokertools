@@ -30,7 +30,7 @@ const worker = new Worker(
   async (job) => {
     const { tableId, playerId, expectedVersion } = job.data;
 
-    // 1. Acquire distributed lock (same pattern as GameManager.processAction)
+    // Acquire distributed lock (same pattern as GameManager.processAction)
     const lockTTL = process.env.NODE_ENV === "test" ? 15000 : 10000;
     let lock;
     try {
@@ -46,7 +46,7 @@ const worker = new Worker(
     const lockExtendThreshold = lockTTL * 0.6;
 
     try {
-      // 2. Load state from Redis
+      // Load state from Redis
       const stateJson = await redis.get(`table:${tableId}`);
       if (!stateJson) {
         console.warn(`⚠️  No state found for table ${tableId}`);
@@ -55,7 +55,7 @@ const worker = new Worker(
 
       const snapshot: Snapshot = JSON.parse(stateJson);
 
-      // 3. Version check prevents race condition
+      // Version check prevents race condition
       if ((snapshot._version || 0) !== expectedVersion) {
         console.log(
           `⏭️  Skipping timeout for ${playerId} (version mismatch: expected ${expectedVersion}, got ${snapshot._version || 0})`
@@ -63,10 +63,10 @@ const worker = new Worker(
         return;
       }
 
-      // 4. Restore engine from snapshot
+      // Restore engine from snapshot
       const engine = PokerEngine.restore(snapshot);
 
-      // 5. Execute timeout action (fold)
+      // Execute timeout action (fold)
       engine.act({
         type: "TIMEOUT" as any,
         playerId,
@@ -81,7 +81,7 @@ const worker = new Worker(
         }
       }
 
-      // 6. Save new state with optimistic version guard (same Lua script as GameManager)
+      // Save new state with optimistic version guard
       const newSnapshot: Snapshot = engine.snapshot as any;
       const currentVersion = expectedVersion + 1;
       newSnapshot._version = currentVersion;
@@ -139,7 +139,7 @@ const worker = new Worker(
         throw err;
       }
 
-      // 7. Broadcast lightweight state update
+      // Broadcast lightweight state update
       await redis.publish(
         `pubsub:table:${tableId}`,
         JSON.stringify({

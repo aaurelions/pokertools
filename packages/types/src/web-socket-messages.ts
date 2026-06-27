@@ -17,12 +17,10 @@ import { PublicState } from "./public-state";
 export interface JoinTableMessage {
   readonly type: "JOIN";
   readonly tableId: string;
-  readonly requestId?: string; // Optional correlation ID
+  readonly requestId?: string;
 }
 
-/**
- * Leave a table's real-time updates
- */
+/** Leave a table's real-time updates. */
 export interface LeaveTableMessage {
   readonly type: "LEAVE";
   readonly tableId: string;
@@ -78,8 +76,9 @@ export interface ErrorMessage {
   readonly type: "ERROR";
   readonly code: string;
   readonly message: string;
-  readonly requestId?: string; // Echo back request ID if available
-  readonly context?: Record<string, unknown>; // Additional error context
+  readonly requestId?: string;
+  /** Additional error context. */
+  readonly context?: Record<string, unknown>;
 }
 
 /**

@@ -66,7 +66,6 @@ export class BlockchainManager {
       Boolean(url)
     );
 
-    // Use configurable retry/timeout settings from environment
     const rpcOptions = {
       retryCount: config.RPC_RETRY_COUNT,
       retryDelay: config.RPC_RETRY_DELAY,
@@ -93,7 +92,7 @@ export class BlockchainManager {
    * If not, increment AdminWallet index and assign.
    */
   async getUserDepositAddress(userId: string): Promise<string> {
-    // 1. Check if user already has a wallet assigned
+    // Check if user already has a wallet assigned
     const existingWallet = await this.prisma.userWallet.findFirst({
       where: { userId, adminWallet: { isActive: true } },
       include: { adminWallet: true },
@@ -103,32 +102,30 @@ export class BlockchainManager {
       return existingWallet.address;
     }
 
-    // 2. Get active admin xpub
+    // Get active admin xpub
     const adminWallet = await this.prisma.adminWallet.findFirst({
       where: { isActive: true },
-      orderBy: { createdAt: "desc" }, // Use most recent active
+      orderBy: { createdAt: "desc" },
     });
 
     if (!adminWallet) {
       throw new AppError("No active deposit wallet configured", 500);
     }
 
-    // 3. Atomic increment of derivation index
-    // We use a transaction to ensure no two users get the same index
+    // Atomic increment of derivation index.
+    // We use a transaction to ensure no two users get the same index.
     const newWallet = await this.prisma.$transaction(async (tx) => {
-      // Lock and increment
       const wallet = await tx.adminWallet.update({
         where: { id: adminWallet.id },
         data: { currentIndex: { increment: 1 } },
       });
 
-      const index = wallet.currentIndex; // This is the new unique index
+      const index = wallet.currentIndex;
 
       // Derive address (decrypt xpub first - stored encrypted in DB)
       const xpub = decryptXpub(wallet.xpub);
       const address = this.deriveAddressFromXpub(xpub, index);
 
-      // Assign to user
       return await tx.userWallet.create({
         data: {
           userId,
@@ -198,13 +195,11 @@ export class BlockchainManager {
     });
 
     if (existingSession) {
-      // Extend the existing session
       await this.prisma.depositSession.update({
         where: { id: existingSession.id },
         data: { expiresAt },
       });
     } else {
-      // Create new session only if no active one exists
       await this.prisma.depositSession.create({
         data: {
           userId,
