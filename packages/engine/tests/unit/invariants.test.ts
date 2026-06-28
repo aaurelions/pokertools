@@ -1,5 +1,9 @@
-import { calculateTotalChips, auditChipConservation } from "../../src/utils/invariants";
-import { GameState, Player } from "@pokertools/types";
+import {
+  calculateTotalChips,
+  auditChipConservation,
+  validateGameStateIntegrity,
+} from "../../src/utils/invariants";
+import { GameState, Player, PlayerStatus } from "@pokertools/types";
 import { CriticalStateError } from "../../src/errors/critical-state-error";
 
 function createTestState(stacks: number[], pots: number[], bets: number[]): GameState {
@@ -270,5 +274,27 @@ describe("Chip Conservation", () => {
     expect(() => {
       auditChipConservation(state, 1600);
     }).not.toThrow();
+  });
+
+  test("integrity rejects actionTo pointing at a non-actionable player", () => {
+    const foldedState = {
+      ...createTestState([1000, 1000], [], []),
+      actionTo: 0,
+    };
+    foldedState.players[0] = { ...foldedState.players[0]!, status: PlayerStatus.FOLDED };
+
+    expect(() => validateGameStateIntegrity(foldedState)).toThrow(CriticalStateError);
+
+    const allInState = {
+      ...createTestState([0, 1000], [], []),
+      actionTo: 0,
+    };
+    allInState.players[0] = {
+      ...allInState.players[0]!,
+      status: PlayerStatus.ALL_IN,
+      stack: 0,
+    };
+
+    expect(() => validateGameStateIntegrity(allInState)).toThrow(CriticalStateError);
   });
 });

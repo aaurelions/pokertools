@@ -266,6 +266,7 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
       Array.from(currentBets.values()).reduce((sum, amount) => sum + amount, 0),
     minRaise: state.bigBlind,
     lastRaiseAmount: state.bigBlind,
+    lastAggressorSeat: null,
     activePlayers,
     winners: null,
     rakeThisHand: 0,

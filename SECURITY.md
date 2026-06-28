@@ -278,4 +278,4 @@ This security policy is part of the PokerTools project and follows the same MIT 
 ---
 
 **Last Updated**: 2026-06-27
-**Version**: 1.0.10
+**Version**: 1.0.11

@@ -93,7 +93,7 @@ export function determineWinners(state: GameState): GameState {
         // Winners must show all cards
         newPlayers[seat] = {
           ...player,
-          shownCards: [0, 1], // Show both cards
+          shownCards: Array.from({ length: player.hand.length }, (_, i) => i),
         };
       } else {
         // Losers are mucked by default (can be changed via SHOW action)

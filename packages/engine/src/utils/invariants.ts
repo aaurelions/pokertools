@@ -1,4 +1,4 @@
-import { GameState } from "@pokertools/types";
+import { GameState, PlayerStatus } from "@pokertools/types";
 import { CriticalStateError } from "../errors/critical-state-error";
 
 /**
@@ -179,6 +179,15 @@ export function validateGameStateIntegrity(state: GameState): void {
     if (!player) {
       throw new CriticalStateError(`ActionTo points to empty seat: ${state.actionTo}`, {
         actionTo: state.actionTo,
+      });
+    }
+
+    if (player.status !== PlayerStatus.ACTIVE || player.stack <= 0 || player.isSittingOut) {
+      throw new CriticalStateError(`ActionTo points to non-actionable seat: ${state.actionTo}`, {
+        actionTo: state.actionTo,
+        status: player.status,
+        stack: player.stack,
+        isSittingOut: player.isSittingOut,
       });
     }
   }

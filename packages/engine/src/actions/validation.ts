@@ -262,7 +262,10 @@ function validateDealAction(state: GameState): void {
     }
   }
 
-  const activePlayers = state.players.filter((p) => p && p.stack > 0 && !p.isSittingOut);
+  const isTournament = !!state.config.blindStructure;
+  const activePlayers = state.players.filter(
+    (p) => p && p.stack > 0 && (isTournament || !p.isSittingOut)
+  );
 
   if (activePlayers.length < 2) {
     throw new IllegalActionError(

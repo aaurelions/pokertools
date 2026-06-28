@@ -11,7 +11,7 @@ async function start() {
     });
 
     console.log(`
-      🃏 @pokertools/api v1.0.10
+      🃏 @pokertools/api v1.0.11
       -------------------------
       🌍 Server: http://${config.HOST}:${config.PORT}
       📚 Docs:   http://${config.HOST}:${config.PORT}/docs

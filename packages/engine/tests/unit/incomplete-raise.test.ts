@@ -36,25 +36,26 @@ describe("Min-Raise After Incomplete Raise (TDA/WSOP Rules)", () => {
       amount: 120,
     });
 
-    // Check state after P1's incomplete raise
-    // minRaise should be: 120 (current bet) + 90 (original increment) = 210
-    expect(engine.state.minRaise).toBe(210);
+    // Check state after P1's incomplete raise.
+    // The all-in changes the call amount to 120, but does not change the next
+    // legal full-raise threshold, which remains the previous minimum raise to 190.
+    expect(engine.state.minRaise).toBe(190);
     expect(engine.state.lastRaiseAmount).toBe(90); // Unchanged (incomplete raise)
     expect(engine.state.lastAggressorSeat).toBe(0); // Unchanged (incomplete raise)
 
-    // P2 must raise to at least 210 (not just 120 + 20)
+    // P2 must raise to at least 190: a full raise over the last complete raise.
     const p2 = engine.state.players[2]!;
 
-    // This should be valid (220 > 210)
+    // This should be valid (190 meets the unchanged full-raise threshold)
     expect(() => {
       engine.act({
         type: ActionType.RAISE,
         playerId: p2.id,
-        amount: 220,
+        amount: 190,
       });
     }).not.toThrow();
 
-    expect(engine.state.currentBets.get(2)).toBe(220);
+    expect(engine.state.currentBets.get(2)).toBe(190);
   });
 
   test("standard raise correctly updates min-raise", () => {
@@ -144,26 +145,26 @@ describe("Min-Raise After Incomplete Raise (TDA/WSOP Rules)", () => {
     });
 
     // Action is now on P2 (BB) - they haven't acted yet
-    // Min raise should be 120 + 90 = 210
-    expect(engine.state.minRaise).toBe(210);
+    // Min raise should remain 190; the short all-in did not establish a new raise size.
+    expect(engine.state.minRaise).toBe(190);
 
-    // P2 tries to raise to 200 (should fail - only +80)
+    // P2 tries to raise to 180 (should fail - below the previous full-raise threshold)
     const p2 = engine.state.players[2]!;
     expect(() => {
       engine.act({
         type: ActionType.RAISE,
         playerId: p2.id,
-        amount: 200,
+        amount: 180,
       });
     }).toThrow(); // Should throw RAISE_TOO_SMALL
 
-    // P2 raises to 220 (should succeed - meets min)
+    // P2 raises to 190 (should succeed - meets min)
     engine.act({
       type: ActionType.RAISE,
       playerId: p2.id,
-      amount: 220,
+      amount: 190,
     });
 
-    expect(engine.state.currentBets.get(2)).toBe(220);
+    expect(engine.state.currentBets.get(2)).toBe(190);
   });
 });

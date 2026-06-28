@@ -1,6 +1,6 @@
 {
   "name": "@pokertools/engine",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "description": "Enterprise-grade Texas Hold'em poker engine",
   "author": "A.Aurelius",
   "license": "MIT",
@@ -66,11 +66,11 @@
     "node": ">=24.0.0"
   },
   "dependencies": {
-    "@pokertools/evaluator": "1.0.10",
-    "@pokertools/types": "1.0.10"
+    "@pokertools/evaluator": "1.0.11",
+    "@pokertools/types": "1.0.11"
   },
   "peerDependencies": {
-    "@pokertools/evaluator": "1.0.10",
-    "@pokertools/types": "1.0.10"
+    "@pokertools/evaluator": "1.0.11",
+    "@pokertools/types": "1.0.11"
   }
 }

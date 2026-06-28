@@ -107,10 +107,12 @@ export function calculateAntes(state: GameState): Map<number, number> {
     return antes;
   }
 
-  // All active players post antes
+  const isTournament = !!state.config.blindStructure;
+
+  // Tournament players blind/ante off while sitting out; cash-game sit-outs do not.
   for (let seat = 0; seat < state.players.length; seat++) {
     const player = state.players[seat];
-    if (player && player.stack > 0) {
+    if (player && player.stack > 0 && (isTournament || !player.isSittingOut)) {
       const anteAmount = Math.min(player.stack, state.ante);
       antes.set(seat, anteAmount);
     }

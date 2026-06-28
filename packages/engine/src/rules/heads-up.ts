@@ -25,10 +25,7 @@ export function getHeadsUpActionOrder(state: GameState, street: Street): number[
   const buttonSeat = state.buttonSeat;
   const activePlayers = state.players
     .map((p, seat) => ({ player: p, seat }))
-    .filter(
-      ({ player }) =>
-        player && (player.status === PlayerStatus.ACTIVE || player.status === PlayerStatus.ALL_IN)
-    )
+    .filter(({ player }) => player?.status === PlayerStatus.ACTIVE)
     .map(({ seat }) => seat);
 
   if (activePlayers.length !== 2) {

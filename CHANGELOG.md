@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.11] - 2026-06-28
+
+### Fixed
+
+- Fixed no-limit incomplete all-in raise handling so short raises do not change the next full minimum raise threshold.
+- Reset per-hand aggressor state when dealing a new hand.
+- Excluded all-in players from heads-up action order while preserving their showdown eligibility.
+- Strengthened game-state integrity checks for `actionTo` so folded, all-in, sitting-out, and zero-stack players cannot be marked actionable.
+- Aligned tournament sitting-out deal/ante behavior with blind-off rules, while preserving cash-game sit-out behavior.
+- Show all winner card indexes based on actual hand length instead of hard-coding Hold'em hole-card indexes.
+
+### Changed
+
+- Bumped all workspace package versions and internal `@pokertools/*` dependency ranges to `1.0.11`.
+- Updated README, API, SDK, benchmark, and security version references to `1.0.11`.
+
 ## [1.0.10] - 2026-06-27
 
 ### Added
@@ -388,6 +404,7 @@ Given a version number MAJOR.MINOR.PATCH:
 - [NPM: @pokertools/evaluator](https://www.npmjs.com/package/@pokertools/evaluator)
 - [NPM: @pokertools/types](https://www.npmjs.com/package/@pokertools/types)
 
+[1.0.11]: https://github.com/aaurelions/pokertools/compare/v1.0.10...v1.0.11
 [1.0.10]: https://github.com/aaurelions/pokertools/compare/v1.0.9...v1.0.10
 [1.0.9]: https://github.com/aaurelions/pokertools/compare/v1.0.8...v1.0.9
 [1.0.8]: https://github.com/aaurelions/pokertools/compare/v1.0.7...v1.0.8

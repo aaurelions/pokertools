@@ -97,7 +97,7 @@ export async function buildApp() {
     openapi: {
       info: {
         title: "@pokertools/api",
-        version: "1.0.10",
+        version: "1.0.11",
         description: "🃏 PokerTools API",
       },
     },

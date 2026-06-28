@@ -1,4 +1,4 @@
-import { getBlindPositions } from "../../src/rules/blinds";
+import { calculateAntes, getBlindPositions } from "../../src/rules/blinds";
 import { GameState, Street, Player, PlayerStatus } from "@pokertools/types";
 
 // Helper to create minimal game state for testing
@@ -237,6 +237,34 @@ describe("Blind Positions", () => {
       smallBlindSeat: 1, // Sitting-out player MUST post in tournament
       bigBlindSeat: 2,
     });
+  });
+
+  test("calculateAntes matches cash and tournament sitting-out rules", () => {
+    const players = [
+      createPlayer(0, "p0"),
+      { ...createPlayer(1, "p1"), isSittingOut: true },
+      createPlayer(2, "p2"),
+    ];
+    const cashState = { ...createTestState(players, 0), ante: 5 };
+    const tournamentState = {
+      ...createTestState(players, 0),
+      ante: 5,
+      config: {
+        smallBlind: 10,
+        bigBlind: 20,
+        blindStructure: [{ smallBlind: 10, bigBlind: 20, ante: 5 }],
+      },
+    };
+
+    expect([...calculateAntes(cashState).entries()]).toEqual([
+      [0, 5],
+      [2, 5],
+    ]);
+    expect([...calculateAntes(tournamentState).entries()]).toEqual([
+      [0, 5],
+      [1, 5],
+      [2, 5],
+    ]);
   });
 
   test("cash game: skips sitting-out players", () => {

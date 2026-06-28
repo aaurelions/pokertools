@@ -93,6 +93,31 @@ describe("Tournament Security: Blinding Off Exploit Prevention", () => {
     expect(p0.status).toBe(PlayerStatus.FOLDED); // Auto-folded after posting
   });
 
+  test("tournament deals when every remaining player is sitting out", () => {
+    const engine = new PokerEngine({
+      smallBlind: 25,
+      bigBlind: 50,
+      maxPlayers: 3,
+      blindStructure: [{ smallBlind: 25, bigBlind: 50, ante: 10 }],
+    });
+
+    engine.sit(0, "p0", "Player0", 1000);
+    engine.sit(1, "p1", "Player1", 1000);
+    engine.sit(2, "p2", "Player2", 1000);
+
+    for (let seat = 0; seat < 3; seat++) {
+      (engine.state.players as any)[seat] = {
+        ...engine.state.players[seat]!,
+        isSittingOut: true,
+      };
+    }
+
+    expect(() => engine.deal()).not.toThrow();
+    expect(engine.state.players[0]!.stack).toBeLessThan(1000);
+    expect(engine.state.players[1]!.stack).toBeLessThan(1000);
+    expect(engine.state.players[2]!.stack).toBeLessThan(1000);
+  });
+
   test("cash game: sitting-out SB does NOT post (Dead Small Blind)", () => {
     const engine = new PokerEngine({
       smallBlind: 5,

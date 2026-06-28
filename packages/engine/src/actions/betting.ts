@@ -249,10 +249,8 @@ export function handleRaise(state: GameState, action: RaiseAction): GameState {
   // Incomplete-raise rule: does this raise reopen the betting?
   const reopensBetting = raiseIncrement >= state.lastRaiseAmount;
 
-  // When reopened, min raise = new bet + new increment; otherwise, new bet + old increment.
-  const newMinRaise = reopensBetting
-    ? raiseAmount + raiseIncrement
-    : raiseAmount + state.lastRaiseAmount;
+  // Incomplete all-in raises do not change the next minimum full raise.
+  const newMinRaise = reopensBetting ? raiseAmount + raiseIncrement : state.minRaise;
 
   const newState: GameState = {
     ...state,

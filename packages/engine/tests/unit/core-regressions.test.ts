@@ -1,4 +1,12 @@
-import { PlayerStatus, SitInOption, Street, type GameState, type Player } from "@pokertools/types";
+import {
+  ActionType,
+  PlayerStatus,
+  SitInOption,
+  Street,
+  type GameState,
+  type Player,
+} from "@pokertools/types";
+import { PokerEngine } from "../../src/engine/poker-engine";
 import { determineWinners } from "../../src/rules/showdown";
 import { createPublicView } from "../../src/utils/view-masking";
 
@@ -83,5 +91,58 @@ describe("Core engine regressions", () => {
       [1, 0],
     ]);
     expect(JSON.parse(JSON.stringify(publicView)).currentBets).toEqual({ "0": 0, "1": 0 });
+  });
+
+  test("new hand resets stale lastAggressorSeat", () => {
+    const engine = new PokerEngine({ smallBlind: 5, bigBlind: 10, maxPlayers: 3 });
+
+    engine.sit(0, "p0", "Player 0", 1000);
+    engine.sit(1, "p1", "Player 1", 1000);
+    engine.sit(2, "p2", "Player 2", 1000);
+    engine.deal();
+
+    engine.act({ type: ActionType.RAISE, playerId: "p0", amount: 30 });
+    engine.act({ type: ActionType.FOLD, playerId: "p1" });
+    engine.act({ type: ActionType.FOLD, playerId: "p2" });
+
+    expect(engine.state.lastAggressorSeat).toBe(0);
+
+    engine.deal();
+
+    expect(engine.state.lastAggressorSeat).toBeNull();
+  });
+
+  test("fold-out after prior street conserves chips and returns only uncalled bets", () => {
+    const engine = new PokerEngine({ smallBlind: 5, bigBlind: 10, maxPlayers: 3 });
+
+    engine.sit(0, "p0", "Button", 1000);
+    engine.sit(1, "p1", "Small Blind", 1000);
+    engine.sit(2, "p2", "Big Blind", 1000);
+    engine.deal();
+
+    engine.act({ type: ActionType.CALL, playerId: "p0" });
+    engine.act({ type: ActionType.CALL, playerId: "p1" });
+    engine.act({ type: ActionType.CHECK, playerId: "p2" });
+
+    engine.act({ type: ActionType.BET, playerId: "p1", amount: 100 });
+    engine.act({ type: ActionType.CALL, playerId: "p2" });
+    engine.act({ type: ActionType.FOLD, playerId: "p0" });
+
+    engine.act({ type: ActionType.BET, playerId: "p1", amount: 200 });
+    engine.act({ type: ActionType.FOLD, playerId: "p2" });
+
+    expect(engine.state.players[1]!.stack).toBe(1120);
+    expect(engine.state.players.reduce((sum, player) => sum + (player?.stack ?? 0), 0)).toBe(3000);
+  });
+
+  test("winner shownCards covers the actual hand length", () => {
+    const state = makeShowdownState();
+    state.players[0] = makePlayer(0, ["As", "Ks", "Qs"]);
+    state.players[1] = { ...makePlayer(1, ["2c", "3d"]), status: PlayerStatus.FOLDED };
+    state.pots = [{ amount: 200, eligibleSeats: [0], type: "MAIN", capPerPlayer: 100 }];
+
+    const result = determineWinners(state);
+
+    expect(result.players[0]!.shownCards).toEqual([0, 1, 2]);
   });
 });
