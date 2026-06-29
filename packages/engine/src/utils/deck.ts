@@ -18,66 +18,59 @@ export function createDeck(): number[] {
 }
 
 /**
- * Cryptographically secure RNG using Node.js crypto module
- * Falls back to Math.random() only in browser/test environments
+ * Cryptographically secure RNG using Node.js crypto module.
  *
- * @warning Math.random() is NOT cryptographically secure and should NEVER
- * be used for production poker games. Always provide a secure RNG.
+ * **Fail-closed design:** Throws an error if no secure RNG source is available.
+ * This function NEVER falls back to Math.random().
+ *
+ * In Node.js, uses `crypto.randomBytes`. Outside Node.js (or if crypto is
+ * unavailable), throws an error instructing the caller to provide a
+ * `randomProvider` in the table config.
  */
-function getSecureRandom(): () => number {
+export function getSecureRandom(): () => number {
   if (typeof process !== "undefined" && process.versions?.node) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
-      const crypto = require("crypto");
-      return () => {
-        // Generate cryptographically secure random number [0, 1)
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-        const buffer = crypto.randomBytes(4);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-        const value = buffer.readUInt32BE(0);
-        return value / 0x100000000;
-      };
-    } catch (_error) {
-      console.warn(
-        "[SECURITY WARNING] crypto module not available. Falling back to Math.random(). " +
-          "DO NOT use in production for real-money games!"
-      );
-    }
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const crypto = require("crypto") as typeof import("crypto");
+
+    return () => {
+      const buffer = crypto.randomBytes(4);
+      return buffer.readUInt32BE(0) / 0x100000000;
+    };
   }
 
-  // Fallback for browser/test environments - emit warning
-  if (process.env.NODE_ENV === "production") {
-    console.error(
-      "[CRITICAL SECURITY WARNING] Using Math.random() in production! " +
-        "This is NOT cryptographically secure and games can be predicted. " +
-        "Provide a secure RNG via the rng parameter."
-    );
-  }
-
-  return Math.random;
+  throw new Error(
+    "[PokerEngine] No secure random number generator available. " +
+      "Provide a randomProvider () => number in the table config. " +
+      "For testing, provide a deterministic randomProvider (e.g. createSeededRandom(seed))."
+  );
 }
 
 /**
- * Shuffle deck using Fisher-Yates algorithm with injectable RNG
+ * Shuffle deck using Fisher-Yates algorithm with injectable RNG.
+ *
+ * **Fail-closed design:** When no `rng` is supplied, uses `getSecureRandom()`
+ * which throws if no cryptographically secure source is available. It NEVER
+ * falls back to `Math.random()`.
  *
  * @param deck - Deck to shuffle (not modified, returns new array)
- * @param rng - Random number generator function (0-1). MUST be cryptographically
- *              secure for production use (e.g., use crypto.randomBytes)
+ * @param rng  - Optional RNG function returning values in [0, 1).
+ *               For deterministic tests, pass a seeded RNG.
+ *               When omitted, `getSecureRandom()` is used (Node crypto).
  * @returns New shuffled deck
- *
- * @security For production poker games, ALWAYS provide a cryptographically secure RNG.
- * The default RNG uses Node.js crypto module if available, otherwise falls back to
- * Math.random() which is NOT suitable for real-money games as it can be predicted.
  *
  * @example
  * ```typescript
- * // Production: Use crypto for secure shuffling
- * import { randomBytes } from 'crypto';
- * const secureRng = () => randomBytes(4).readUInt32BE(0) / 0x100000000;
- * const deck = shuffle(createDeck(), secureRng);
+ * // Production (Node): uses crypto.randomBytes via getSecureRandom()
+ * const deck = shuffle(createDeck());
  *
- * // Development/Testing: Default is acceptable
- * const deck = shuffle(createDeck()); // Uses crypto if available
+ * // Production (Node): explicit secure RNG
+ * import { randomBytes } from 'crypto';
+ * const rng = () => randomBytes(4).readUInt32BE(0) / 0x100000000;
+ * const deck = shuffle(createDeck(), rng);
+ *
+ * // Deterministic testing
+ * const seeded = createSeededRandom(12345);
+ * const deck = shuffle(createDeck(), seeded);
  * ```
  */
 export function shuffle(deck: readonly number[], rng?: () => number): number[] {

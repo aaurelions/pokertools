@@ -1,5 +1,5 @@
 import { GameState, Street, PlayerStatus, DealAction, Pot, SitInOption } from "@pokertools/types";
-import { createDeck, shuffle, dealCards } from "../utils/deck";
+import { createDeck, shuffle, dealCards, getSecureRandom } from "../utils/deck";
 import { cardCodesToStrings } from "../utils/card-utils";
 import { getBlindPositions } from "../rules/blinds";
 import { getFirstToAct } from "../rules/action-order";
@@ -20,8 +20,9 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
   const isClient = !!state.config.isClient;
 
   // Client mode: empty deck, cards dealt as masked (null).
-  const rng = state.config.randomProvider ?? Math.random;
-  const deck = isClient ? [] : shuffle(createDeck(), rng);
+  // When randomProvider is undefined, shuffle uses getSecureRandom() which
+  // provides Node crypto randomness and fails closed if unavailable.
+  const deck = isClient ? [] : shuffle(createDeck(), state.config.randomProvider);
 
   const newTimeBanks = new Map(state.timeBanks);
 
@@ -250,10 +251,13 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
     return player.status === PlayerStatus.ACTIVE;
   });
 
+  // Use config's randomProvider if provided, otherwise getSecureRandom for handId.
+  const handIdRng = state.config.randomProvider ?? getSecureRandom();
+
   const newState = {
     ...state,
     handNumber: state.handNumber + 1,
-    handId: `hand-${action.timestamp!}-${Math.floor(rng() * 1000000)}`,
+    handId: `hand-${action.timestamp!}-${Math.floor(handIdRng() * 1000000)}`,
     buttonSeat: newButtonSeat,
     deck: remainingDeck,
     board: [],

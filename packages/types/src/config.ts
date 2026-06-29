@@ -21,7 +21,7 @@ export interface TableConfig {
   readonly timeBankSeconds?: number;
   /** Seconds deducted per time bank activation (default: 10). */
   readonly timeBankDeductionSeconds?: number;
-  /** RNG override (default: Math.random). */
+  /** RNG override. Omit to use the engine's secure Node crypto RNG. */
   readonly randomProvider?: () => number;
   /** Rake percentage 0-100 (cash games only, default: 0). */
   readonly rakePercent?: number;

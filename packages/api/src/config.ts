@@ -21,4 +21,20 @@ export const config = cleanEnv(process.env, {
 
   // CORS origin - specific in production, broad in dev/test
   CORS_ORIGIN: str({ default: "" }),
+  ALLOWED_SIWE_CHAIN_IDS: str({
+    default: "1,31337",
+    desc: "Comma-separated EIP-155 chain IDs accepted for SIWE login",
+  }),
+  METRICS_TOKEN: str({
+    default: "",
+    desc: "Bearer token required for /metrics in production. If unset in production, /metrics is disabled.",
+  }),
 });
+
+export function allowedSiweChainIds(): Set<number> {
+  return new Set(
+    config.ALLOWED_SIWE_CHAIN_IDS.split(",")
+      .map((value) => Number(value.trim()))
+      .filter((value) => Number.isInteger(value) && value > 0)
+  );
+}

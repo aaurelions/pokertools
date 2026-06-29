@@ -219,8 +219,8 @@ export class SweeperService {
     try {
       this.logger.info(`Sweeping ${owners.length} wallets for ${token.symbol}`);
 
-      const nonce = await this.chainService.getNextHotWalletNonce(chain);
       const hash = await withRetry(async () => {
+        const nonce = await this.chainService.getNextHotWalletNonce(chain);
         return hotWalletClient.writeContract({
           address: sweeperAddr,
           abi: BATCH_ABI,

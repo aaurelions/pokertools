@@ -114,6 +114,7 @@ export interface WithdrawalRequest {
   address: string;
   message: string;
   signature: `0x${string}`;
+  idempotencyKey?: string;
 }
 
 /**

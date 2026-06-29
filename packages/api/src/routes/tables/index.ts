@@ -11,11 +11,15 @@ import {
 
 export const tableRoutes: FastifyPluginAsync = async (fastify) => {
   // GET /tables - List active tables
-  fastify.get("/", async () => {
+  fastify.get<{ Querystring: { mode?: "CASH" | "TOURNAMENT" } }>("/", async (request, reply) => {
+    const { mode } = request.query;
+    if (mode !== undefined && mode !== "CASH" && mode !== "TOURNAMENT") {
+      return reply.code(400).send({ error: "Invalid table mode" });
+    }
     const tables = await fastify.prisma.table.findMany({
       where: {
         status: { in: ["WAITING", "ACTIVE"] },
-        mode: "CASH",
+        ...(mode ? { mode } : {}),
       },
       select: {
         id: true,
@@ -86,6 +90,31 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       const amountNum = typeof amount === "string" ? parseInt(amount, 10) : amount;
+      const buyInTable = await fastify.prisma.table.findUniqueOrThrow({
+        where: { id },
+        select: { config: true, mode: true },
+      });
+      const buyInConfig = buyInTable.config as { minBuyIn?: number; maxBuyIn?: number };
+      if (
+        buyInTable.mode === "CASH" &&
+        buyInConfig.minBuyIn !== undefined &&
+        amountNum < buyInConfig.minBuyIn
+      ) {
+        return reply.code(400).send({
+          error: "BUY_IN_BELOW_MINIMUM",
+          message: `Buy-in must be at least ${buyInConfig.minBuyIn}`,
+        });
+      }
+      if (
+        buyInTable.mode === "CASH" &&
+        buyInConfig.maxBuyIn !== undefined &&
+        amountNum > buyInConfig.maxBuyIn
+      ) {
+        return reply.code(400).send({
+          error: "BUY_IN_ABOVE_MAXIMUM",
+          message: `Buy-in must not exceed ${buyInConfig.maxBuyIn}`,
+        });
+      }
       const risk = await fastify.riskManager.assertAllowed({
         userId,
         endpoint: "buy-in",
@@ -99,6 +128,31 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
         userId,
         requestHash: fastify.idempotencyManager.hash({ id, amount: amountNum, seat }),
         handler: async () => {
+          const table = await fastify.prisma.table.findUniqueOrThrow({
+            where: { id },
+            select: { config: true, mode: true },
+          });
+          const config = table.config as { minBuyIn?: number; maxBuyIn?: number };
+          if (
+            table.mode === "CASH" &&
+            config.minBuyIn !== undefined &&
+            amountNum < config.minBuyIn
+          ) {
+            throw Object.assign(new Error(`Buy-in must be at least ${config.minBuyIn}`), {
+              statusCode: 400,
+              code: "BUY_IN_BELOW_MINIMUM",
+            });
+          }
+          if (
+            table.mode === "CASH" &&
+            config.maxBuyIn !== undefined &&
+            amountNum > config.maxBuyIn
+          ) {
+            throw Object.assign(new Error(`Buy-in must not exceed ${config.maxBuyIn}`), {
+              statusCode: 400,
+              code: "BUY_IN_ABOVE_MAXIMUM",
+            });
+          }
           const state = await fastify.gameManager.getState(id);
           const seatedPlayer = state.players[seat];
 
@@ -249,6 +303,36 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       const amountNum = typeof amount === "string" ? parseInt(amount, 10) : amount;
+      const addChipsTable = await fastify.prisma.table.findUniqueOrThrow({
+        where: { id },
+        select: { config: true, mode: true },
+      });
+      if (addChipsTable.mode !== "CASH") {
+        return reply.code(400).send({
+          error: "TOURNAMENT_ADD_CHIPS_UNSUPPORTED",
+          message: "Cannot add chips to tournament tables",
+        });
+      }
+      const addChipsConfig = addChipsTable.config as { maxBuyIn?: number };
+      const addChipsState = await fastify.gameManager.getState(id, userId);
+      const addChipsPlayer = addChipsState.players.find((p) => p?.id === userId);
+
+      if (!addChipsPlayer) {
+        return reply.code(400).send({
+          error: "NOT_SEATED",
+          message: "You must be seated at the table to add chips",
+        });
+      }
+
+      if (
+        addChipsConfig.maxBuyIn !== undefined &&
+        addChipsPlayer.stack + addChipsPlayer.pendingAddOn + amountNum > addChipsConfig.maxBuyIn
+      ) {
+        return reply.code(400).send({
+          error: "ADD_CHIPS_ABOVE_MAXIMUM",
+          message: `Stack plus pending add-ons must not exceed ${addChipsConfig.maxBuyIn}`,
+        });
+      }
       const risk = await fastify.riskManager.assertAllowed({
         userId,
         endpoint: "add-chips",
@@ -262,6 +346,17 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
         userId,
         requestHash: fastify.idempotencyManager.hash({ id, amount: amountNum }),
         handler: async () => {
+          const table = await fastify.prisma.table.findUniqueOrThrow({
+            where: { id },
+            select: { config: true, mode: true },
+          });
+          if (table.mode !== "CASH") {
+            throw Object.assign(new Error("Cannot add chips to tournament tables"), {
+              statusCode: 400,
+              code: "TOURNAMENT_ADD_CHIPS_UNSUPPORTED",
+            });
+          }
+          const tableConfig = table.config as { maxBuyIn?: number };
           // Verify player is seated at table
           const state = await fastify.gameManager.getState(id, userId);
           const player = state.players.find((p) => p?.id === userId);
@@ -271,6 +366,19 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
               statusCode: 400,
               code: "NOT_SEATED",
             });
+          }
+
+          if (
+            tableConfig.maxBuyIn !== undefined &&
+            player.stack + player.pendingAddOn + amountNum > tableConfig.maxBuyIn
+          ) {
+            throw Object.assign(
+              new Error(`Stack plus pending add-ons must not exceed ${tableConfig.maxBuyIn}`),
+              {
+                statusCode: 400,
+                code: "ADD_CHIPS_ABOVE_MAXIMUM",
+              }
+            );
           }
 
           // Financial transaction (debit from MAIN, credit to IN_PLAY)

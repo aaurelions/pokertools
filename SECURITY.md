@@ -277,5 +277,5 @@ This security policy is part of the PokerTools project and follows the same MIT 
 
 ---
 
-**Last Updated**: 2026-06-27
-**Version**: 1.0.11
+**Last Updated**: 2026-06-29
+**Version**: 1.0.12

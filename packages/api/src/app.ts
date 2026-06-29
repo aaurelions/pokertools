@@ -60,7 +60,7 @@ export async function buildApp() {
   });
 
   await app.register(helmet, {
-    contentSecurityPolicy: false,
+    contentSecurityPolicy: config.NODE_ENV === "production" ? undefined : false,
   });
 
   await app.register(cors, {
@@ -97,7 +97,7 @@ export async function buildApp() {
     openapi: {
       info: {
         title: "@pokertools/api",
-        version: "1.0.11",
+        version: "1.0.12",
         description: "🃏 PokerTools API",
       },
     },
@@ -156,7 +156,14 @@ export async function buildApp() {
     return health;
   });
 
-  app.get("/metrics", async (_request, reply) => {
+  app.get("/metrics", async (request, reply) => {
+    if (config.NODE_ENV === "production") {
+      if (!config.METRICS_TOKEN) return reply.code(404).send({ error: "Not found" });
+      const expected = `Bearer ${config.METRICS_TOKEN}`;
+      if (request.headers.authorization !== expected) {
+        return reply.code(401).send({ error: "Unauthorized" });
+      }
+    }
     return reply.type("text/plain; version=0.0.4").send(app.observabilityManager.metrics());
   });
 

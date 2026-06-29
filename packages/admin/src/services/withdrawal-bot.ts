@@ -192,8 +192,8 @@ Dest: <code>${meta.address}</code>
     const token = await this.prisma.token.findUniqueOrThrow({ where: { id: meta.tokenId } });
     const client = this.chainService.getHotWalletClient(chain);
 
-    const nonce = await this.chainService.getNextHotWalletNonce(chain);
     const hash = await withRetry(async () => {
+      const nonce = await this.chainService.getNextHotWalletNonce(chain);
       return client.writeContract({
         address: token.address as `0x${string}`,
         abi: ERC20_ABI,
