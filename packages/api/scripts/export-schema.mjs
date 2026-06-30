@@ -89,9 +89,11 @@ for (const { type, sql } of rows) {
     );
   } else if (type === "index" && !/IF NOT EXISTS/i.test(statement)) {
     // CREATE UNIQUE INDEX "foo" ... -> CREATE UNIQUE INDEX IF NOT EXISTS "foo" ...
+    // We replace the entire "CREATE [UNIQUE ]INDEX " prefix with the
+    // idempotent variant so the script is trivially re-runnable.
     statement = statement.replace(
       /^CREATE (UNIQUE )?INDEX /,
-      "CREATE $1INDEX IF NOT EXISTS ",
+      (_match, unique) => `CREATE ${unique ?? ""}INDEX IF NOT EXISTS `,
     );
   }
 

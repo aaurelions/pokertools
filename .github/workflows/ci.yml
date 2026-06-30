@@ -12,7 +12,7 @@ jobs:
 
     services:
       redis:
-        image: redis:7-alpine
+        image: redis:8-alpine
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
@@ -55,6 +55,11 @@ jobs:
       - name: Build All Packages
         run: npm run build
 
+      - name: Validate Schema & Migrations
+        run: |
+          cd packages/api
+          node scripts/validate-migrations.mjs
+
       - name: Run Tests
         env:
           NODE_ENV: "test"
@@ -64,6 +69,7 @@ jobs:
           MASTER_MNEMONIC: "test test test test test test test test test test test junk"
           TELEGRAM_BOT_TOKEN: "test-token"
           TELEGRAM_ADMIN_CHAT_ID: "123456789"
+          WALLET_XPRIV_ENCRYPTION_SECRET: "test-wallet-xpriv-secret-key-for-ci"
         run: npm test
 
       - name: Run Benchmarks

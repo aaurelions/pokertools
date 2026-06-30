@@ -107,6 +107,20 @@ PUSH_EXIT_CODE=$?
 set -e
 
 if [ $PUSH_EXIT_CODE -ne 0 ]; then
+  # If the push fails because of a NOT NULL column being added to a table
+  # with existing rows (e.g. schema evolution in development), attempt a
+  # force-reset only in test environments where data is disposable.
+  if [ "$NODE_ENV" = "test" ] && echo "$PUSH_OUTPUT" | grep -q "without a default value"; then
+    echo "⚠️  Schema drift requires force-reset (test data is disposable)."
+    echo "   Force-resetting database..."
+    npx prisma db push --accept-data-loss --force-reset || {
+      echo "❌ Force-reset failed!"
+      exit 1
+    }
+    echo "✅ Database force-reset and schema synced successfully!"
+    exit 0
+  fi
+
   echo "❌ Failed to sync database schema!"
   echo "$PUSH_OUTPUT"
   exit 1

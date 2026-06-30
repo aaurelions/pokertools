@@ -25,8 +25,10 @@ const ERC20_ABI = parseAbi([
  * 5. Detects new deposits and stores them as PENDING.
  * 6. Checks PENDING deposits for confirmations and upgrades to CONFIRMED when ready.
  *
- * Security fixes:
- * - Uses BigInt arithmetic for all financial conversions (no floating point)
+ * Production hardening:
+ * - Block hash canonicality checks (reorg protection)
+ * - Status-guarded idempotent confirmation updates in a single transaction
+ * - BigInt arithmetic for all financial conversions (no floating point)
  * - Tracks lastScannedBlock to prevent gaps in monitoring
  * - Validates block confirmations before crediting chips
  * - Uses structured logging instead of console.log
@@ -73,7 +75,6 @@ export function createDepositMonitorWorker(
       });
 
       // Build a Set of active wallet addresses for O(1) lookup
-      // We use the map for checking existence to ensure case-insensitivity
       const walletToUserMap = new Map(
         Array.from(uniqueWallets.entries()).map(([addr, session]) => [
           addr.toLowerCase(),
@@ -115,12 +116,10 @@ export function createDepositMonitorWorker(
           for (const token of chain.tokens) {
             try {
               // Get ALL Transfer events for this token in block range
-              // Do NOT filter by 'to' address - get everything
               const logs = await client.getContractEvents({
                 address: token.address as `0x${string}`,
                 abi: ERC20_ABI,
                 eventName: "Transfer",
-                // NO args filter - we want all transfers
                 fromBlock,
                 toBlock,
               });
@@ -164,6 +163,22 @@ export function createDepositMonitorWorker(
                 });
 
                 if (existingDeposit) continue;
+
+                // --- Block hash canonicality check ---
+                // Fetch the block to get its hash for later reorg detection
+                let blockHash: string | null = null;
+                try {
+                  const block = await client.getBlock({
+                    blockNumber: txBlockNumber,
+                    includeTransactions: false,
+                  });
+                  blockHash = block.hash;
+                } catch (blockErr) {
+                  logger.warn(
+                    { txHash, blockNumber: txBlockNumber.toString(), error: blockErr },
+                    "Could not fetch block hash for canonicality check, storing deposit without"
+                  );
+                }
 
                 // Convert token amount to Chips (cents) using BigInt arithmetic ONLY
                 const amountBigInt = BigInt(amount);
@@ -216,7 +231,12 @@ export function createDepositMonitorWorker(
                         amount: chips,
                         type: "DEPOSIT",
                         referenceId: txHash,
-                        metadata: { chain: chain.name, token: token.symbol },
+                        metadata: {
+                          chain: chain.name,
+                          token: token.symbol,
+                          blockHash,
+                          blockNumber: txBlockNumber.toString(),
+                        },
                       },
                     });
 
@@ -225,7 +245,7 @@ export function createDepositMonitorWorker(
                       data: { balance: { increment: chips } },
                     });
 
-                    // Record PaymentTransaction with link to ledger entry
+                    // Record PaymentTransaction with link to ledger entry and blockHash
                     await tx.paymentTransaction.create({
                       data: {
                         userId,
@@ -235,6 +255,7 @@ export function createDepositMonitorWorker(
                         txHash,
                         address: toAddress,
                         blockNumber: txBlockNumber.toString(),
+                        blockHash,
                         amountRaw: amount.toString(),
                         amountCredit: chips,
                         status,
@@ -250,11 +271,12 @@ export function createDepositMonitorWorker(
                         txHash,
                         amount: chips,
                         confirmations,
+                        blockHash,
                       },
                       "Deposit confirmed and credited"
                     );
                   } else {
-                    // Record PaymentTransaction without ledger link (pending)
+                    // Record PaymentTransaction without ledger link (pending), with blockHash
                     await tx.paymentTransaction.create({
                       data: {
                         userId,
@@ -264,6 +286,7 @@ export function createDepositMonitorWorker(
                         txHash,
                         address: toAddress,
                         blockNumber: txBlockNumber.toString(),
+                        blockHash,
                         amountRaw: amount.toString(),
                         amountCredit: chips,
                         status,
@@ -278,6 +301,7 @@ export function createDepositMonitorWorker(
                         amount: chips,
                         confirmations,
                         requiredConfirmations,
+                        blockHash,
                       },
                       "Deposit detected but pending confirmations"
                     );
@@ -307,7 +331,7 @@ export function createDepositMonitorWorker(
         }
       }
 
-      // Check PENDING deposits for confirmation upgrades
+      // Check PENDING deposits for confirmation upgrades (with blockHash canonicality)
       await checkPendingDeposits(prisma, blockchainManager, logger);
     },
     {
@@ -332,7 +356,14 @@ export function createDepositMonitorWorker(
 }
 
 /**
- * Check PENDING deposits and upgrade to CONFIRMED when they have enough confirmations
+ * Check PENDING deposits and upgrade to CONFIRMED when they have enough confirmations.
+ *
+ * Production hardening:
+ * - Idempotent confirmation: uses status-guarded updateMany in a transaction to
+ *   prevent double-crediting even under concurrent worker execution.
+ * - Block hash canonicality: before upgrading, verifies the stored blockHash
+ *   still matches the canonical chain at that block number (reorg detection).
+ *   If the block hash differs, the deposit is marked FAILED with recoveryState REORGED.
  */
 async function checkPendingDeposits(
   prisma: PrismaClient,
@@ -354,48 +385,138 @@ async function checkPendingDeposits(
       const confirmations = Number(currentBlock - depositBlock);
       const requiredConfirmations = deposit.blockchain.confirmations;
 
-      if (confirmations >= requiredConfirmations) {
-        // Upgrade to CONFIRMED and credit user
-        await prisma.$transaction(async (tx) => {
-          const mainAccount = await tx.account.findUniqueOrThrow({
-            where: {
-              userId_currency_type: {
-                userId: deposit.userId,
-                currency: "USDC",
-                type: "MAIN",
+      if (confirmations < requiredConfirmations) {
+        continue; // Not enough confirmations yet
+      }
+
+      // --- Block hash canonicality check (reorg detection) ---
+      // If we stored a blockHash at detection time, verify the canonical chain
+      // still has the same hash at that block number.
+      if (deposit.blockHash) {
+        try {
+          const canonicalBlock = await client.getBlock({
+            blockNumber: depositBlock,
+            includeTransactions: false,
+          });
+
+          if (canonicalBlock.hash.toLowerCase() !== deposit.blockHash.toLowerCase()) {
+            logger.warn(
+              {
+                event: "deposit_reorg_detected",
+                depositId: deposit.id,
+                txHash: deposit.txHash,
+                storedBlockHash: deposit.blockHash,
+                canonicalBlockHash: canonicalBlock.hash,
+                blockNumber: depositBlock.toString(),
               },
-            },
-          });
+              "Reorg detected: stored blockHash differs from canonical chain. Marking deposit as FAILED."
+            );
 
-          const ledgerEntry = await tx.ledgerEntry.create({
-            data: {
-              accountId: mainAccount.id,
-              amount: deposit.amountCredit,
-              type: "DEPOSIT",
-              referenceId: deposit.txHash!,
-              metadata: {
-                chain: deposit.blockchain.name,
-                token: deposit.token.symbol,
-              },
-            },
-          });
+            // Mark deposit as FAILED with REORGED recovery state in a transaction
+            await prisma.$transaction(async (tx) => {
+              // Guard: only update if still PENDING
+              const updated = await tx.paymentTransaction.updateMany({
+                where: {
+                  id: deposit.id,
+                  status: "PENDING",
+                },
+                data: {
+                  status: "FAILED",
+                  recoveryState: "REORGED",
+                  confirmedAt: new Date(),
+                },
+              });
 
-          await tx.account.update({
-            where: { id: mainAccount.id },
-            data: { balance: { increment: deposit.amountCredit } },
-          });
+              if (updated.count === 0) {
+                logger.warn(
+                  { depositId: deposit.id },
+                  "Deposit was already updated by another worker, skipping reorg mark"
+                );
+              }
+            });
+            continue;
+          }
+        } catch (blockErr) {
+          logger.warn(
+            { depositId: deposit.id, blockNumber: depositBlock.toString(), error: blockErr },
+            "Could not verify block hash for canonicality, proceeding with confirmation"
+          );
+          // Proceed with confirmation even if we can't verify block hash (don't block deposits)
+        }
+      }
 
-          // Update PaymentTransaction to CONFIRMED with ledger link
-          await tx.paymentTransaction.update({
-            where: { id: deposit.id },
-            data: {
-              status: "CONFIRMED",
-              ledgerEntryId: ledgerEntry.id,
-              confirmedAt: new Date(),
-            },
-          });
+      // --- Idempotent confirmation upgrade in a single status-guarded transaction ---
+      // Only upgrade if status is still PENDING. updateMany ensures idempotency:
+      // if another worker already upgraded it, count will be 0 and we skip crediting.
+      const result = await prisma.$transaction(async (tx) => {
+        // Guard: atomically check-and-update the payment transaction status
+        const updated = await tx.paymentTransaction.updateMany({
+          where: {
+            id: deposit.id,
+            status: "PENDING", // Critical: only update if still PENDING
+          },
+          data: {
+            status: "CONFIRMED", // Set immediately to prevent race condition
+            confirmedAt: new Date(),
+          },
         });
 
+        if (updated.count === 0) {
+          // Already confirmed by another concurrent worker run
+          logger.info(
+            {
+              event: "deposit_already_confirmed",
+              depositId: deposit.id,
+              txHash: deposit.txHash,
+            },
+            "Deposit already confirmed by another worker, skipping credit"
+          );
+          return { credited: false };
+        }
+
+        // Now safe to credit user - no other worker can process this deposit
+        const mainAccount = await tx.account.findUniqueOrThrow({
+          where: {
+            userId_currency_type: {
+              userId: deposit.userId,
+              currency: "USDC",
+              type: "MAIN",
+            },
+          },
+        });
+
+        const ledgerEntry = await tx.ledgerEntry.create({
+          data: {
+            accountId: mainAccount.id,
+            amount: deposit.amountCredit,
+            type: "DEPOSIT",
+            referenceId: deposit.txHash!,
+            metadata: {
+              chain: deposit.blockchain.name,
+              token: deposit.token.symbol,
+              blockHash: deposit.blockHash,
+              blockNumber: deposit.blockNumber,
+            },
+          },
+        });
+
+        await tx.account.update({
+          where: { id: mainAccount.id },
+          data: { balance: { increment: deposit.amountCredit } },
+        });
+
+        // Link ledger entry to payment transaction
+        await tx.paymentTransaction.update({
+          where: { id: deposit.id },
+          data: {
+            ledgerEntryId: ledgerEntry.id,
+          },
+        });
+
+        return { credited: true, ledgerEntryId: ledgerEntry.id };
+      });
+
+      if (result.credited) {
         logger.info(
           {
             event: "deposit_upgraded",
@@ -403,6 +524,7 @@ async function checkPendingDeposits(
             userId: deposit.userId,
             txHash: deposit.txHash,
             confirmations,
+            ledgerEntryId: result.ledgerEntryId,
           },
           "Pending deposit upgraded to confirmed"
         );

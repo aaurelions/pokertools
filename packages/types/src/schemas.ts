@@ -282,7 +282,25 @@ export const CreateTournamentSchema = z
   .refine((config) => config.bigBlind > config.smallBlind, {
     message: "Big blind must be greater than small blind",
     path: ["bigBlind"],
-  });
+  })
+  .refine(
+    (config) => {
+      // Validate blind structure is strictly increasing if provided
+      const levels = config.blindStructure;
+      if (!levels || levels.length <= 1) return true;
+      for (let i = 1; i < levels.length; i++) {
+        const prev = levels[i - 1];
+        const curr = levels[i];
+        if (curr.smallBlind <= prev.smallBlind) return false;
+        if (curr.bigBlind <= prev.bigBlind) return false;
+      }
+      return true;
+    },
+    {
+      message: "Blind structure levels must be strictly increasing",
+      path: ["blindStructure"],
+    }
+  );
 
 export const RegisterTournamentRequestSchema = z.object({
   seat: z.number().int().min(0, "Seat must be at least 0"),

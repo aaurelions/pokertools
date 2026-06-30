@@ -38,7 +38,7 @@ import {
 } from "./helpers/chain-utils.js";
 
 // --- DB utilities (local copies to avoid cross-package envalid triggers) ---
-import { encryptXpub, createPrismaClient } from "./helpers/db-utils.js";
+import { encryptXpriv, encryptXpub, createPrismaClient } from "./helpers/db-utils.js";
 import type { PrismaClient } from "../../api/generated/prisma/index.js";
 
 // --- viem ---
@@ -70,6 +70,7 @@ const E2E_SECRETS = {
   JWT_SECRET: "e2e-jwt-secret-not-for-production",
   COOKIE_SECRET: "e2e-cookie-secret-not-for-production",
   WALLET_ENCRYPTION_SECRET: "e2e-wallet-encryption-secret-for-tests-only",
+  WALLET_XPRIV_ENCRYPTION_SECRET: "e2e-wallet-xpriv-encryption-secret-for-tests-only",
 };
 
 const USDC_ABI = parseAbi([
@@ -482,6 +483,7 @@ beforeAll(async () => {
 
   // Set required env for encryptXpub and prisma client
   process.env.WALLET_ENCRYPTION_SECRET = E2E_SECRETS.WALLET_ENCRYPTION_SECRET;
+  process.env.WALLET_XPRIV_ENCRYPTION_SECRET = E2E_SECRETS.WALLET_XPRIV_ENCRYPTION_SECRET;
   process.env.DATABASE_URL = `file:${E2E_RUNTIME_DIR}/e2e.db`;
 
   prisma = createPrismaClient();
@@ -493,6 +495,7 @@ beforeAll(async () => {
   const masterKey = HDKey.fromMasterSeed(seed);
   const derivedKey = masterKey.derive("m/44'/60'/0'/0");
   const xpriv = derivedKey.privateExtendedKey;
+  const xpub = derivedKey.publicExtendedKey;
 
   // Delete any stale data first (order matters for FK constraints)
   await prisma.depositSession.deleteMany();
@@ -514,7 +517,8 @@ beforeAll(async () => {
   await prisma.adminWallet.create({
     data: {
       label: "E2E Test Wallet",
-      xpub: encryptXpub(xpriv, E2E_SECRETS.WALLET_ENCRYPTION_SECRET),
+      xpub: encryptXpub(xpub, E2E_SECRETS.WALLET_ENCRYPTION_SECRET),
+      xpriv: encryptXpriv(xpriv, E2E_SECRETS.WALLET_XPRIV_ENCRYPTION_SECRET),
       derivationPath: "m/44'/60'/0'/0",
       currentIndex: 0,
       isActive: true,

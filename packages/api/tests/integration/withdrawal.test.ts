@@ -263,8 +263,8 @@ describe("Withdrawal Endpoint", () => {
     expect(metadata.proof.signer).toBe(testAddress.toLowerCase());
     expect(metadata.proof.signature).toBe(signature);
 
-    // Verify balance was debited
-    const account = await prisma.account.findUnique({
+    // Verify balance was debited (moved to PENDING_WITHDRAWAL hold)
+    const mainAccount = await prisma.account.findUnique({
       where: {
         userId_currency_type: {
           userId,
@@ -273,7 +273,20 @@ describe("Withdrawal Endpoint", () => {
         },
       },
     });
-    expect(account!.balance).toBe(90000); // $1000 - $100 = $900
+    expect(mainAccount!.balance).toBe(90000); // $1000 - $100 = $900
+
+    // Verify funds are held in PENDING_WITHDRAWAL account (recoverable)
+    const pendingAccount = await prisma.account.findUnique({
+      where: {
+        userId_currency_type: {
+          userId,
+          currency: "USDC",
+          type: "PENDING_WITHDRAWAL",
+        },
+      },
+    });
+    expect(pendingAccount).toBeDefined();
+    expect(pendingAccount!.balance).toBe(10000); // $100 held
 
     // Verify withdrawal was queued in Redis
     const queuedId = await app.redis.rpop("withdrawal_queue");
@@ -326,15 +339,19 @@ describe("Withdrawal Endpoint", () => {
     expect(body2.message).toContain("already submitted");
 
     // Verify balance was debited only once
-    const account = await prisma.account.findUnique({
+    const mainAccount = await prisma.account.findUnique({
       where: { userId_currency_type: { userId, currency: "USDC", type: "MAIN" } },
     });
-    // After first withdrawal ($100) then second idempotent ($50), total should be $850
-    // But idempotent means the second didn't debit, so balance should be $850 ($900 - $50)
-    // Actually first withdrawal was $100, starting at $1000. Balance was $900 after first.
-    // This second withdrawal for $50 with idempotent key should debit to $850.
-    // Second request should be idempotent, so balance stays at $850.
-    expect(account!.balance).toBe(85000); // $1000 - $100 - $50 = $850
+    // After first withdrawal ($100) then second idempotent ($50), total debited should be $150
+    // Starting at $1000: $1000 - $100 - $50 = $850
+    expect(mainAccount!.balance).toBe(85000); // $1000 - $100 - $50 = $850
+
+    // Verify PENDING_WITHDRAWAL holds the sum of both withdrawals
+    const pendingAccount = await prisma.account.findUnique({
+      where: { userId_currency_type: { userId, currency: "USDC", type: "PENDING_WITHDRAWAL" } },
+    });
+    expect(pendingAccount).toBeDefined();
+    expect(pendingAccount!.balance).toBe(15000); // $100 + $50 = $150 held
   });
 
   it("should accept withdrawal with nonce and timestamp in signed message", async () => {

@@ -77,6 +77,7 @@ describe("BlockchainManager", () => {
       mockPrisma.adminWallet.findFirst.mockResolvedValue({
         id: "admin_wallet_1",
         xpub: encryptedXpub,
+        xpriv: "encrypted_xpriv_placeholder", // xpriv present but API never decrypts it
         currentIndex: 5,
         isActive: true,
       });
@@ -85,6 +86,7 @@ describe("BlockchainManager", () => {
         mockPrisma.adminWallet.update.mockResolvedValue({
           id: "admin_wallet_1",
           xpub: encryptedXpub,
+          xpriv: "encrypted_xpriv_placeholder",
           currentIndex: 6,
         });
 
@@ -244,6 +246,7 @@ describe("BlockchainManager", () => {
       mockPrisma.adminWallet.findFirst.mockResolvedValue({
         id: "admin_wallet_1",
         xpub: encryptedXpub,
+        xpriv: "encrypted_xpriv_placeholder",
         currentIndex: 0,
         isActive: true,
       });
@@ -255,6 +258,7 @@ describe("BlockchainManager", () => {
           mockPrisma.adminWallet.update.mockResolvedValue({
             id: "admin_wallet_1",
             xpub: encryptedXpub,
+            xpriv: "encrypted_xpriv_placeholder",
             currentIndex: i + 1,
           });
 

@@ -80,6 +80,7 @@ model Account {
 enum AccountType {
   MAIN // Available for withdrawal/transfer
   IN_PLAY // Locked on tables
+  PENDING_WITHDRAWAL // Funds held for pending withdrawal (recoverable)
 }
 
 model LedgerEntry {
@@ -140,6 +141,7 @@ model PaymentTransaction {
   txHash      String? // Nullable initially for withdrawals (until broadcast)
   address     String // From address (Deposit) or To address (Withdrawal)
   blockNumber String? // BigInt string
+  blockHash   String? // Block hash for canonicality verification (reorg protection)
 
   // Amounts
   amountRaw    String // BigInt from blockchain (wei/satoshi)
@@ -148,6 +150,9 @@ model PaymentTransaction {
 
   // Lifecycle
   status PaymentStatus @default(PENDING)
+
+  // Recovery state for withdrawal audit trail (null for deposits)
+  recoveryState RecoveryState?
 
   // Optional client-supplied idempotency key for withdrawal requests.
   // Nullable so inbound deposits and older rows are unaffected; unique so retries
@@ -166,6 +171,8 @@ model PaymentTransaction {
   @@unique([blockchainId, txHash])
   @@index([userId, type])
   @@index([status])
+  @@index([recoveryState])
+  @@index([blockHash])
 }
 
 enum PaymentType {
@@ -180,6 +187,15 @@ enum PaymentStatus {
   FAILED // Reverted on chain
   REJECTED // Admin rejected withdrawal
   CANCELLED // User cancelled
+}
+
+enum RecoveryState {
+  AWAITING_BROADCAST // Queued, waiting for admin bot to broadcast
+  BROADCASTING // Transaction sent to mempool
+  BROADCAST_FAILED // RPC error or nonce issue during broadcast
+  STUCK_IN_MEMPOOL // Broadcast but not mined for too long (gas too low)
+  REORGED // Was confirmed but chain reorganized
+  RECOVERY_REFUNDED // Funds returned to user after recovery
 }
 
 // ============================================================================
@@ -371,7 +387,8 @@ model Token {
 model AdminWallet {
   id             String       @id @default(cuid())
   label          String
-  xpub           String // Encrypted
+  xpub           String // Encrypted (API-side: public key derivation only)
+  xpriv          String // Encrypted (Admin-side: private key for signing, separate secret)
   derivationPath String       @default("m/44'/60'/0'/0")
   currentIndex   Int          @default(0)
   isActive       Boolean      @default(true)

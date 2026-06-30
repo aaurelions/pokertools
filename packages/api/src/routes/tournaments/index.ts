@@ -11,6 +11,8 @@ import {
   computeTournamentTableDistribution,
   computeTournamentPayouts,
   defaultBlindStructure,
+  validateBlindStructure,
+  MAX_RECONCILE_ITERATIONS,
   type BlindLevel,
 } from "../../utils/tournaments.js";
 
@@ -56,6 +58,9 @@ interface TournamentDetails extends TournamentListItem {
   startedAt?: string | null;
   finishedAt?: string | null;
 }
+
+const errorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : "Invalid tournament configuration";
 
 const toTournamentListItem = (tournament: {
   id: string;
@@ -124,6 +129,9 @@ async function requireTournamentManager(
  * and merges to final table when remaining players fit on one table.
  *
  * Prefers moves only between completed hands (winners != null, actionTo == null).
+ * Uses bounded iterations (MAX_RECONCILE_ITERATIONS) to prevent infinite loops.
+ * STAND/SIT moves are rollback-safe: if SIT fails, the player is re-SIT-ed
+ * to their original seat so no player is ever lost during reconciliation.
  */
 export async function reconcileTournament(
   fastify: FastifyInstance,
@@ -132,17 +140,114 @@ export async function reconcileTournament(
 ): Promise<void> {
   const lock = await fastify.redlock.acquire([`lock:tournament:${tournamentId}`], 30000);
   try {
-    await reconcileTournamentState(fastify, tournamentId, actorUserId);
+    await reconcileTournamentState(fastify, tournamentId, actorUserId, MAX_RECONCILE_ITERATIONS);
   } finally {
     await lock.release();
+  }
+}
+
+/**
+ * Safely move a player from one table to another with rollback on failure.
+ * Ensures no player is ever lost: if SIT on the destination fails after a
+ * successful STAND, the player is re-SIT-ed to their original seat.
+ */
+async function safeMovePlayer(
+  fastify: FastifyInstance,
+  player: {
+    userId: string;
+    username: string;
+    stack: number;
+    tableId: string;
+    seat: number;
+    entryId: string;
+  },
+  destTableId: string,
+  destSeat: number,
+  actorUserId: string
+): Promise<void> {
+  const origTableId = player.tableId;
+  const origSeat = player.seat;
+  let stood = false;
+
+  try {
+    await fastify.gameManager.processAction(
+      origTableId,
+      { type: ActionType.STAND, playerId: player.userId },
+      actorUserId,
+      { skipIdentity: true }
+    );
+    stood = true;
+
+    await fastify.gameManager.processAction(
+      destTableId,
+      {
+        type: ActionType.SIT,
+        playerId: player.userId,
+        playerName: player.username,
+        seat: destSeat,
+        stack: player.stack,
+      },
+      actorUserId,
+      { skipIdentity: true }
+    );
+
+    await fastify.prisma.tournamentEntry.update({
+      where: { id: player.entryId },
+      data: { currentTableId: destTableId, currentSeat: destSeat },
+    });
+  } catch (error) {
+    // Rollback: if we stood but SIT failed, re-seat the player at their original seat
+    if (stood) {
+      try {
+        await fastify.gameManager.processAction(
+          origTableId,
+          {
+            type: ActionType.SIT,
+            playerId: player.userId,
+            playerName: player.username,
+            seat: origSeat,
+            stack: player.stack,
+          },
+          actorUserId,
+          { skipIdentity: true }
+        );
+      } catch (rollbackError) {
+        // Player is stranded — log critical error and surface
+        fastify.log.error(
+          {
+            playerId: player.userId,
+            origTableId,
+            origSeat,
+            destTableId,
+            destSeat,
+            error: rollbackError,
+          },
+          "CRITICAL: Failed to rollback player during tournament reconciliation — player may be stranded"
+        );
+        throw Object.assign(
+          new Error(`Reconciliation rollback failed for player ${player.userId}`),
+          { statusCode: 500, code: "TOURNAMENT_RECONCILE_ROLLBACK_FAILED", cause: rollbackError }
+        );
+      }
+    }
+    throw error;
   }
 }
 
 async function reconcileTournamentState(
   fastify: FastifyInstance,
   tournamentId: string,
-  actorUserId: string
+  actorUserId: string,
+  remainingIterations: number
 ): Promise<void> {
+  if (remainingIterations <= 0) {
+    fastify.log.warn(
+      { tournamentId, iterations: MAX_RECONCILE_ITERATIONS },
+      "Reconciliation iteration limit reached; deferring remaining work to next reconcile call"
+    );
+    return;
+  }
+
   const t = await fastify.prisma.tournament.findUniqueOrThrow({
     where: { id: tournamentId },
     include: { entries: true, tables: true },
@@ -242,39 +347,24 @@ async function reconcileTournamentState(
     }
 
     // Move all players not already on the final table
-    const moves: Array<() => Promise<void>> = [];
     for (const player of allLivePlayers) {
       if (player.tableId === finalTableId) continue;
-      moves.push(async () => {
-        if (await canMovePlayer(fastify, player.tableId)) {
-          await fastify.gameManager.processAction(
-            player.tableId,
-            { type: ActionType.STAND, playerId: player.userId },
-            actorUserId,
-            { skipIdentity: true }
-          );
-          const openSeat = await findOpenSeat(fastify, finalTableId);
-          await fastify.gameManager.processAction(
-            finalTableId,
-            {
-              type: ActionType.SIT,
-              playerId: player.userId,
-              playerName: player.username,
-              seat: openSeat,
-              stack: player.stack,
-            },
-            actorUserId,
-            { skipIdentity: true }
-          );
-          await fastify.prisma.tournamentEntry.update({
-            where: { id: player.entryId },
-            data: { currentTableId: finalTableId, currentSeat: openSeat },
-          });
-        }
-      });
-    }
-    for (const move of moves) {
-      await move();
+      if (!(await canMovePlayer(fastify, player.tableId))) continue;
+
+      // Pre-validate destination has an open seat before standing
+      let destSeat: number;
+      try {
+        destSeat = await findOpenSeat(fastify, finalTableId);
+      } catch {
+        // No open seat on final table — skip this player for now
+        fastify.log.warn(
+          { tournamentId, playerId: player.userId, finalTableId },
+          "Cannot merge player to final table: no open seat available"
+        );
+        continue;
+      }
+
+      await safeMovePlayer(fastify, player, finalTableId, destSeat, actorUserId);
     }
 
     // Close all non-final tables
@@ -325,34 +415,23 @@ async function reconcileTournamentState(
     if (count <= 1 && movableTables.has(tableId)) {
       // Find another table with most open seats
       const targetTable = t.tables.find(
-        (tb: { id: string }) => tb.id !== tableId && tablePlayerCounts.get(tb.id)! < tableMax
+        (tb: { id: string }) => tb.id !== tableId && (tablePlayerCounts.get(tb.id) ?? 0) < tableMax
       );
       if (targetTable) {
         const playersToMove = allLivePlayers.filter((p) => p.tableId === tableId);
         for (const player of playersToMove) {
-          await fastify.gameManager.processAction(
-            tableId,
-            { type: ActionType.STAND, playerId: player.userId },
-            actorUserId,
-            { skipIdentity: true }
-          );
-          const openSeat = await findOpenSeat(fastify, targetTable.id);
-          await fastify.gameManager.processAction(
-            targetTable.id,
-            {
-              type: ActionType.SIT,
-              playerId: player.userId,
-              playerName: player.username,
-              seat: openSeat,
-              stack: player.stack,
-            },
-            actorUserId,
-            { skipIdentity: true }
-          );
-          await fastify.prisma.tournamentEntry.update({
-            where: { id: player.entryId },
-            data: { currentTableId: targetTable.id, currentSeat: openSeat },
-          });
+          // Pre-validate destination has an open seat
+          let openSeat: number;
+          try {
+            openSeat = await findOpenSeat(fastify, targetTable.id);
+          } catch {
+            fastify.log.warn(
+              { tournamentId, playerId: player.userId, targetTableId: targetTable.id },
+              "Cannot break short table: no open seat on target table"
+            );
+            continue;
+          }
+          await safeMovePlayer(fastify, player, targetTable.id, openSeat, actorUserId);
         }
         // Close the short table
         await fastify.prisma.table.update({
@@ -360,7 +439,7 @@ async function reconcileTournamentState(
           data: { status: "CLOSED" },
         });
         // Re-run reconciliation after moving
-        await reconcileTournamentState(fastify, tournamentId, actorUserId);
+        await reconcileTournamentState(fastify, tournamentId, actorUserId, remainingIterations - 1);
         return;
       }
     }
@@ -375,29 +454,18 @@ async function reconcileTournamentState(
     // Move one player from max table to min table
     const playerToMove = allLivePlayers.find((p) => p.tableId === maxTableId);
     if (playerToMove) {
-      await fastify.gameManager.processAction(
-        maxTableId,
-        { type: ActionType.STAND, playerId: playerToMove.userId },
-        actorUserId,
-        { skipIdentity: true }
-      );
-      const openSeat = await findOpenSeat(fastify, minTableId);
-      await fastify.gameManager.processAction(
-        minTableId,
-        {
-          type: ActionType.SIT,
-          playerId: playerToMove.userId,
-          playerName: playerToMove.username,
-          seat: openSeat,
-          stack: playerToMove.stack,
-        },
-        actorUserId,
-        { skipIdentity: true }
-      );
-      await fastify.prisma.tournamentEntry.update({
-        where: { id: playerToMove.entryId },
-        data: { currentTableId: minTableId, currentSeat: openSeat },
-      });
+      // Pre-validate destination has an open seat
+      let destSeat: number;
+      try {
+        destSeat = await findOpenSeat(fastify, minTableId);
+      } catch {
+        fastify.log.warn(
+          { tournamentId, maxTableId, minTableId },
+          "Cannot rebalance: no open seat on min table"
+        );
+        return;
+      }
+      await safeMovePlayer(fastify, playerToMove, minTableId, destSeat, actorUserId);
     }
   }
 }
@@ -454,6 +522,16 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
       if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues });
 
       const config = parsed.data;
+
+      // Validate blind structure (schema enforces strictly increasing, but
+      // also validate at runtime in case schema is bypassed or outdated)
+      if (config.blindStructure) {
+        try {
+          validateBlindStructure(config.blindStructure);
+        } catch (error: unknown) {
+          return reply.code(400).send({ error: errorMessage(error) });
+        }
+      }
       const blindStructure =
         config.blindStructure ?? defaultBlindStructure(config.smallBlind, config.bigBlind);
       const blindStructureJson = blindStructure.map((level) => ({
@@ -705,10 +783,20 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
       // Compute balanced distribution
       await requireTournamentManager(fastify, tournament.id, request.user.userId);
 
-      const distribution = computeTournamentTableDistribution(
-        playerCount,
-        tournament.tableMaxPlayers
-      );
+      // Validate blind structure at start time (defense-in-depth)
+      const blindStructure = (tournament.blindStructure as unknown as BlindLevel[]) ?? [];
+      try {
+        validateBlindStructure(blindStructure);
+      } catch (error: unknown) {
+        return reply.code(400).send({ error: errorMessage(error) });
+      }
+
+      let distribution: number[];
+      try {
+        distribution = computeTournamentTableDistribution(playerCount, tournament.tableMaxPlayers);
+      } catch (error: unknown) {
+        return reply.code(400).send({ error: errorMessage(error) });
+      }
 
       // Mark tournament as RUNNING
       await fastify.prisma.tournament.update({
@@ -727,7 +815,6 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
       });
 
       // Create additional tables and sit players
-      const blindStructureJson = tournament.blindStructure as unknown as BlindLevel[];
       const engineMax = Math.min(tournament.tableMaxPlayers, 10);
 
       let entryIndex = 0;
@@ -741,7 +828,6 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
           tableId = tournament.tableId;
         } else {
           // Create new table — use the first blind level from the structure
-          const blindStructure = (tournament.blindStructure as unknown as BlindLevel[]) ?? [];
           const blindLevel =
             blindStructure.length > 0
               ? blindStructure[0]
@@ -753,7 +839,7 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
             smallBlind: blindLevel.smallBlind,
             bigBlind: blindLevel.bigBlind,
             maxPlayers: engineMax,
-            blindStructure: blindStructureJson,
+            blindStructure,
             startingStack: tournament.startingStack,
           });
           await fastify.prisma.table.update({
@@ -901,180 +987,249 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
     "/:id/settle",
     { onRequest: [fastify.authenticate] },
     async (request, reply) => {
-      const tournament = await fastify.prisma.tournament.findUnique({
-        where: { id: request.params.id },
-        include: { entries: true, tables: { where: { status: { not: "CLOSED" } } } },
+      const tournamentId = request.params.id;
+
+      // Quick pre-check outside lock for early exit
+      const preCheck = await fastify.prisma.tournament.findUnique({
+        where: { id: tournamentId },
+        select: { status: true },
       });
-      if (!tournament) return reply.code(404).send({ error: "TOURNAMENT_NOT_FOUND" });
-      if (tournament.status === "FINISHED") return { success: true };
-      if (tournament.status !== "RUNNING")
-        return reply.code(400).send({ error: "TOURNAMENT_NOT_RUNNING" });
+      if (!preCheck) return reply.code(404).send({ error: "TOURNAMENT_NOT_FOUND" });
 
-      await requireTournamentManager(fastify, tournament.id, request.user.userId);
-
-      // Collect stacks from all active tournament tables
-      const stacks = new Map<string, number>();
-      for (const table of tournament.tables) {
-        try {
-          const state = await fastify.gameManager.getState(table.id);
-          if (!state) throw new Error(`Table ${table.id} state not found`);
-          const players = state.players;
-          for (const p of players) {
-            if (p) {
-              stacks.set(p.id, (stacks.get(p.id) ?? 0) + p.stack);
-            }
-          }
-        } catch (error) {
-          throw Object.assign(new Error(`Unable to read tournament table state for ${table.id}`), {
-            statusCode: 503,
-            code: "TOURNAMENT_STATE_UNAVAILABLE",
-            cause: error,
-          });
-        }
-      }
-
-      const activeEntries = tournament.entries.filter(
-        (entry) => entry.status === "ACTIVE" && (stacks.get(entry.userId) ?? 0) > 0
-      );
-
-      if (activeEntries.length !== 1) {
-        return reply.code(400).send({
-          error: "TOURNAMENT_NOT_COMPLETE",
-          activePlayers: activeEntries.length,
+      // Return idempotent settlement details if already FINISHED
+      if (preCheck.status === "FINISHED") {
+        const finishedTournament = await fastify.prisma.tournament.findUnique({
+          where: { id: tournamentId },
+          include: {
+            entries: {
+              where: { prize: { gt: 0 } },
+              include: { user: { select: { username: true } } },
+              orderBy: { placement: "asc" },
+            },
+          },
         });
-      }
-
-      const winner = activeEntries[0];
-      const payoutPercentages = tournament.payoutPercentages as unknown as number[];
-      const payoutAmounts = computeTournamentPayouts(tournament.prizePool, payoutPercentages);
-      const entriesByPlacement = new Map<number, (typeof tournament.entries)[number]>();
-      const placementByEntryId = new Map<string, number>();
-      entriesByPlacement.set(1, winner);
-      placementByEntryId.set(winner.id, 1);
-
-      for (const entry of tournament.entries) {
-        if (entry.id !== winner.id && entry.placement != null) {
-          entriesByPlacement.set(entry.placement, entry);
-          placementByEntryId.set(entry.id, entry.placement);
+        if (finishedTournament) {
+          const winnerEntry = finishedTournament.entries.find((e) => e.placement === 1);
+          return {
+            success: true,
+            winnerUserId: winnerEntry?.userId ?? null,
+            prize: winnerEntry?.prize ?? 0,
+            payouts: finishedTournament.entries.map((e) => ({
+              userId: e.userId,
+              placement: e.placement,
+              amount: e.prize,
+            })),
+          };
         }
       }
 
-      const unplacedEntries = tournament.entries.filter(
-        (entry) => entry.id !== winner.id && entry.placement == null
-      );
-      const usedPlacements = new Set(entriesByPlacement.keys());
-      for (const entry of unplacedEntries) {
-        let placement = 2;
-        while (usedPlacements.has(placement)) placement++;
-        usedPlacements.add(placement);
-        entriesByPlacement.set(placement, entry);
-        placementByEntryId.set(entry.id, placement);
+      if (preCheck.status !== "RUNNING") {
+        return reply.code(400).send({ error: "TOURNAMENT_NOT_RUNNING" });
       }
 
-      const payouts = payoutAmounts
-        .map((amount, index) => {
-          const placement = index + 1;
-          const entry = entriesByPlacement.get(placement);
-          return entry && amount > 0 ? { entry, placement, amount } : null;
-        })
-        .filter(
-          (
-            payout
-          ): payout is {
-            entry: (typeof tournament.entries)[number];
-            placement: number;
-            amount: number;
-          } => payout !== null
+      await requireTournamentManager(fastify, tournamentId, request.user.userId);
+
+      // Acquire tournament lock before reading state and executing settlement
+      const lock = await fastify.redlock.acquire([`lock:tournament:${tournamentId}`], 30000);
+      try {
+        // Re-fetch full tournament state under lock
+        const tournament = await fastify.prisma.tournament.findUnique({
+          where: { id: tournamentId },
+          include: { entries: true, tables: { where: { status: { not: "CLOSED" } } } },
+        });
+        if (!tournament) return reply.code(404).send({ error: "TOURNAMENT_NOT_FOUND" });
+
+        // Double-check under lock: if another request settled this already, return idempotent result
+        if (tournament.status === "FINISHED") {
+          const finishedEntries = await fastify.prisma.tournamentEntry.findMany({
+            where: { tournamentId, prize: { gt: 0 } },
+            include: { user: { select: { username: true } } },
+            orderBy: { placement: "asc" },
+          });
+          const winnerEntry = finishedEntries.find((e) => e.placement === 1);
+          return {
+            success: true,
+            winnerUserId: winnerEntry?.userId ?? null,
+            prize: winnerEntry?.prize ?? 0,
+            payouts: finishedEntries.map((e) => ({
+              userId: e.userId,
+              placement: e.placement,
+              amount: e.prize,
+            })),
+          };
+        }
+
+        // Collect stacks from all active tournament tables
+        const stacks = new Map<string, number>();
+        for (const table of tournament.tables) {
+          try {
+            const state = await fastify.gameManager.getState(table.id);
+            if (!state) throw new Error(`Table ${table.id} state not found`);
+            const players = state.players;
+            for (const p of players) {
+              if (p) {
+                stacks.set(p.id, (stacks.get(p.id) ?? 0) + p.stack);
+              }
+            }
+          } catch (error) {
+            throw Object.assign(
+              new Error(`Unable to read tournament table state for ${table.id}`),
+              {
+                statusCode: 503,
+                code: "TOURNAMENT_STATE_UNAVAILABLE",
+                cause: error,
+              }
+            );
+          }
+        }
+
+        const activeEntries = tournament.entries.filter(
+          (entry) => entry.status === "ACTIVE" && (stacks.get(entry.userId) ?? 0) > 0
         );
 
-      await fastify.prisma.$transaction(async (tx) => {
-        for (const payout of payouts) {
-          const mainAccount = await tx.account.findUniqueOrThrow({
-            where: {
-              userId_currency_type: {
-                userId: payout.entry.userId,
-                currency: "USDC",
-                type: "MAIN",
-              },
-            },
-          });
-          await tx.ledgerEntry.create({
-            data: {
-              accountId: mainAccount.id,
-              amount: payout.amount,
-              type: "TOURNAMENT_PAYOUT",
-              referenceId: tournament.id,
-              metadata: { placement: payout.placement },
-            },
-          });
-          await tx.account.update({
-            where: { id: mainAccount.id },
-            data: { balance: { increment: payout.amount } },
+        if (activeEntries.length !== 1) {
+          return reply.code(400).send({
+            error: "TOURNAMENT_NOT_COMPLETE",
+            activePlayers: activeEntries.length,
           });
         }
 
-        await tx.tournamentEntry.update({
-          where: { id: winner.id },
-          data: {
-            status: payouts.some((payout) => payout.entry.id === winner.id) ? "PAID" : "ELIMINATED",
-            placement: 1,
-            prize: payouts.find((payout) => payout.entry.id === winner.id)?.amount ?? 0,
+        const winner = activeEntries[0];
+        const payoutPercentages = tournament.payoutPercentages as unknown as number[];
+        const payoutAmounts = computeTournamentPayouts(tournament.prizePool, payoutPercentages);
+        const entriesByPlacement = new Map<number, (typeof tournament.entries)[number]>();
+        const placementByEntryId = new Map<string, number>();
+        entriesByPlacement.set(1, winner);
+        placementByEntryId.set(winner.id, 1);
+
+        for (const entry of tournament.entries) {
+          if (entry.id !== winner.id && entry.placement != null) {
+            entriesByPlacement.set(entry.placement, entry);
+            placementByEntryId.set(entry.id, entry.placement);
+          }
+        }
+
+        const unplacedEntries = tournament.entries.filter(
+          (entry) => entry.id !== winner.id && entry.placement == null
+        );
+        const usedPlacements = new Set(entriesByPlacement.keys());
+        for (const entry of unplacedEntries) {
+          let placement = 2;
+          while (usedPlacements.has(placement)) placement++;
+          usedPlacements.add(placement);
+          entriesByPlacement.set(placement, entry);
+          placementByEntryId.set(entry.id, placement);
+        }
+
+        const payouts = payoutAmounts
+          .map((amount, index) => {
+            const placement = index + 1;
+            const entry = entriesByPlacement.get(placement);
+            return entry && amount > 0 ? { entry, placement, amount } : null;
+          })
+          .filter(
+            (
+              payout
+            ): payout is {
+              entry: (typeof tournament.entries)[number];
+              placement: number;
+              amount: number;
+            } => payout !== null
+          );
+
+        await fastify.prisma.$transaction(async (tx) => {
+          for (const payout of payouts) {
+            const mainAccount = await tx.account.findUniqueOrThrow({
+              where: {
+                userId_currency_type: {
+                  userId: payout.entry.userId,
+                  currency: "USDC",
+                  type: "MAIN",
+                },
+              },
+            });
+            await tx.ledgerEntry.create({
+              data: {
+                accountId: mainAccount.id,
+                amount: payout.amount,
+                type: "TOURNAMENT_PAYOUT",
+                referenceId: tournament.id,
+                metadata: { placement: payout.placement },
+              },
+            });
+            await tx.account.update({
+              where: { id: mainAccount.id },
+              data: { balance: { increment: payout.amount } },
+            });
+          }
+
+          await tx.tournamentEntry.update({
+            where: { id: winner.id },
+            data: {
+              status: payouts.some((payout) => payout.entry.id === winner.id)
+                ? "PAID"
+                : "ELIMINATED",
+              placement: 1,
+              prize: payouts.find((payout) => payout.entry.id === winner.id)?.amount ?? 0,
+            },
+          });
+
+          for (const entry of tournament.entries.filter((e) => e.id !== winner.id)) {
+            const placement = placementByEntryId.get(entry.id);
+            if (placement === undefined) {
+              throw new Error(`Missing tournament placement for entry ${entry.id}`);
+            }
+            const prize = payouts.find((payout) => payout.entry.id === entry.id)?.amount ?? 0;
+            await tx.tournamentEntry.update({
+              where: { id: entry.id },
+              data: {
+                status: prize > 0 ? "PAID" : "ELIMINATED",
+                placement,
+                prize,
+              },
+            });
+          }
+
+          await tx.tournament.update({
+            where: { id: tournament.id },
+            data: { status: "FINISHED", finishedAt: new Date() },
+          });
+
+          // Close all tournament tables
+          await tx.table.updateMany({
+            where: { tournamentId: tournament.id },
+            data: { status: "CLOSED" },
+          });
+        });
+
+        await fastify.auditManager.record({
+          actorId: request.user.userId,
+          action: "TOURNAMENT_SETTLE",
+          resource: `tournament:${tournament.id}`,
+          request,
+          metadata: {
+            winnerUserId: winner.userId,
+            payouts: payouts.map((payout) => ({
+              userId: payout.entry.userId,
+              placement: payout.placement,
+              amount: payout.amount,
+            })),
           },
         });
 
-        for (const entry of tournament.entries.filter((e) => e.id !== winner.id)) {
-          const placement = placementByEntryId.get(entry.id);
-          if (placement === undefined) {
-            throw new Error(`Missing tournament placement for entry ${entry.id}`);
-          }
-          const prize = payouts.find((payout) => payout.entry.id === entry.id)?.amount ?? 0;
-          await tx.tournamentEntry.update({
-            where: { id: entry.id },
-            data: {
-              status: prize > 0 ? "PAID" : "ELIMINATED",
-              placement,
-              prize,
-            },
-          });
-        }
-
-        await tx.tournament.update({
-          where: { id: tournament.id },
-          data: { status: "FINISHED", finishedAt: new Date() },
-        });
-
-        // Close all tournament tables
-        await tx.table.updateMany({
-          where: { tournamentId: tournament.id },
-          data: { status: "CLOSED" },
-        });
-      });
-
-      await fastify.auditManager.record({
-        actorId: request.user.userId,
-        action: "TOURNAMENT_SETTLE",
-        resource: `tournament:${tournament.id}`,
-        request,
-        metadata: {
+        return {
+          success: true,
           winnerUserId: winner.userId,
+          prize: payouts.find((payout) => payout.entry.id === winner.id)?.amount ?? 0,
           payouts: payouts.map((payout) => ({
             userId: payout.entry.userId,
             placement: payout.placement,
             amount: payout.amount,
           })),
-        },
-      });
-
-      return {
-        success: true,
-        winnerUserId: winner.userId,
-        prize: payouts.find((payout) => payout.entry.id === winner.id)?.amount ?? 0,
-        payouts: payouts.map((payout) => ({
-          userId: payout.entry.userId,
-          placement: payout.placement,
-          amount: payout.amount,
-        })),
-      };
+        };
+      } finally {
+        await lock.release();
+      }
     }
   );
 };

@@ -170,17 +170,21 @@ export class FinancialManager {
   /**
    * Get user balances
    */
-  async getBalances(userId: string): Promise<{ main: number; inPlay: number }> {
+  async getBalances(
+    userId: string
+  ): Promise<{ main: number; inPlay: number; pendingWithdrawal: number }> {
     const accounts = await this.prisma.account.findMany({
       where: { userId, currency: "USDC" },
     });
 
     const mainAccount = accounts.find((a) => a.type === "MAIN");
     const inPlayAccount = accounts.find((a) => a.type === "IN_PLAY");
+    const pendingWithdrawalAccount = accounts.find((a) => a.type === "PENDING_WITHDRAWAL");
 
     return {
       main: mainAccount ? mainAccount.balance : 0,
       inPlay: inPlayAccount ? inPlayAccount.balance : 0,
+      pendingWithdrawal: pendingWithdrawalAccount ? pendingWithdrawalAccount.balance : 0,
     };
   }
 

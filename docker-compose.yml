@@ -1,5 +1,5 @@
 # =============================================================================
-# docker-compose.yml — PokerTools local development stack
+# docker-compose.yml — PokerTools local development / single-host deployment
 #
 # Usage:
 #   docker compose up --build       # build + start
@@ -8,6 +8,12 @@
 #
 # The API image is built from the monorepo root Dockerfile and tagged as
 # ghcr.io/aaurelions/pokertools.
+#
+# SECURITY: In production deployment, NEVER rely on the dev-default secrets.
+# The entrypoint will refuse to start in production if any secret matches a
+# known dev/test value.  Set JWT_SECRET, COOKIE_SECRET, and
+# WALLET_ENCRYPTION_SECRET via an .env file (or a secrets manager).
+# Generate with: openssl rand -base64 32
 # =============================================================================
 
 services:
@@ -19,6 +25,14 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -43,22 +57,42 @@ services:
         condition: service_healthy
     environment:
       # Application
-      NODE_ENV: production
+      NODE_ENV: ${NODE_ENV:-production}
       PORT: "3000"
       HOST: "0.0.0.0"
-      LOG_LEVEL: info
+      LOG_LEVEL: ${LOG_LEVEL:-info}
       # Database — SQLite file on a named volume for persistence
       DATABASE_URL: "file:.runtime/app.db"
       # Redis — reach the redis service by its compose name
       REDIS_URL: "redis://redis:6379"
-      # Security secrets — use .env values, or fall back to dev-only defaults.
-      # NEVER use these defaults in production!
-      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-not-for-production}
-      COOKIE_SECRET: ${COOKIE_SECRET:-dev-cookie-secret-not-for-production}
-      WALLET_ENCRYPTION_SECRET: ${WALLET_ENCRYPTION_SECRET:-dev-wallet-encryption-secret-not-for-production}
+      # Security secrets — MUST be set via .env or orchestration secrets.
+      # The entrypoint enforces that production never uses dev defaults.
+      JWT_SECRET: "${JWT_SECRET:?err: JWT_SECRET must be set in .env for production}"
+      COOKIE_SECRET: "${COOKIE_SECRET:?err: COOKIE_SECRET must be set in .env for production}"
+      WALLET_ENCRYPTION_SECRET: "${WALLET_ENCRYPTION_SECRET:?err: WALLET_ENCRYPTION_SECRET must be set in .env for production}"
+      # Observability — set METRICS_TOKEN to secure the /metrics endpoint.
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      CORS_ORIGIN: ${CORS_ORIGIN:-}
     volumes:
       # Persistent SQLite database (the .runtime folder inside the container)
       - sqlite_data:/app/packages/api/.runtime
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M,mode=1777
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:3000/health || exit 1"]
       interval: 30s

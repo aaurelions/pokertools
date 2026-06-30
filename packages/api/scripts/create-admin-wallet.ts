@@ -2,40 +2,46 @@
 /**
  * Create an encrypted AdminWallet entry
  *
- * Usage: npx tsx scripts/create-admin-wallet.ts <label> <xpub>
+ * Usage: npx tsx scripts/create-admin-wallet.ts <label> <xpub> <xpriv>
  *
  * Example:
- *   npx tsx scripts/create-admin-wallet.ts "Production Hot Wallet" "xpub6CUGRUonZS..."
+ *   npx tsx scripts/create-admin-wallet.ts "Production Hot Wallet" "xpub6CUGRUonZS..." "xprv9s21ZrQH..."
  */
 
 import { createPrismaClient } from "../src/utils/prisma-client.js";
-import { encryptXpub } from "../src/utils/crypto.js";
+import { encryptXpriv, encryptXpub } from "../src/utils/crypto.js";
 
 const prisma = createPrismaClient();
 
 async function main() {
   const args = process.argv.slice(2);
 
-  if (args.length !== 2) {
-    console.error("Usage: npx tsx scripts/create-admin-wallet.ts <label> <xpub>");
+  if (args.length !== 3) {
+    console.error("Usage: npx tsx scripts/create-admin-wallet.ts <label> <xpub> <xpriv>");
     process.exit(1);
   }
 
-  const [label, xpub] = args;
+  const [label, xpub, xpriv] = args;
 
   // Validate xpub format (basic check)
   if (!xpub.startsWith("xpub")) {
     console.error("Error: xpub must start with 'xpub'");
     process.exit(1);
   }
+  if (!xpriv.startsWith("xprv")) {
+    console.error("Error: xpriv must start with 'xprv'");
+    process.exit(1);
+  }
 
   // Encrypt xpub before storing
   const encryptedXpub = encryptXpub(xpub);
+  const encryptedXpriv = encryptXpriv(xpriv);
 
   const wallet = await prisma.adminWallet.create({
     data: {
       label,
       xpub: encryptedXpub,
+      xpriv: encryptedXpriv,
       derivationPath: "m/44'/60'/0'/0",
       currentIndex: 0,
       isActive: true,

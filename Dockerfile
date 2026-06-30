@@ -159,15 +159,16 @@ RUN rm -rf \
     node_modules/zeptomatch
 
 # =============================================================================
-# Stage 2: Production runtime — minimal, non-root, production-ready
+# Stage 2: Production runtime — minimal, non-root, read-only rootfs
 # =============================================================================
 FROM node:24-slim
 
 # System packages: openssl (Prisma engines), curl (healthcheck), ca-certificates
+# Clean apt cache in same layer to keep image small.
 RUN apt-get update -y && \
     apt-get install -y --no-install-recommends \
       openssl curl ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 # Non-root user
 RUN groupadd -r pokertools && useradd -r -g pokertools -d /app pokertools
@@ -186,8 +187,8 @@ COPY --from=build --chown=pokertools:pokertools /app/packages/api ./packages/api
 COPY --chown=pokertools:pokertools packages/api/scripts/docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
-# Ensure runtime directory for SQLite
-RUN mkdir -p /app/packages/api/.runtime && chown -R pokertools:pokertools /app
+# Ensure runtime directory for SQLite (writable by the pokertools user)
+RUN mkdir -p /app/packages/api/.runtime /tmp && chown -R pokertools:pokertools /app /tmp
 
 ENV NODE_ENV=production
 ENV PORT=3000

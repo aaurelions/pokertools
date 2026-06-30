@@ -15,7 +15,7 @@ import { HDKey } from "@scure/bip32";
 import { mnemonicToSeedSync } from "@scure/bip39";
 import { config, SECRETS } from "../config.js";
 import type { Logger } from "pino";
-import { decryptXpub } from "../utils/crypto.js";
+import { decryptXpriv } from "../utils/crypto.js";
 import type { Redis } from "ioredis";
 
 export class BlockchainService {
@@ -190,6 +190,8 @@ export class BlockchainService {
   /**
    * Get a user account (with private key) for signing transactions
    * This MUST derive the same addresses as the API's BlockchainManager
+   *
+   * Uses the encrypted xpriv field (separate secret from API's xpub)
    */
   async getUserAccount(derivationIndex: number) {
     const adminWallet = await this.prisma.adminWallet.findFirst({
@@ -200,7 +202,8 @@ export class BlockchainService {
       throw new Error("No active AdminWallet found");
     }
 
-    const xpriv = decryptXpub(adminWallet.xpub);
+    // Decrypt xpriv (private key material) using the separate xpriv encryption secret
+    const xpriv = decryptXpriv(adminWallet.xpriv);
     const hdKey = HDKey.fromExtendedKey(xpriv);
     const childKey = hdKey.deriveChild(derivationIndex);
 

@@ -1014,4 +1014,205 @@ describe("Tournament - Management and Financial Regression Coverage", () => {
     });
     expect(secondPlaceEntry.prize).toBe(1200);
   });
+
+  it("rejects tournament creation with invalid blind structure (non-increasing levels)", async () => {
+    const response = await rctx.app.inject({
+      method: "POST",
+      url: "/tournaments",
+      headers: { authorization: `Bearer ${rctx.users[0].token}` },
+      payload: {
+        name: "Bad Blind Tournament",
+        buyIn: 1000,
+        fee: 0,
+        startingStack: 5000,
+        smallBlind: 25,
+        bigBlind: 50,
+        maxPlayers: 4,
+        blindStructure: [
+          { smallBlind: 50, bigBlind: 100, ante: 0 },
+          { smallBlind: 25, bigBlind: 50, ante: 0 }, // decreased — invalid
+        ],
+      },
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("rejects tournament creation with big blind not greater than small blind in blind structure", async () => {
+    const response = await rctx.app.inject({
+      method: "POST",
+      url: "/tournaments",
+      headers: { authorization: `Bearer ${rctx.users[0].token}` },
+      payload: {
+        name: "Bad BB Tournament",
+        buyIn: 1000,
+        fee: 0,
+        startingStack: 5000,
+        smallBlind: 25,
+        bigBlind: 50,
+        maxPlayers: 4,
+        blindStructure: [
+          { smallBlind: 100, bigBlind: 50, ante: 0 }, // BB not greater than SB
+        ],
+      },
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("rejects tournament distribution requiring more than 10 tables", async () => {
+    // Create a tournament with tableMaxPlayers=2 so ceil(21/2) = 11 tables > 10
+    const createResponse = await rctx.app.inject({
+      method: "POST",
+      url: "/tournaments",
+      headers: { authorization: `Bearer ${rctx.users[0].token}` },
+      payload: {
+        name: "Too Many Tables Tournament",
+        buyIn: 100,
+        fee: 0,
+        startingStack: 1000,
+        smallBlind: 5,
+        bigBlind: 10,
+        maxPlayers: 30,
+        tableMaxPlayers: 2,
+      },
+    });
+    expect(createResponse.statusCode).toBe(200);
+    const { tournamentId } = JSON.parse(createResponse.body);
+
+    // Create temporary users to register without unique constraint violation.
+    // 21 players with tableMax=2 requires 11 tables, exceeding MAX_TOURNAMENT_TABLES=10.
+    const tempUsers: { id: string; token: string }[] = [];
+    for (let i = 0; i < 21; i++) {
+      const username = `temptableuser_${Date.now()}_${i}`;
+      const address = `0x_temp_${username}`;
+      const user = await rctx.app.prisma.user.create({
+        data: {
+          username,
+          address,
+          accounts: {
+            create: [{ currency: "USDC", type: "MAIN", balance: 10000 }],
+          },
+        },
+      });
+      const jti = `test_temp_${username}`;
+      const token = await rctx.app.jwt.sign(
+        { userId: user.id, address: user.address, jti },
+        { jti, expiresIn: "1h" }
+      );
+      await rctx.app.prisma.session.create({
+        data: { userId: user.id, jti, expiresAt: new Date(Date.now() + 3600000) },
+      });
+      const registerResponse = await rctx.app.inject({
+        method: "POST",
+        url: `/tournaments/${tournamentId}/register`,
+        headers: { authorization: `Bearer ${token}` },
+        payload: { seat: i, idempotencyKey: crypto.randomUUID() },
+      });
+      // All should succeed until seat capacity, but we only need entries count
+      if (registerResponse.statusCode === 200) {
+        tempUsers.push({ id: user.id, token });
+      }
+    }
+
+    // Ensure we have enough entries (should have at least 21 since maxPlayers=30)
+    const details = await rctx.app.inject({
+      method: "GET",
+      url: `/tournaments/${tournamentId}`,
+    });
+    const entryCount = JSON.parse(details.body).tournament.registeredPlayers;
+    expect(entryCount).toBeGreaterThanOrEqual(21);
+
+    const startResponse = await rctx.app.inject({
+      method: "POST",
+      url: `/tournaments/${tournamentId}/start`,
+      headers: { authorization: `Bearer ${rctx.users[0].token}` },
+    });
+    expect(startResponse.statusCode).toBe(400);
+    expect(JSON.parse(startResponse.body).error).toMatch(/11 tables/);
+
+    // Cleanup temp users
+    for (const user of tempUsers) {
+      await rctx.app.prisma.session.deleteMany({ where: { userId: user.id } });
+      await rctx.app.prisma.ledgerEntry.deleteMany({
+        where: { account: { userId: user.id } },
+      });
+      await rctx.app.prisma.account.deleteMany({ where: { userId: user.id } });
+      await rctx.app.prisma.user.delete({ where: { id: user.id } }).catch(() => {});
+    }
+  });
+
+  it("returns idempotent settlement details for FINISHED tournaments", async () => {
+    const [player1, player2] = rctx.users;
+    const createResponse = await rctx.app.inject({
+      method: "POST",
+      url: "/tournaments",
+      headers: { authorization: `Bearer ${player1.token}` },
+      payload: {
+        name: "Idempotent Settle Tournament",
+        buyIn: 500,
+        fee: 0,
+        startingStack: 2000,
+        smallBlind: 25,
+        bigBlind: 50,
+        maxPlayers: 2,
+        payoutPercentages: [100],
+      },
+    });
+    expect(createResponse.statusCode).toBe(200);
+    const { tournamentId, tableId } = JSON.parse(createResponse.body);
+
+    // Register both players and start
+    for (const [index, player] of [player1, player2].entries()) {
+      await rctx.app.inject({
+        method: "POST",
+        url: `/tournaments/${tournamentId}/register`,
+        headers: { authorization: `Bearer ${player.token}` },
+        payload: { seat: index, idempotencyKey: crypto.randomUUID() },
+      });
+    }
+    await rctx.app.inject({
+      method: "POST",
+      url: `/tournaments/${tournamentId}/start`,
+      headers: { authorization: `Bearer ${player1.token}` },
+    });
+
+    // Simulate player1 as winner
+    const rawSnap = await rctx.app.redis.get(`table:${tableId}`);
+    const snapshot = JSON.parse(rawSnap!);
+    snapshot.players = snapshot.players.map((p: any) => {
+      if (!p) return p;
+      if (p.id === player1.id) return { ...p, stack: 4000 };
+      return { ...p, stack: 0, status: "BUSTED" };
+    });
+    snapshot.winners = completedHandWinners(snapshot.players);
+    snapshot.actionTo = null;
+    snapshot._version = (snapshot._version || 0) + 1;
+    await rctx.app.redis.set(`table:${tableId}`, JSON.stringify(snapshot), "EX", 86400);
+    await rctx.app.prisma.table.update({
+      where: { id: tableId },
+      data: { state: JSON.stringify(snapshot) },
+    });
+
+    // First settlement
+    const settle1 = await rctx.app.inject({
+      method: "POST",
+      url: `/tournaments/${tournamentId}/settle`,
+      headers: { authorization: `Bearer ${player1.token}` },
+    });
+    expect(settle1.statusCode).toBe(200);
+    const body1 = JSON.parse(settle1.body);
+    expect(body1.success).toBe(true);
+    expect(body1.winnerUserId).toBe(player1.id);
+
+    // Second settlement on already FINISHED tournament — idempotent
+    const settle2 = await rctx.app.inject({
+      method: "POST",
+      url: `/tournaments/${tournamentId}/settle`,
+      headers: { authorization: `Bearer ${player1.token}` },
+    });
+    expect(settle2.statusCode).toBe(200);
+    const body2 = JSON.parse(settle2.body);
+    expect(body2.success).toBe(true);
+    expect(body2.winnerUserId).toBe(player1.id);
+    expect(body2.payouts).toEqual(body1.payouts);
+  });
 });

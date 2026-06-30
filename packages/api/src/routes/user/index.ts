@@ -36,6 +36,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       balances: {
         main: balances.main,
         inPlay: balances.inPlay,
+        pendingWithdrawal: balances.pendingWithdrawal,
       },
     };
   });
@@ -242,7 +243,12 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
 
-    // Create withdrawal request in database (atomic transaction with PaymentTransaction)
+    // --- PENDING HOLD SEMANTICS ---
+    // Instead of immediately debiting MAIN (which risks permanent fund lock if the
+    // withdrawal bot fails), move funds to a PENDING_WITHDRAWAL holding account.
+    // This ensures funds are never lost: they exist in either MAIN or PENDING_WITHDRAWAL.
+    // Recovery scanner in the admin withdrawal-bot can detect stuck withdrawals and
+    // return funds from PENDING_WITHDRAWAL back to MAIN.
     const result = await fastify.prisma.$transaction(
       async (
         tx: Omit<
@@ -250,11 +256,34 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
           "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends"
         >
       ) => {
+        // 1. Debit MAIN account (move funds out of available balance)
         await tx.account.update({
           where: { id: mainAccount.id },
           data: { balance: { decrement: amountInCents } },
         });
 
+        // 2. Credit PENDING_WITHDRAWAL account (hold funds in recoverable state)
+        // Use upsert in case the user doesn't have a PENDING_WITHDRAWAL account yet
+        await tx.account.upsert({
+          where: {
+            userId_currency_type: {
+              userId,
+              currency: "USDC",
+              type: "PENDING_WITHDRAWAL",
+            },
+          },
+          create: {
+            userId,
+            currency: "USDC",
+            type: "PENDING_WITHDRAWAL",
+            balance: amountInCents,
+          },
+          update: {
+            balance: { increment: amountInCents },
+          },
+        });
+
+        // 3. Create LedgerEntry for the withdrawal request
         const entry = await tx.ledgerEntry.create({
           data: {
             accountId: mainAccount.id,
@@ -275,8 +304,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
           },
         });
 
-        // Create PaymentTransaction in the SAME transaction (DB outbox pattern)
-        // This ensures no gap between debit and withdrawal request creation
+        // 4. Create PaymentTransaction with AWAITING_BROADCAST recovery state
         const paymentTx = await tx.paymentTransaction.create({
           data: {
             userId,
@@ -287,6 +315,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
             amountRaw: amountRaw.toString(),
             amountCredit: amountInCents,
             status: "PENDING",
+            recoveryState: "AWAITING_BROADCAST",
             ledgerEntryId: entry.id,
             idempotencyKey: effectiveIdempotencyKey,
           },

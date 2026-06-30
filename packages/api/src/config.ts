@@ -1,4 +1,32 @@
-import { cleanEnv, str, num } from "envalid";
+import { cleanEnv, str, num, makeValidator } from "envalid";
+
+// ---------------------------------------------------------------------------
+// Production security guard: refuse to start if any secret contains a
+// well-known dev/test default.  This is a defence-in-depth layer — the Docker
+// entrypoint also enforces this gate at container startup time.
+// ---------------------------------------------------------------------------
+const DEV_SECRET_FRAGMENTS = [
+  "dev-jwt-secret-not-for-production",
+  "dev-cookie-secret-not-for-production",
+  "dev-wallet-encryption-secret-not-for-production",
+  "CHANGE_THIS_IN_PRODUCTION",
+  "test-jwt-secret",
+  "e2e-jwt-secret",
+];
+
+const productionSecret = makeValidator((input: string) => {
+  if (process.env.NODE_ENV === "production") {
+    for (const fragment of DEV_SECRET_FRAGMENTS) {
+      if (input.includes(fragment)) {
+        throw new Error(
+          `Production security gate: secret contains a dev/test default value (matches "${fragment}"). ` +
+            "Generate a cryptographically strong random value (e.g. openssl rand -base64 32)."
+        );
+      }
+    }
+  }
+  return input;
+});
 
 export const config = cleanEnv(process.env, {
   NODE_ENV: str({ choices: ["development", "production", "test"], default: "development" }),
@@ -8,9 +36,13 @@ export const config = cleanEnv(process.env, {
   DATABASE_URL: str(),
   REDIS_URL: str({ default: "redis://localhost:6379" }),
 
-  JWT_SECRET: str(),
-  COOKIE_SECRET: str(),
-  WALLET_ENCRYPTION_SECRET: str(),
+  JWT_SECRET: productionSecret(),
+  COOKIE_SECRET: productionSecret(),
+  WALLET_ENCRYPTION_SECRET: productionSecret(),
+  WALLET_XPRIV_ENCRYPTION_SECRET: str({
+    default: "",
+    desc: "Separate secret for private wallet material (API should not have this set in production)",
+  }),
 
   LOG_LEVEL: str({ default: "info", choices: ["debug", "info", "warn", "error"] }),
 
@@ -28,6 +60,11 @@ export const config = cleanEnv(process.env, {
   METRICS_TOKEN: str({
     default: "",
     desc: "Bearer token required for /metrics in production. If unset in production, /metrics is disabled.",
+  }),
+  ENABLE_TEST_ROUTES: str({
+    default: "false",
+    choices: ["true", "false"],
+    desc: "Explicit opt-in for test-only balance/state mutation routes. Must never be enabled outside isolated tests.",
   }),
 });
 

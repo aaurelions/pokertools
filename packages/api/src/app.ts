@@ -138,7 +138,9 @@ export async function buildApp() {
   await app.register(wsRoutes, { prefix: "/ws" });
   await app.register(financeRoutes, { prefix: "/finance" });
   await app.register(notesRoutes, { prefix: "/notes" });
-  if (config.NODE_ENV === "test") await app.register(testRoutesPlugin);
+  if (config.NODE_ENV === "test" && config.ENABLE_TEST_ROUTES === "true") {
+    await app.register(testRoutesPlugin);
+  }
 
   app.setErrorHandler((error, request, reply) => {
     const err = error as Error & { statusCode?: number; code?: string };

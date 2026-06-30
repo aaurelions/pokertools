@@ -73,6 +73,10 @@ export const config = cleanEnv(process.env, {
 
   // Security
   WALLET_ENCRYPTION_SECRET: str(),
+  WALLET_XPRIV_ENCRYPTION_SECRET: str({
+    default: "",
+    desc: "Separate secret for private wallet material (xpriv encryption). Required in production.",
+  }),
 
   // Logging
   LOG_LEVEL: str({ default: "info" }),

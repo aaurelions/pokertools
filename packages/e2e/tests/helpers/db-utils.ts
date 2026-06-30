@@ -35,6 +35,10 @@ export function encryptXpub(xpub: string, encryptionSecret: string): string {
   return combined.toString("base64");
 }
 
+export function encryptXpriv(xpriv: string, encryptionSecret: string): string {
+  return encryptXpub(xpriv, encryptionSecret);
+}
+
 export function decryptXpub(encryptedXpub: string, encryptionSecret: string): string {
   const combined = Buffer.from(encryptedXpub, "base64");
   const salt = combined.subarray(0, SALT_LENGTH);

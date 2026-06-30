@@ -19,6 +19,7 @@ import { FinancialManager } from "../../../api/src/services/financial-manager.js
 import { GameManager } from "../../../api/src/services/game-manager.js";
 import { createDepositMonitorWorker } from "../../../api/src/workers/deposit-monitor.js";
 import { encryptXpub } from "../../../api/src/utils/crypto.js";
+import { encryptXpriv } from "../../src/utils/crypto.js";
 import { HDKey } from "@scure/bip32";
 import { mnemonicToSeedSync } from "@scure/bip39";
 
@@ -96,6 +97,7 @@ describe("E2E: Deposit -> Game -> Sweep -> Withdraw", () => {
     const masterKey = HDKey.fromMasterSeed(seed);
     const derivedKey = masterKey.derive("m/44'/60'/0'/0");
     const xpriv = derivedKey.privateExtendedKey;
+    const xpub = derivedKey.publicExtendedKey;
 
     // Clean up any existing admin wallet
     await prisma.adminWallet.deleteMany({});
@@ -104,7 +106,8 @@ describe("E2E: Deposit -> Game -> Sweep -> Withdraw", () => {
     await prisma.adminWallet.create({
       data: {
         label: "E2E Test Wallet",
-        xpub: encryptXpub(xpriv), // Store encrypted xPriv
+        xpub: encryptXpub(xpub),
+        xpriv: encryptXpriv(xpriv),
         derivationPath: "m/44'/60'/0'/0",
         currentIndex: 0,
         isActive: true,
