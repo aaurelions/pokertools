@@ -14,6 +14,7 @@ import redisPlugin from "./plugins/redis.js";
 import redlockPlugin from "./plugins/redlock.js";
 import queuePlugin from "./plugins/queue.js";
 import servicesPlugin from "./plugins/services.js";
+import testRoutesPlugin from "./plugins/test-routes.js";
 
 // Routes
 import { authRoutes } from "./routes/auth/index.js";
@@ -22,6 +23,7 @@ import { userRoutes } from "./routes/user/index.js";
 import { wsRoutes } from "./routes/ws/index.js";
 import { financeRoutes } from "./routes/finance/index.js";
 import { notesRoutes } from "./routes/notes/index.js";
+import { tournamentRoutes } from "./routes/tournaments/index.js";
 
 import { config } from "./config.js";
 
@@ -97,7 +99,7 @@ export async function buildApp() {
     openapi: {
       info: {
         title: "@pokertools/api",
-        version: "1.0.12",
+        version: "1.0.15",
         description: "🃏 PokerTools API",
       },
     },
@@ -131,10 +133,12 @@ export async function buildApp() {
   // Routes
   await app.register(authRoutes, { prefix: "/auth" });
   await app.register(tableRoutes, { prefix: "/tables" });
+  await app.register(tournamentRoutes, { prefix: "/tournaments" });
   await app.register(userRoutes, { prefix: "/user" });
   await app.register(wsRoutes, { prefix: "/ws" });
   await app.register(financeRoutes, { prefix: "/finance" });
   await app.register(notesRoutes, { prefix: "/notes" });
+  if (config.NODE_ENV === "test") await app.register(testRoutesPlugin);
 
   app.setErrorHandler((error, request, reply) => {
     const err = error as Error & { statusCode?: number; code?: string };

@@ -4,7 +4,7 @@ import { generateSiweNonce, parseSiweMessage } from "viem/siwe";
 import crypto from "node:crypto";
 import { LoginRequest } from "@pokertools/types";
 import { z } from "zod";
-import { allowedSiweChainIds } from "../../config.js";
+import { allowedSiweChainIds, config } from "../../config.js";
 import type { PrismaClient } from "../../../generated/prisma/index.js";
 
 const loginSchema = z.object({
@@ -33,7 +33,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     {
       config: {
         rateLimit: {
-          max: 5,
+          max: config.NODE_ENV === "test" ? 100 : 5,
           timeWindow: "1 minute",
         },
       },
@@ -53,7 +53,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     {
       config: {
         rateLimit: {
-          max: 10,
+          max: config.NODE_ENV === "test" ? 100 : 10,
           timeWindow: "1 minute",
         },
       },

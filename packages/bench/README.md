@@ -110,7 +110,7 @@ pokersolver (Str)         |          70,980 hands/sec | ±0.70%
 
 ```json
 {
-  "@pokertools/evaluator": "1.0.12",
+  "@pokertools/evaluator": "1.0.15",
   "benchmark": "^2.1.4",
   "bullmq": "^5.79.1",
   "ws": "^8.21.0",

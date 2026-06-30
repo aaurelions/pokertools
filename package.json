@@ -1,6 +1,6 @@
 {
   "name": "pokertools-monorepo",
-  "version": "1.0.12",
+  "version": "1.0.15",
   "private": true,
   "description": "Enterprise-grade Texas Hold'em poker engine and API monorepo",
   "author": "A.Aurelius",
@@ -86,7 +86,7 @@
       "esbuild": "^0.28.1"
     },
     "ws": "^8.21.0",
-    "viem@2.53.1": {
+    "viem@2.54.0": {
       "ws": "^8.21.0"
     },
     "js-yaml": "^5.1.0",

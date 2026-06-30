@@ -78,6 +78,27 @@ export async function createTestUser(
  * Clean up test user and all related data
  */
 export async function cleanupTestUser(app: FastifyInstance, userId: string): Promise<void> {
+  const tournaments = await app.prisma.tournament.findMany({
+    where: {
+      OR: [{ creatorId: userId }, { entries: { some: { userId } } }],
+    },
+    select: {
+      id: true,
+      tableId: true,
+      tables: { select: { id: true } },
+    },
+  });
+
+  for (const tournament of tournaments) {
+    const tableIds = Array.from(
+      new Set([tournament.tableId, ...tournament.tables.map((table) => table.id)])
+    );
+    await app.prisma.handHistory.deleteMany({ where: { tableId: { in: tableIds } } });
+    await app.prisma.tournament.delete({ where: { id: tournament.id } }).catch(() => undefined);
+    await app.prisma.table.deleteMany({ where: { id: { in: tableIds } } });
+    await Promise.all(tableIds.map((tableId) => app.redis.del(`table:${tableId}`)));
+  }
+
   await app.prisma.session.deleteMany({ where: { userId } });
   await app.prisma.ledgerEntry.deleteMany({
     where: { account: { userId } },
@@ -112,15 +133,16 @@ export async function initTestContext(userCount = 2, initialBalance = 10000): Pr
     users.push(user);
   }
 
-  // Add cleanup handlers
+  // Add cleanup handlers. runCleanup executes in reverse order, so close the app
+  // last after DB/Redis-backed cleanup has completed.
+  cleanup.push(async () => {
+    await app.close();
+  });
+
   cleanup.push(async () => {
     for (const user of users) {
       await cleanupTestUser(app, user.id);
     }
-  });
-
-  cleanup.push(async () => {
-    await app.close();
   });
 
   return { app, users, cleanup };

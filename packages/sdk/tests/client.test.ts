@@ -216,6 +216,169 @@ describe("PokerClient", () => {
     });
   });
 
+  describe("tournaments", () => {
+    it("getTournaments returns tournament lobbies", async () => {
+      const tournaments = [
+        {
+          id: "mtt-1",
+          name: "Daily MTT",
+          status: "REGISTRATION",
+          tableId: "table-1",
+          buyIn: 1000,
+          fee: 100,
+          startingStack: 5000,
+          maxPlayers: 100,
+          tableMaxPlayers: 10,
+          balancingTolerance: 2,
+          registeredPlayers: 12,
+          prizePool: 12000,
+        },
+      ];
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ tournaments }),
+      });
+
+      await expect(client.getTournaments()).resolves.toEqual(tournaments);
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.example.com/tournaments",
+        expect.objectContaining({ method: "GET" })
+      );
+    });
+
+    it("createTournament posts configuration and returns ids", async () => {
+      const response = { tournamentId: "mtt-1", tableId: "table-1" };
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve(response),
+      });
+
+      await expect(
+        client.createTournament({
+          name: "Daily MTT",
+          buyIn: 1000,
+          fee: 100,
+          startingStack: 5000,
+          smallBlind: 25,
+          bigBlind: 50,
+          maxPlayers: 100,
+          tableMaxPlayers: 10,
+          balancingTolerance: 2,
+          payoutPercentages: [70, 20, 10],
+        })
+      ).resolves.toEqual(response);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.example.com/tournaments",
+        expect.objectContaining({
+          method: "POST",
+          body: expect.stringContaining('"payoutPercentages":[70,20,10]'),
+        })
+      );
+    });
+
+    it("getTournament returns tournament details", async () => {
+      const tournament = {
+        id: "mtt-1",
+        name: "Daily MTT",
+        status: "RUNNING",
+        tableId: "table-1",
+        buyIn: 1000,
+        fee: 100,
+        startingStack: 5000,
+        maxPlayers: 100,
+        tableMaxPlayers: 10,
+        balancingTolerance: 2,
+        registeredPlayers: 12,
+        prizePool: 12000,
+        blindStructure: [{ smallBlind: 25, bigBlind: 50, ante: 0 }],
+        payoutPercentages: [100],
+        tables: [{ id: "table-1", status: "ACTIVE", playerCount: 10 }],
+        entries: [],
+      };
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ tournament }),
+      });
+
+      await expect(client.getTournament("mtt-1")).resolves.toEqual(tournament);
+    });
+
+    it("registerTournament sends seat and idempotency key", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true }),
+      });
+
+      await expect(
+        client.registerTournament("mtt-1", { seat: 3, idempotencyKey: "idem-1" })
+      ).resolves.toEqual({ success: true });
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.example.com/tournaments/mtt-1/register",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ seat: 3, idempotencyKey: "idem-1" }),
+        })
+      );
+    });
+
+    it("startTournament returns all table ids and distribution", async () => {
+      const response = { success: true, tableIds: ["t1", "t2"], distribution: [6, 6] };
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve(response),
+      });
+
+      await expect(client.startTournament("mtt-1")).resolves.toEqual(response);
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.example.com/tournaments/mtt-1/start",
+        expect.objectContaining({ method: "POST" })
+      );
+    });
+
+    it("reconcileTournament returns updated entries and tables", async () => {
+      const response = { success: true, tables: [], entries: [] };
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve(response),
+      });
+
+      await expect(client.reconcileTournament("mtt-1")).resolves.toEqual(response);
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.example.com/tournaments/mtt-1/reconcile",
+        expect.objectContaining({ method: "POST" })
+      );
+    });
+
+    it("advanceTournamentBlinds returns per-table results", async () => {
+      const response = { results: { t1: { blindLevel: 2 } } };
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve(response),
+      });
+
+      await expect(client.advanceTournamentBlinds("mtt-1")).resolves.toEqual(response);
+    });
+
+    it("settleTournament returns payout distribution", async () => {
+      const response = {
+        success: true,
+        winnerUserId: "u1",
+        prize: 700,
+        payouts: [
+          { userId: "u1", placement: 1, amount: 700 },
+          { userId: "u2", placement: 2, amount: 300 },
+        ],
+      };
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve(response),
+      });
+
+      await expect(client.settleTournament("mtt-1")).resolves.toEqual(response);
+    });
+  });
+
   describe("finance", () => {
     it("getChains returns blockchain list", async () => {
       const chains = [{ id: "eth", name: "Ethereum", tokens: [] }];

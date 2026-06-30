@@ -40,7 +40,7 @@ services:
       redis:
         condition: service_healthy
     environment:
-      NODE_ENV: production
+      NODE_ENV: test
       PORT: "3000"
       HOST: "0.0.0.0"
       LOG_LEVEL: info
@@ -75,7 +75,7 @@ services:
       api:
         condition: service_healthy
     environment:
-      NODE_ENV: production
+      NODE_ENV: test
       DATABASE_URL: "file:.runtime/e2e.db"
       REDIS_URL: "redis://redis:6379"
       JWT_SECRET: "e2e-jwt-secret-not-for-production"

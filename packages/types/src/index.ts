@@ -15,3 +15,4 @@ export * from "./error-codes";
 export * from "./api/common";
 export * from "./api/auth";
 export * from "./api/tables";
+export * from "./api/tournaments";

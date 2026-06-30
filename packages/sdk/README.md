@@ -8,7 +8,7 @@ The official TypeScript SDK for the **PokerTools** platform. Build real-time Tex
 ## ✨ Features
 
 - 🔌 **Real-time WebSocket Client**: Automatic reconnection, heartbeats, and typed events. JWTs are sent as WebSocket subprotocol credentials (not in the URL query string) to avoid leaking tokens in access logs.
-- 🎣 **React Hooks**: `PokerProvider`, `usePoker`, `usePokerClient`, `usePokerSocket`, `useTable`, `useUser`, `useTables`, `useConnection` for seamless UI integration.
+- 🎣 **React Hooks**: `PokerProvider`, `usePoker`, `usePokerClient`, `usePokerSocket`, `useTable`, `useUser`, `useTables`, `useTournaments`, `useTournament`, `useConnection` for seamless UI integration.
 - 🔐 **Authentication**: Built-in support for Sign-In with Ethereum (SIWE), nonce/lifecycle helpers, and replay-safe withdrawal message generation.
 - 🛡️ **Type-Safe**: Full TypeScript support with shared types re-exported from `@pokertools/types`.
 - 🔄 **State Management**: Automatic synchronization of game state (snapshots + delta updates) with version-tracking and conditional fetching.
@@ -24,7 +24,7 @@ yarn add @pokertools/sdk @pokertools/types
 pnpm add @pokertools/sdk @pokertools/types
 ```
 
-`@pokertools/sdk` (v1.0.12) depends on `@pokertools/types` (v1.0.12) for shared TypeScript types.
+`@pokertools/sdk` (v1.0.15) depends on `@pokertools/types` (v1.0.15) for shared TypeScript types.
 The React hooks require `react >= 19.2.3` as an **optional** peer dependency — install `react`
 and `react-dom` only if you plan to use the React integration.
 
@@ -159,12 +159,14 @@ The SDK bridges your frontend application with the PokerTools API and Real-time 
 
 | Component        | Description                                                                                                                                                                |
 | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PokerClient`    | Handles REST API requests (Tables, User, Finance, Notes, Health). Auto-retry with exponential backoff.                                                                     |
+| `PokerClient`    | Handles REST API requests (Tables, Tournaments, User, Finance, Notes, Health). Auto-retry with exponential backoff.                                                        |
 | `PokerSocket`    | Manages WebSocket connection, auto-reconnection, heartbeats, and typed real-time events.                                                                                   |
 | `PokerProvider`  | React Context provider that initializes the client and socket. Accepts `autoConnect` prop (default `true`) to automatically connect the WebSocket when a token is present. |
 | `useTable`       | Hook that subscribes to a specific table's real-time updates via WebSocket (snapshots + deltas).                                                                           |
 | `useUser`        | Hook to fetch and manage the current user's profile and balances.                                                                                                          |
 | `useTables`      | Hook to fetch the list of active tables from the REST API.                                                                                                                 |
+| `useTournaments` | Hook to fetch active and registering tournament lobbies from the REST API.                                                                                                 |
+| `useTournament`  | Hook to fetch one tournament's entries, table assignments, blind structure, and payout configuration.                                                                      |
 | `usePoker`       | Low-level hook to access the full `PokerContextValue` (client, socket, connection state).                                                                                  |
 | `usePokerClient` | Convenience hook to get the `PokerClient` instance.                                                                                                                        |
 | `usePokerSocket` | Convenience hook to get the `PokerSocket` instance (null if not connected).                                                                                                |
@@ -395,20 +397,28 @@ interface PokerSDKConfig {
 
 #### Methods
 
-| Method                      | Description                                                             |
-| --------------------------- | ----------------------------------------------------------------------- |
-| `setToken(token)`           | Update or clear the JWT.                                                |
-| `getToken()`                | Get current token.                                                      |
-| `isAuthenticated()`         | Check if token is present.                                              |
-| `health()`                  | `GET /health` — health check.                                           |
-| `getNonce()`                | `POST /auth/nonce` — get SIWE nonce.                                    |
-| `login(request)`            | `POST /auth/login` — complete SIWE auth.                                |
-| `logout()`                  | `POST /auth/logout` — revoke session.                                   |
-| `getTables()`               | `GET /tables` — list active tables.                                     |
-| `createTable(config)`       | `POST /tables` — create a new table. Returns `tableId`.                 |
-| `getTableState(id, since?)` | `GET /tables/:id` — fetch state; returns `null` (via 304) if unchanged. |
-| `buyIn(tableId, request)`   | `POST /tables/:id/buy-in` — join a table.                               |
-| `action(tableId, request)`  | `POST /tables/:id/action` — execute game action.                        |
+| Method                            | Description                                                             |
+| --------------------------------- | ----------------------------------------------------------------------- |
+| `setToken(token)`                 | Update or clear the JWT.                                                |
+| `getToken()`                      | Get current token.                                                      |
+| `isAuthenticated()`               | Check if token is present.                                              |
+| `health()`                        | `GET /health` — health check.                                           |
+| `getNonce()`                      | `POST /auth/nonce` — get SIWE nonce.                                    |
+| `login(request)`                  | `POST /auth/login` — complete SIWE auth.                                |
+| `logout()`                        | `POST /auth/logout` — revoke session.                                   |
+| `getTables()`                     | `GET /tables` — list active tables.                                     |
+| `createTable(config)`             | `POST /tables` — create a new table. Returns `tableId`.                 |
+| `getTableState(id, since?)`       | `GET /tables/:id` — fetch state; returns `null` (via 304) if unchanged. |
+| `buyIn(tableId, request)`         | `POST /tables/:id/buy-in` — join a table.                               |
+| `action(tableId, request)`        | `POST /tables/:id/action` — execute game action.                        |
+| `getTournaments()`                | `GET /tournaments` — list registration and running tournaments.         |
+| `createTournament(request)`       | `POST /tournaments` — create a tournament lobby.                        |
+| `getTournament(id)`               | `GET /tournaments/:id` — fetch entries, tables, and payout config.      |
+| `registerTournament(id, request)` | `POST /tournaments/:id/register` — register and debit buy-in/fee.       |
+| `startTournament(id)`             | `POST /tournaments/:id/start` — start and receive table distribution.   |
+| `reconcileTournament(id)`         | `POST /tournaments/:id/reconcile` — run tournament-director balancing.  |
+| `advanceTournamentBlinds(id)`     | `POST /tournaments/:id/advance-blinds` — advance active table blinds.   |
+| `settleTournament(id)`            | `POST /tournaments/:id/settle` — pay configured prize distribution.     |
 
 **Convenience action wrappers** (all return `Promise<PublicState>`):
 
@@ -556,26 +566,26 @@ Exported from `@pokertools/sdk` (25+ helpers for formatting, state inspection, a
 
 #### `@pokertools/sdk` (main entry)
 
-| Export                                                                                                                                                                                                                                                                                                                                                                           | Kind                                        |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
-| `PokerClient`                                                                                                                                                                                                                                                                                                                                                                    | Class                                       |
-| `PokerSocket`                                                                                                                                                                                                                                                                                                                                                                    | Class                                       |
-| `createSiweMessage`, `parseSiweMessage`, `isSiweExpired`, `createWithdrawalMessage`, `generateIdempotencyKey`                                                                                                                                                                                                                                                                    | Function                                    |
-| `SiweMessageParams`                                                                                                                                                                                                                                                                                                                                                              | Type                                        |
-| `formatChips`, `parseChips`, `getActivePlayer`, `getPlayerById`, `getPlayerSeat`, `isPlayerTurn`, `getCallAmount`, `getMinRaise`, `canCheck`, `canBet`, `getTotalPot`, `getActivePlayers`, `getPlayersInHand`, `suitToEmoji`, `formatCard`, `formatCards`, `getStreetName`, `isShowdown`, `isHandComplete`, `getPotOdds`, `abbreviateNumber`                                     | Function                                    |
-| `PokerSDKConfig`, `UserBalances`, `UserProfile`, `BlockchainInfo`, `TokenInfo`, `DepositSession`, `DepositRecord`, `WithdrawalRequest`, `WithdrawalRecord`, `HandHistoryEntry`, `PlayerNote`, `ConnectionState`, `PokerSocketEvents`, `EventListener`                                                                                                                            | Type                                        |
-| `PokerSDKError`                                                                                                                                                                                                                                                                                                                                                                  | Class                                       |
-| `PublicState`, `PublicPlayer`, `GameState`, `Player`, `Action`, `ActionType`, `TableConfig`, `ServerMessage`, `ClientMessage`, `SnapshotMessage`, `StateUpdateMessage`, `ErrorMessage`, `JoinTableMessage`, `LeaveTableMessage`, `CreateTableRequest`, `BuyInRequest`, `AddChipsRequest`, `GameActionRequest`, `LoginRequest`, `LoginResponse`, `NonceResponse`, `TableListItem` | Type (re-exported from `@pokertools/types`) |
+| Export                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Kind                                        |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| `PokerClient`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Class                                       |
+| `PokerSocket`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Class                                       |
+| `createSiweMessage`, `parseSiweMessage`, `isSiweExpired`, `createWithdrawalMessage`, `generateIdempotencyKey`                                                                                                                                                                                                                                                                                                                                                                                                     | Function                                    |
+| `SiweMessageParams`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Type                                        |
+| `formatChips`, `parseChips`, `getActivePlayer`, `getPlayerById`, `getPlayerSeat`, `isPlayerTurn`, `getCallAmount`, `getMinRaise`, `canCheck`, `canBet`, `getTotalPot`, `getActivePlayers`, `getPlayersInHand`, `suitToEmoji`, `formatCard`, `formatCards`, `getStreetName`, `isShowdown`, `isHandComplete`, `getPotOdds`, `abbreviateNumber`                                                                                                                                                                      | Function                                    |
+| `PokerSDKConfig`, `UserBalances`, `UserProfile`, `BlockchainInfo`, `TokenInfo`, `DepositSession`, `DepositRecord`, `WithdrawalRequest`, `WithdrawalRecord`, `HandHistoryEntry`, `PlayerNote`, `ConnectionState`, `PokerSocketEvents`, `EventListener`                                                                                                                                                                                                                                                             | Type                                        |
+| `PokerSDKError`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Class                                       |
+| `PublicState`, `PublicPlayer`, `GameState`, `Player`, `Action`, `ActionType`, `TableConfig`, `ServerMessage`, `ClientMessage`, `SnapshotMessage`, `StateUpdateMessage`, `ErrorMessage`, `JoinTableMessage`, `LeaveTableMessage`, `CreateTableRequest`, `BuyInRequest`, `AddChipsRequest`, `GameActionRequest`, `LoginRequest`, `LoginResponse`, `NonceResponse`, `TableListItem`, `TournamentListItem`, `TournamentDetails`, `StartTournamentResponse`, `ReconcileTournamentResponse`, `SettleTournamentResponse` | Type (re-exported from `@pokertools/types`) |
 
 #### `@pokertools/sdk/react` (React subpath)
 
-| Export                                                                                              | Kind      |
-| --------------------------------------------------------------------------------------------------- | --------- |
-| `PokerProvider`                                                                                     | Component |
-| `PokerProviderProps`                                                                                | Type      |
-| `PokerContextValue`                                                                                 | Type      |
-| `usePoker`, `usePokerClient`, `usePokerSocket`, `useTable`, `useUser`, `useTables`, `useConnection` | Hook      |
-| `UseTableOptions`, `UseTableResult`, `UseUserResult`, `UseTablesResult`                             | Type      |
+| Export                                                                                                                                 | Kind      |
+| -------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| `PokerProvider`                                                                                                                        | Component |
+| `PokerProviderProps`                                                                                                                   | Type      |
+| `PokerContextValue`                                                                                                                    | Type      |
+| `usePoker`, `usePokerClient`, `usePokerSocket`, `useTable`, `useUser`, `useTables`, `useTournaments`, `useTournament`, `useConnection` | Hook      |
+| `UseTableOptions`, `UseTableResult`, `UseUserResult`, `UseTablesResult`                                                                | Type      |
 
 ---
 

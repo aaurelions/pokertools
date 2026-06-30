@@ -59,6 +59,12 @@ const mocks = vi.hoisted(() => {
 
   const setTokenMock = vi.fn();
   const getTablesMock = vi.fn(() => Promise.resolve([{ id: "table-1", name: "Test Table" }]));
+  const getTournamentsMock = vi.fn(() =>
+    Promise.resolve([{ id: "tournament-1", name: "MTT", registeredPlayers: 2 }])
+  );
+  const getTournamentMock = vi.fn(() =>
+    Promise.resolve({ id: "tournament-1", name: "MTT", entries: [], tables: [] })
+  );
   const getProfileMock = vi.fn(() =>
     Promise.resolve({ id: "user-1", username: "alice", balances: { MAIN: 100 } })
   );
@@ -69,6 +75,8 @@ const mocks = vi.hoisted(() => {
   class MockPokerClient {
     setToken = setTokenMock;
     getTables = getTablesMock;
+    getTournaments = getTournamentsMock;
+    getTournament = getTournamentMock;
     getProfile = getProfileMock;
     getTableState = getTableStateMock;
     action = actionMock;
@@ -81,6 +89,8 @@ const mocks = vi.hoisted(() => {
     joinMock,
     leaveMock,
     getTablesMock,
+    getTournamentsMock,
+    getTournamentMock,
     getProfileMock,
     getTableStateMock,
     socketInstances,
@@ -97,6 +107,8 @@ import {
   usePoker,
   useConnection,
   useTables,
+  useTournaments,
+  useTournament,
   useUser,
   useTable,
 } from "../src/react";
@@ -160,6 +172,38 @@ describe("React SDK hooks", () => {
 
     await screen.findByText("Test Table");
     expect(mocks.getTablesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("useTournaments fetches tournament list", async () => {
+    function Tournaments() {
+      const { tournaments, isLoading } = useTournaments();
+      return <div>{isLoading ? "loading" : tournaments[0]?.name}</div>;
+    }
+
+    render(
+      <PokerProvider config={{ baseUrl: "http://api.test" }} autoConnect={false}>
+        <Tournaments />
+      </PokerProvider>
+    );
+
+    await screen.findByText("MTT");
+    expect(mocks.getTournamentsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("useTournament fetches tournament details", async () => {
+    function Tournament() {
+      const { tournament } = useTournament("tournament-1");
+      return <div>{tournament?.name ?? "loading"}</div>;
+    }
+
+    render(
+      <PokerProvider config={{ baseUrl: "http://api.test" }} autoConnect={false}>
+        <Tournament />
+      </PokerProvider>
+    );
+
+    await screen.findByText("MTT");
+    expect(mocks.getTournamentMock).toHaveBeenCalledWith("tournament-1");
   });
 
   it("useUser fetches profile when authenticated and clears without a token", async () => {

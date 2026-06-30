@@ -191,7 +191,7 @@ npm run workers
 **Server Output:**
 
 ```
-🃏 @pokertools/api v1.0.12
+🃏 @pokertools/api v1.0.15
 -------------------------
 🌍 Server: http://0.0.0.0:3000
 📚 Docs:   http://0.0.0.0:3000/docs
@@ -455,7 +455,10 @@ curl -X POST http://localhost:3000/tables/clx789ghi/action \
 ```json
 {
   "state": {
-    /* updated game state */
+    "street": "TURN",
+    "pot": 250,
+    "actionTo": 2,
+    "version": 43
   }
 }
 ```
@@ -481,6 +484,94 @@ Leave the table and cash out.
 ```bash
 curl -X POST http://localhost:3000/tables/clx789ghi/stand \
   -H "Authorization: Bearer <token>"
+```
+
+---
+
+### Tournaments
+
+Tournament routes provide lobby registration, multi-table start, director reconciliation, blind advancement, and payout settlement.
+
+#### `GET /tournaments`
+
+List registration and running tournaments.
+
+```bash
+curl http://localhost:3000/tournaments
+```
+
+#### `POST /tournaments`
+
+Create a tournament lobby and its primary/final table.
+
+```bash
+curl -X POST http://localhost:3000/tournaments \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Sunday Main Event",
+    "buyIn": 1000,
+    "fee": 100,
+    "startingStack": 10000,
+    "smallBlind": 25,
+    "bigBlind": 50,
+    "maxPlayers": 100,
+    "tableMaxPlayers": 8,
+    "balancingTolerance": 1,
+    "payoutPercentages": [50, 30, 20]
+  }'
+```
+
+#### `GET /tournaments/:id`
+
+Get tournament details, entries, configured payouts, and table assignments.
+
+#### `POST /tournaments/:id/register`
+
+Register the authenticated user. The buy-in and fee are debited from MAIN; entrants are seated into engine tables only when the tournament starts.
+
+```bash
+curl -X POST http://localhost:3000/tournaments/clx-mtt/register \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"seat": 12, "idempotencyKey": "registration-uuid"}'
+```
+
+#### `POST /tournaments/:id/start`
+
+Start play once at least two players are registered. The response includes every engine table id and the balanced player distribution.
+
+```json
+{
+  "success": true,
+  "tableIds": ["table-1", "table-2", "table-3", "table-4"],
+  "distribution": [8, 8, 7, 7]
+}
+```
+
+#### `POST /tournaments/:id/reconcile`
+
+Run tournament-director reconciliation after completed hands. Reconciliation is protected by a tournament-level distributed lock and updates eliminations, breaks short tables, balances table counts within `balancingTolerance`, and merges to the final table when the remaining field fits on one table.
+
+#### `POST /tournaments/:id/advance-blinds`
+
+Advance the blind level on each active tournament table. The response is keyed by table id with either the new `blindLevel` or an error for that table.
+
+#### `POST /tournaments/:id/settle`
+
+Settle a completed tournament when only one active player still has chips. Payouts are calculated from `payoutPercentages` against the prize pool with integer-chip rounding assigned to first place.
+
+```json
+{
+  "success": true,
+  "winnerUserId": "user-1",
+  "prize": 5000,
+  "payouts": [
+    { "userId": "user-1", "placement": 1, "amount": 5000 },
+    { "userId": "user-2", "placement": 2, "amount": 3000 },
+    { "userId": "user-3", "placement": 3, "amount": 2000 }
+  ]
+}
 ```
 
 ---

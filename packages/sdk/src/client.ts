@@ -15,6 +15,13 @@ import type {
   LoginResponse,
   NonceResponse,
   TableListItem,
+  TournamentDetails,
+  TournamentListItem,
+  CreateTournamentRequest,
+  RegisterTournamentRequest,
+  StartTournamentResponse,
+  ReconcileTournamentResponse,
+  SettleTournamentResponse,
 } from "@pokertools/types";
 
 import {
@@ -220,6 +227,78 @@ export class PokerClient {
    */
   async stand(tableId: string): Promise<void> {
     await this.request("POST", `/tables/${tableId}/stand`);
+  }
+
+  /**
+   * Get active and registering tournaments.
+   */
+  async getTournaments(): Promise<TournamentListItem[]> {
+    const response = await this.request<{ tournaments: TournamentListItem[] }>(
+      "GET",
+      "/tournaments"
+    );
+    return response.tournaments;
+  }
+
+  /**
+   * Create a tournament lobby and backing tournament table.
+   */
+  async createTournament(request: CreateTournamentRequest): Promise<{
+    tournamentId: string;
+    tableId: string;
+  }> {
+    return this.request("POST", "/tournaments", request);
+  }
+
+  /**
+   * Get tournament lobby details, entries, prize pool, and table reference.
+   */
+  async getTournament(tournamentId: string): Promise<TournamentDetails> {
+    const response = await this.request<{ tournament: TournamentDetails }>(
+      "GET",
+      `/tournaments/${tournamentId}`
+    );
+    return response.tournament;
+  }
+
+  /**
+   * Register for a tournament. Debits buy-in and fee from MAIN balance.
+   */
+  async registerTournament(
+    tournamentId: string,
+    request: RegisterTournamentRequest
+  ): Promise<{ success: boolean }> {
+    return this.request("POST", `/tournaments/${tournamentId}/register`, request);
+  }
+
+  /**
+   * Start a tournament once at least two players are registered.
+   */
+  async startTournament(tournamentId: string): Promise<StartTournamentResponse> {
+    return this.request("POST", `/tournaments/${tournamentId}/start`);
+  }
+
+  /**
+   * Reconcile a running multi-table tournament after completed hands.
+   */
+  async reconcileTournament(tournamentId: string): Promise<ReconcileTournamentResponse> {
+    return this.request("POST", `/tournaments/${tournamentId}/reconcile`);
+  }
+
+  /**
+   * Manually advance tournament blind level.
+   */
+  async advanceTournamentBlinds(tournamentId: string): Promise<{
+    results: Record<string, { blindLevel?: number; error?: string }>;
+  }> {
+    return this.request("POST", `/tournaments/${tournamentId}/advance-blinds`);
+  }
+
+  /**
+   * Settle a completed tournament and pay the configured prize distribution.
+   */
+  async settleTournament(tournamentId: string): Promise<SettleTournamentResponse> {
+    return this.request("POST", `/tournaments/${tournamentId}/settle`);
   }
 
   // ============================================================================

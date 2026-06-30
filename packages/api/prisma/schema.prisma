@@ -21,14 +21,16 @@ model User {
   role     Role   @default(PLAYER)
 
   // Relations
-  accounts      Account[]
-  sessions      Session[]
-  wallets       UserWallet[]
-  paymentTx     PaymentTransaction[]
-  notesWritten  PlayerNote[]         @relation("NoteAuthor")
-  notesReceived PlayerNote[]         @relation("NoteTarget")
-  auditLogs     AuditLog[]
-  idempotency   IdempotencyRecord[]
+  accounts          Account[]
+  sessions          Session[]
+  wallets           UserWallet[]
+  paymentTx         PaymentTransaction[]
+  notesWritten      PlayerNote[]         @relation("NoteAuthor")
+  notesReceived     PlayerNote[]         @relation("NoteTarget")
+  auditLogs         AuditLog[]
+  idempotency       IdempotencyRecord[]
+  tournamentEntries TournamentEntry[]
+  createdTournaments Tournament[]        @relation("TournamentCreator")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -76,14 +78,14 @@ model Account {
 }
 
 enum AccountType {
-  MAIN    // Available for withdrawal/transfer
+  MAIN // Available for withdrawal/transfer
   IN_PLAY // Locked on tables
 }
 
 model LedgerEntry {
-  id        String   @id @default(cuid())
+  id        String  @id @default(cuid())
   accountId String
-  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
   amount    Int // Positive = Credit, Negative = Debit
   type      TxType
 
@@ -112,6 +114,9 @@ enum TxType {
   HAND_LOSS
   UNCALLED_BET
   SWEEP
+  TOURNAMENT_BUY_IN
+  TOURNAMENT_FEE
+  TOURNAMENT_PAYOUT
 }
 
 // ============================================================================
@@ -120,9 +125,9 @@ enum TxType {
 
 // Unified table for Money In (Deposit) and Money Out (Withdrawal)
 model PaymentTransaction {
-  id     String          @id @default(cuid())
+  id     String      @id @default(cuid())
   userId String
-  user   User            @relation(fields: [userId], references: [id])
+  user   User        @relation(fields: [userId], references: [id])
   type   PaymentType // DEPOSIT or WITHDRAWAL
 
   // Blockchain Data
@@ -132,9 +137,9 @@ model PaymentTransaction {
   token        Token      @relation(fields: [tokenId], references: [id])
 
   // Transaction Details
-  txHash       String? // Nullable initially for withdrawals (until broadcast)
-  address      String // From address (Deposit) or To address (Withdrawal)
-  blockNumber  String? // BigInt string
+  txHash      String? // Nullable initially for withdrawals (until broadcast)
+  address     String // From address (Deposit) or To address (Withdrawal)
+  blockNumber String? // BigInt string
 
   // Amounts
   amountRaw    String // BigInt from blockchain (wei/satoshi)
@@ -169,12 +174,12 @@ enum PaymentType {
 }
 
 enum PaymentStatus {
-  PENDING     // Detected/Requested
-  PROCESSING  // In Mempool/Broadcasting
-  CONFIRMED   // Finalized on chain & Ledger Credited
-  FAILED      // Reverted on chain
-  REJECTED    // Admin rejected withdrawal
-  CANCELLED   // User cancelled
+  PENDING // Detected/Requested
+  PROCESSING // In Mempool/Broadcasting
+  CONFIRMED // Finalized on chain & Ledger Credited
+  FAILED // Reverted on chain
+  REJECTED // Admin rejected withdrawal
+  CANCELLED // User cancelled
 }
 
 // ============================================================================
@@ -195,10 +200,103 @@ model Table {
 
   handHistories HandHistory[]
 
+  // Inverse of Tournament.table (the primary/final table 1:1 relation — Tournament owns the FK)
+  tournament Tournament? @relation("PrimaryTable")
+
+  // Multi-table tournament ownership (many tables → one tournament)
+  tournamentId       String?
+  owningTournament   Tournament?        @relation("TournamentTables", fields: [tournamentId], references: [id])
+
+  // Entries currently seated at this table
+  entriesAtTable     TournamentEntry[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([status])
+  @@index([tournamentId])
+}
+
+// ============================================================================
+// TOURNAMENTS
+// ============================================================================
+
+model Tournament {
+  id     String           @id @default(cuid())
+  name   String
+  status TournamentStatus @default(REGISTRATION)
+
+  // Tournament manager. The creator or an ADMIN may start, reconcile, advance
+  // blinds, and settle the tournament.
+  creatorId String
+  creator   User             @relation("TournamentCreator", fields: [creatorId], references: [id], onDelete: Restrict)
+
+  // Primary/final table (backwards compatible 1:1)
+  tableId String @unique
+  table   Table  @relation("PrimaryTable", fields: [tableId], references: [id], onDelete: Cascade)
+
+  // Multi-table support: all tables belonging to this tournament
+  tables Table[] @relation("TournamentTables")
+
+  buyIn             Int
+  fee               Int  @default(0)
+  startingStack     Int
+  maxPlayers        Int  // Total tournament capacity (up to 30+)
+  tableMaxPlayers   Int  @default(10) // Max players per engine table (≤10)
+  balancingTolerance Int @default(2)  // Max difference in player count between tables before rebalancing
+  prizePool         Int  @default(0)
+  blindStructure    Json
+  payoutPercentages Json
+
+  entries TournamentEntry[]
+
+  startsAt   DateTime?
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([status, createdAt])
+  @@index([creatorId])
+}
+
+model TournamentEntry {
+  id           String                @id @default(cuid())
+  tournamentId String
+  tournament   Tournament            @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  seat         Int                   // Global registration seat
+  status       TournamentEntryStatus @default(REGISTERED)
+  placement    Int?
+  prize        Int                   @default(0)
+
+  // Current table assignment (multi-table support)
+  currentTableId String?
+  currentTable   Table?              @relation(fields: [currentTableId], references: [id], onDelete: SetNull)
+  currentSeat    Int?                // Seat index on the assigned table
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tournamentId, userId])
+  @@unique([tournamentId, seat])
+  @@index([userId, status])
+  @@index([currentTableId])
+}
+
+enum TournamentStatus {
+  REGISTRATION
+  RUNNING
+  FINISHED
+  CANCELLED
+}
+
+enum TournamentEntryStatus {
+  REGISTERED
+  ACTIVE
+  ELIMINATED
+  PAID
 }
 
 enum GameMode {
@@ -218,12 +316,12 @@ enum TableStatus {
 // ============================================================================
 
 model HandHistory {
-  id        String   @id @default(cuid())
-  tableId   String
-  table     Table    @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  id      String @id @default(cuid())
+  tableId String
+  table   Table  @relation(fields: [tableId], references: [id], onDelete: Cascade)
 
   // Full JSON export of the hand
-  data      Json
+  data Json
 
   timestamp DateTime @default(now())
 
@@ -235,15 +333,15 @@ model HandHistory {
 // ============================================================================
 
 model Blockchain {
-  id               String   @id @default(cuid())
-  name             String   @unique
-  chainId          Int      @unique
+  id               String  @id @default(cuid())
+  name             String  @unique
+  chainId          Int     @unique
   rpcUrl           String
   rpcUrlBackup     String?
   explorerUrl      String
   nativeCurrency   Json // { name, symbol, decimals }
-  isEnabled        Boolean  @default(true)
-  confirmations    Int      @default(12)
+  isEnabled        Boolean @default(true)
+  confirmations    Int     @default(12)
   lastScannedBlock String? // BigInt string
 
   tokens       Token[]
@@ -282,11 +380,11 @@ model AdminWallet {
 }
 
 model UserWallet {
-  id              String           @id @default(cuid())
+  id              String      @id @default(cuid())
   userId          String
-  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   adminWalletId   String
-  adminWallet     AdminWallet      @relation(fields: [adminWalletId], references: [id])
+  adminWallet     AdminWallet @relation(fields: [adminWalletId], references: [id])
   derivationIndex Int
   address         String
 

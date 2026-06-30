@@ -7,7 +7,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } from "react";
 import type { ReactNode } from "react";
-import type { PublicState } from "@pokertools/types";
+import type { PublicState, TournamentDetails, TournamentListItem } from "@pokertools/types";
 import { PokerClient } from "../client";
 import { PokerSocket } from "../socket";
 import type { PokerSDKConfig, ConnectionState, UserProfile, UserBalances } from "../types";
@@ -418,6 +418,96 @@ export function useTables(): UseTablesResult {
 }
 
 // ============================================================================
+// Tournament Hooks
+// ============================================================================
+
+interface UseTournamentsResult {
+  /** Active and registering tournament lobbies */
+  tournaments: TournamentListItem[];
+  /** Loading state */
+  isLoading: boolean;
+  /** Error if any */
+  error: Error | null;
+  /** Refresh tournament list */
+  refresh: () => Promise<void>;
+}
+
+/**
+ * Hook to get active and registering tournaments.
+ */
+export function useTournaments(): UseTournamentsResult {
+  const { client } = usePoker();
+  const [tournaments, setTournaments] = useState<TournamentListItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const data = await client.getTournaments();
+      setTournaments(data);
+      setError(null);
+    } catch (err) {
+      setError(err as Error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [client]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  return { tournaments, isLoading, error, refresh };
+}
+
+interface UseTournamentResult {
+  /** Tournament lobby details */
+  tournament: TournamentDetails | null;
+  /** Loading state */
+  isLoading: boolean;
+  /** Error if any */
+  error: Error | null;
+  /** Refresh tournament details */
+  refresh: () => Promise<void>;
+}
+
+/**
+ * Hook to get a tournament lobby and its entries/tables.
+ */
+export function useTournament(tournamentId: string | null): UseTournamentResult {
+  const { client } = usePoker();
+  const [tournament, setTournament] = useState<TournamentDetails | null>(null);
+  const [isLoading, setIsLoading] = useState(Boolean(tournamentId));
+  const [error, setError] = useState<Error | null>(null);
+
+  const refresh = useCallback(async () => {
+    if (!tournamentId) {
+      setTournament(null);
+      setIsLoading(false);
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      const data = await client.getTournament(tournamentId);
+      setTournament(data);
+      setError(null);
+    } catch (err) {
+      setError(err as Error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [client, tournamentId]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  return { tournament, isLoading, error, refresh };
+}
+
+// ============================================================================
 // Connection Hook
 // ============================================================================
 
@@ -462,5 +552,7 @@ export type {
   UseTableResult,
   UseUserResult,
   UseTablesResult,
+  UseTournamentsResult,
+  UseTournamentResult,
   PokerContextValue,
 };

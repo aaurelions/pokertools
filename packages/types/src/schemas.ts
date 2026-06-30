@@ -242,6 +242,53 @@ export const CreateTableSchema = z
     }
   );
 
+export const TournamentPayoutSchema = z
+  .array(z.number().positive("Payout percentage must be positive"))
+  .min(1, "At least one payout percentage is required")
+  .refine((percentages) => percentages.reduce((sum, percentage) => sum + percentage, 0) === 100, {
+    message: "Tournament payout percentages must total 100",
+  });
+
+export const CreateTournamentSchema = z
+  .object({
+    name: z.string().min(1, "Tournament name is required").max(100, "Name too long"),
+    buyIn: z.number().int().positive("Buy-in must be positive"),
+    fee: z.number().int().min(0, "Fee cannot be negative").default(0),
+    startingStack: z.number().int().positive("Starting stack must be positive"),
+    smallBlind: z.number().int().positive("Small blind must be positive"),
+    bigBlind: z.number().int().positive("Big blind must be positive"),
+    maxPlayers: z
+      .number()
+      .int()
+      .min(2, "Must have at least 2 players")
+      .max(100, "Maximum 100 players total")
+      .default(9),
+    tableMaxPlayers: z
+      .number()
+      .int()
+      .min(2, "Must have at least 2 players per table")
+      .max(10, "Maximum 10 players per table")
+      .default(10),
+    balancingTolerance: z
+      .number()
+      .int()
+      .min(0, "Balancing tolerance cannot be negative")
+      .max(5, "Maximum balancing tolerance is 5")
+      .default(2),
+    startsAt: z.string().datetime().optional(),
+    blindStructure: z.array(BlindLevelSchema).optional(),
+    payoutPercentages: TournamentPayoutSchema.default([100]),
+  })
+  .refine((config) => config.bigBlind > config.smallBlind, {
+    message: "Big blind must be greater than small blind",
+    path: ["bigBlind"],
+  });
+
+export const RegisterTournamentRequestSchema = z.object({
+  seat: z.number().int().min(0, "Seat must be at least 0"),
+  idempotencyKey: z.string().min(1, "Idempotency key is required"),
+});
+
 // ============================================================================
 // API Request Schemas
 // ============================================================================
@@ -297,6 +344,8 @@ export type ValidatedAction = z.infer<typeof ActionSchema>;
 export type ValidatedBlindLevel = z.infer<typeof BlindLevelSchema>;
 export type ValidatedTableConfig = z.infer<typeof TableConfigSchema>;
 export type CreateTableRequest = z.infer<typeof CreateTableSchema>;
+export type CreateTournamentRequest = z.infer<typeof CreateTournamentSchema>;
+export type RegisterTournamentRequest = z.infer<typeof RegisterTournamentRequestSchema>;
 export type BuyInRequest = z.infer<typeof BuyInRequestSchema>;
 export type AddChipsRequest = z.infer<typeof AddChipsRequestSchema>;
 export type GameActionRequest = z.infer<typeof GameActionRequestSchema>;

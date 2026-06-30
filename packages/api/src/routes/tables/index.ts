@@ -8,6 +8,7 @@ import {
   AddChipsRequest,
   GameActionRequest,
 } from "@pokertools/types";
+import { reconcileTournament } from "../tournaments/index.js";
 
 export const tableRoutes: FastifyPluginAsync = async (fastify) => {
   // GET /tables - List active tables
@@ -244,6 +245,23 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
           request,
           metadata: { amount },
         });
+
+        // Tournament director: after a hand completes on a tournament table,
+        // trigger reconciliation (elimination tracking, rebalancing, final table merge).
+        if (state.winners && state.winners.length > 0) {
+          try {
+            const table = await fastify.prisma.table.findUnique({
+              where: { id },
+              select: { mode: true, tournamentId: true },
+            });
+            if (table?.mode === "TOURNAMENT" && table.tournamentId) {
+              await reconcileTournament(fastify, table.tournamentId, userId);
+            }
+          } catch {
+            // Reconciliation is best-effort; don't fail the action
+          }
+        }
+
         return { state };
       };
 

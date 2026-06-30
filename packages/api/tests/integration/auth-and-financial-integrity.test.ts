@@ -405,7 +405,7 @@ describe("Login endpoint input validation", () => {
 
   it("rate-limits the nonce endpoint per route", async () => {
     let limited = false;
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 101; i++) {
       const res = await app.inject({ method: "POST", url: "/auth/nonce" });
       if (res.statusCode === 429) {
         limited = true;

@@ -1,6 +1,6 @@
 {
   "name": "@pokertools/e2e",
-  "version": "1.0.12",
+  "version": "1.0.15",
   "description": "End-to-end Docker integration tests for PokerTools API",
   "author": "A.Aurelius",
   "license": "MIT",
@@ -11,16 +11,17 @@
     "test:docker": "NODE_ENV=test vitest run --config vitest.config.ts"
   },
   "dependencies": {
-    "@pokertools/sdk": "1.0.12",
+    "@pokertools/sdk": "1.0.15",
     "@prisma/adapter-better-sqlite3": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "@scure/bip32": "^2.2.0",
     "@scure/bip39": "^2.2.0",
     "better-sqlite3": "^12.11.1",
-    "bullmq": "^5.79.1",
+    "bullmq": "^5.79.2",
     "dotenv": "^17.4.2",
+    "fast-jwt": "^6.2.4",
     "ioredis": "^5.11.1",
-    "viem": "^2.53.1",
+    "viem": "^2.54.0",
     "vitest": "^4.1.9",
     "ws": "^8.21.0"
   }

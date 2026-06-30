@@ -1,2 +1,2 @@
 export type GameMode = "CASH" | "TOURNAMENT";
-export type TableStatus = "WAITING" | "ACTIVE" | "FINISHED";
+export type TableStatus = "WAITING" | "ACTIVE" | "PAUSED" | "CLOSED";

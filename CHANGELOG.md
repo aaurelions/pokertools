@@ -5,6 +5,76 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.15] - 2026-06-30
+
+### Fixed
+
+- Hardened multi-table tournament management by requiring the tournament creator or an admin for start, reconciliation, blind advancement, and settlement.
+- Fixed tournament settlement placement assignment so previously reconciled placements cannot be overwritten by later unplaced entries.
+- Replaced silent tournament table-state failures with fail-closed API errors to prevent reconciliation or settlement from acting on incomplete state.
+- Consolidated tournament request validation around shared `@pokertools/types` schemas and aligned table status DTOs with the API database model.
+
+### Tests
+
+- Added unit coverage for tournament table distribution and payout rounding.
+- Added API regression coverage for duplicate registration/idempotency, management authorization, and payout placement collisions.
+- Added SDK client coverage for tournament list, create, details, and registration helpers.
+
+### Changed
+
+- Bumped all workspace package versions and internal `@pokertools/*` dependency ranges to `1.0.15`.
+
+## [1.0.14] - 2026-06-30
+
+### Added
+
+- True multi-table tournament support: tournaments can now exceed 10 players by distributing them across multiple engine tables with balanced distribution (e.g., 30 players with `tableMaxPlayers=8` → four tables: 8/8/7/7).
+- Tournament director reconciliation: automatic detection of live stacks across all tournament tables, elimination tracking with placements, table rebalancing (max-min ≤ `balancingTolerance`), short-table breaking, and final table merge when remaining players fit on one table.
+- `POST /tournaments/:id/reconcile` endpoint for admin/test-forced director reconciliation.
+- `Tournament.tableMaxPlayers` (per-engine-table cap, ≤10) and `Tournament.balancingTolerance` fields.
+- `TournamentEntry.currentTableId` and `TournamentEntry.currentSeat` fields for tracking seat assignments across multiple tables.
+- Multi-table tournament details response includes `tables` array with per-table `{id, status, playerCount}`.
+- SDK React tournament hooks: `useTournaments()` and `useTournament(id)`.
+- Shared tournament response DTOs for start, reconcile, and settlement payloads.
+
+### Changed
+
+- Tournament registration now exclusively debits MAIN/prize-pool ledger; players are NOT seated into engine tables until the tournament starts.
+- Tournament start creates real engine tables with balanced player distribution and SITs all active entries with the tournament starting stack.
+- Tournament settlement inspects all tournament tables collectively, pays the configured payout percentages, records ledger metadata by placement, and closes every tournament table.
+- Tournament routes, tables routes, and game-manager all use `gameManager.getState()` (with Redis-to-DB fallback) instead of direct Redis reads for state access in multi-table contexts.
+- Tournament reconciliation now uses a tournament-level Redlock and moves players only after completed hands.
+- Test-only E2E helpers are registered from a dedicated test plugin only when `NODE_ENV=test`.
+- SDK tournament method return types now match API responses, including `startTournament`, `advanceTournamentBlinds`, and `settleTournament`.
+- `maxPlayers` schema limit raised to 100 (tournament total); engine tables still capped at 10.
+- `RegisterTournamentRequestSchema` seat validation relaxed (was capped at 9, now min 0).
+- Updated `viem` to 2.54.0.
+- Bumped all workspace package versions and internal `@pokertools/*` dependency ranges to `1.0.14`.
+
+### Tests
+
+- Added integration tests for multi-table tournament: initial distribution verification, rebalancing/table-breaking/final-table merge via direct engine state modification, and settlement across multiple tables with ledger balance conservation.
+- Replaced E2E bracket tournament test with a 30-player multi-table tournament covering: SIWE-authenticated users, API-funded balances, API lifecycle (create/register/start/reconcile/settle), 8/8/7/7 distribution assertion, director reconciliation, and payout verification.
+- Added API coverage for multi-place tournament payouts and SDK coverage for tournament REST helpers and React hooks.
+
+## [1.0.13] - 2026-06-30
+
+### Added
+
+- Added first-class tournament lobby APIs for creation, listing, registration, start, blind advancement, and final settlement.
+- Added persistent tournament and tournament-entry models with registration status, seats, prize-pool tracking, placements, and payouts.
+- Added SDK tournament helpers and shared tournament DTO/schema exports.
+
+### Changed
+
+- Bumped all workspace package versions and internal `@pokertools/*` dependency ranges to `1.0.13`.
+- Updated Fastify, `@fastify/rate-limit`, and BullMQ to current compatible releases.
+- Updated README, API, SDK, benchmark, and security version references to `1.0.13`.
+
+### Tests
+
+- Added API integration coverage for first-class tournament creation, registration, prize-pool accounting, and start flow.
+
 ## [1.0.12] - 2026-06-29
 
 ### Security
@@ -430,7 +500,10 @@ Given a version number MAJOR.MINOR.PATCH:
 - [NPM: @pokertools/evaluator](https://www.npmjs.com/package/@pokertools/evaluator)
 - [NPM: @pokertools/types](https://www.npmjs.com/package/@pokertools/types)
 
+[1.0.15]: https://github.com/aaurelions/pokertools/compare/v1.0.14...v1.0.15
 [1.0.11]: https://github.com/aaurelions/pokertools/compare/v1.0.10...v1.0.11
+[1.0.14]: https://github.com/aaurelions/pokertools/compare/v1.0.13...v1.0.14
+[1.0.13]: https://github.com/aaurelions/pokertools/compare/v1.0.12...v1.0.13
 [1.0.12]: https://github.com/aaurelions/pokertools/compare/v1.0.11...v1.0.12
 [1.0.10]: https://github.com/aaurelions/pokertools/compare/v1.0.9...v1.0.10
 [1.0.9]: https://github.com/aaurelions/pokertools/compare/v1.0.8...v1.0.9

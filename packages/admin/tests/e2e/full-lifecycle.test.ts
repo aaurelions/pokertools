@@ -28,7 +28,7 @@ import Redlock from "redlock";
 import { Queue } from "bullmq";
 import { parseAbi, parseUnits, type Address } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { ActionType } from "@pokertools/types";
+import type { Action } from "@pokertools/engine";
 import pino from "pino";
 
 const logger = pino({
@@ -370,38 +370,38 @@ describe("E2E: Deposit -> Game -> Sweep -> Withdraw", () => {
     await gameManager.processAction(
       tableId,
       {
-        type: ActionType.SIT,
+        type: "SIT",
         playerId: winner.id,
         playerName: winner.username,
         seat: 0,
         stack: buyInAmount,
-      },
+      } as Action,
       winner.id
     );
 
     await gameManager.processAction(
       tableId,
       {
-        type: ActionType.SIT,
+        type: "SIT",
         playerId: loser.id,
         playerName: loser.username,
         seat: 1,
         stack: buyInAmount,
-      },
+      } as Action,
       loser.id
     );
 
-    await gameManager.processAction(tableId, { type: ActionType.DEAL }, "system");
+    await gameManager.processAction(tableId, { type: "DEAL" } as Action, "system");
 
     await gameManager.processAction(
       tableId,
-      { type: ActionType.RAISE, playerId: winner.id, amount: buyInAmount },
+      { type: "RAISE", playerId: winner.id, amount: buyInAmount } as Action,
       winner.id
     );
 
     const state = await gameManager.processAction(
       tableId,
-      { type: ActionType.CALL, playerId: loser.id },
+      { type: "CALL", playerId: loser.id } as Action,
       loser.id
     );
 
@@ -453,13 +453,13 @@ describe("E2E: Deposit -> Game -> Sweep -> Withdraw", () => {
 
     await gameManager.processAction(
       tableId,
-      { type: ActionType.STAND, playerId: winner.id },
+      { type: "STAND", playerId: winner.id } as Action,
       winner.id
     );
 
     await gameManager.processAction(
       tableId,
-      { type: ActionType.STAND, playerId: loser.id },
+      { type: "STAND", playerId: loser.id } as Action,
       loser.id
     );
 

@@ -11,6 +11,7 @@ import {
 } from "@pokertools/engine";
 import crypto from "node:crypto";
 import { NotFoundError } from "../utils/errors.js";
+import { defaultBlindStructure } from "../utils/tournaments.js";
 
 interface Snapshot extends EngineSnapshot {
   _version?: number;
@@ -49,7 +50,7 @@ export class GameManager {
     tableId: string,
     action: Action,
     userId: string,
-    options: { skipLock?: boolean } = {}
+    options: { skipLock?: boolean; skipIdentity?: boolean } = {}
   ): Promise<PublicState> {
     const lockTTL = process.env.NODE_ENV === "test" ? 15000 : 10000;
     const lock = options.skipLock
@@ -66,7 +67,12 @@ export class GameManager {
       const engine = PokerEngine.restore(previousSnapshot);
 
       // Identity validation (API responsibility)
-      if ("playerId" in action && action.playerId !== userId && action.type !== "TIMEOUT") {
+      if (
+        !options.skipIdentity &&
+        "playerId" in action &&
+        action.playerId !== userId &&
+        action.type !== "TIMEOUT"
+      ) {
         throw new Error("Identity mismatch: Cannot act for another player");
       }
 
@@ -184,6 +190,8 @@ export class GameManager {
     maxPlayers: number;
     minBuyIn?: number;
     maxBuyIn?: number;
+    blindStructure?: Array<{ smallBlind: number; bigBlind: number; ante: number }>;
+    startingStack?: number;
   }): Promise<string> {
     const table = await this.prisma.table.create({
       data: {
@@ -207,20 +215,8 @@ export class GameManager {
 
     // Add default blind structure for tournaments
     if (config.mode === "TOURNAMENT") {
-      engineConfig.blindStructure = [
-        { smallBlind: config.smallBlind, bigBlind: config.bigBlind, ante: 0 },
-        { smallBlind: config.smallBlind * 2, bigBlind: config.bigBlind * 2, ante: 0 },
-        {
-          smallBlind: config.smallBlind * 3,
-          bigBlind: config.bigBlind * 3,
-          ante: config.smallBlind,
-        },
-        {
-          smallBlind: config.smallBlind * 4,
-          bigBlind: config.bigBlind * 4,
-          ante: config.smallBlind * 2,
-        },
-      ];
+      engineConfig.blindStructure =
+        config.blindStructure ?? defaultBlindStructure(config.smallBlind, config.bigBlind);
     }
 
     const engine = new PokerEngine(engineConfig);

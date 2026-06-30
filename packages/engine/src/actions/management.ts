@@ -16,6 +16,7 @@ import { handleFold } from "./betting";
  * Handle SIT action - add player to table
  */
 export function handleSit(state: GameState, action: SitAction): GameState {
+  const currentBaseline = (state as GameState & { initialChips?: number }).initialChips;
   const newPlayer: Player = {
     id: action.playerId,
     name: action.playerName,
@@ -43,6 +44,7 @@ export function handleSit(state: GameState, action: SitAction): GameState {
     ...state,
     players: newPlayers,
     timeBanks: newTimeBanks,
+    initialChips: typeof currentBaseline === "number" ? currentBaseline + action.stack : undefined,
     timestamp: action.timestamp!,
   };
 }
