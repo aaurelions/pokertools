@@ -186,6 +186,7 @@ CREATE TABLE IF NOT EXISTS "Tournament" (
     "payoutPercentages" JSONB NOT NULL,
     "startsAt" DATETIME,
     "startedAt" DATETIME,
+    "lastBlindAdvancedAt" DATETIME,
     "finishedAt" DATETIME,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL,

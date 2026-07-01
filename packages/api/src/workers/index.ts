@@ -8,15 +8,20 @@
 import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 import pino from "pino";
+import { config } from "../config.js";
 import settleHandWorker from "./settle-hand.js";
 import archiveHandWorker from "./archive-hand.js";
 import nextHandWorker from "./next-hand.js";
 import persistSnapshotWorker from "./persist-snapshot.js";
 import timeoutWorker from "./timeout.js";
 import createDepositMonitorWorker from "./deposit-monitor.js";
+import createTournamentBlindsWorker from "./tournament-blinds.js";
 
 // Initialize deposit monitor worker (standalone mode)
 const depositMonitorWorker = await createDepositMonitorWorker();
+
+// Initialize tournament blinds worker (standalone mode)
+const tournamentBlindsWorker = await createTournamentBlindsWorker();
 
 const logger = pino({ name: "workers" });
 logger.info(
@@ -28,6 +33,7 @@ logger.info(
       "persist-snapshot",
       "player-timeout",
       "deposit-monitor",
+      "tournament-blinds",
     ],
   },
   "BullMQ Workers initialized"
@@ -41,6 +47,7 @@ export const workers = [
   persistSnapshotWorker,
   timeoutWorker,
   depositMonitorWorker,
+  tournamentBlindsWorker,
 ];
 
 // ============================================================================
@@ -49,12 +56,12 @@ export const workers = [
 
 const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
 const redis = new Redis(redisUrl, { maxRetriesPerRequest: null });
-const queue = new Queue("deposit-monitor", { connection: redis as any });
 
-// Schedule deposit monitor as a repeatable cron-style job.
 (async () => {
   try {
-    await queue.add(
+    // Schedule deposit monitor as a repeatable job (every 15 seconds)
+    const depositQueue = new Queue("deposit-monitor", { connection: redis as any });
+    await depositQueue.add(
       "deposit-monitor",
       {},
       {
@@ -63,8 +70,20 @@ const queue = new Queue("deposit-monitor", { connection: redis as any });
       }
     );
     logger.info("Deposit monitor scheduled: every 15 seconds");
+
+    // Schedule tournament blinds as a repeatable job
+    const blindsQueue = new Queue("tournament-blinds", { connection: redis as any });
+    await blindsQueue.add(
+      "tournament-blinds",
+      {},
+      {
+        repeat: { every: config.TOURNAMENT_BLIND_SCAN_INTERVAL_MS },
+        jobId: "tournament-blinds-singleton",
+      }
+    );
+    logger.info(`Tournament blinds scheduler: every ${config.TOURNAMENT_BLIND_SCAN_INTERVAL_MS}ms`);
   } catch (error) {
-    logger.error({ error }, "Failed to schedule deposit monitor");
+    logger.error({ error }, "Failed to schedule repeatable jobs");
   }
 })();
 

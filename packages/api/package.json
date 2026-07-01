@@ -19,6 +19,7 @@
     "db:generate": "prisma generate",
     "db:generate:prepare": "node scripts/generate-prisma-for-prepare.js",
     "db:migrate": "prisma migrate dev",
+    "db:migrate:postgres": "node scripts/migrate-postgres.mjs",
     "db:seed": "tsx prisma/seed.ts",
     "db:ensure:test": "NODE_ENV=test bash scripts/ensure-db.sh",
     "pretest": "npm run db:ensure:test",

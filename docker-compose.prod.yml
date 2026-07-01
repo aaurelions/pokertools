@@ -1,0 +1,319 @@
+# =============================================================================
+# docker-compose.prod.yml — PokerTools production deployment profile
+#
+# Architecture:
+#   ┌─────────┐    ┌──────┐    ┌──────────┐
+#   │ Caddy   │───►│ API  │───►│ Postgres │
+#   │ :80/443 │    │ :3000│    │ :5432    │
+#   └─────────┘    └──────┘    └──────────┘
+#                       │            │
+#                  ┌────┴────┐  ┌────┴──────┐
+#                  │ Worker  │  │ Backup     │
+#                  │ (BullMQ)│  │ (pg_dump)  │
+#                  └────┬────┘  └────────────┘
+#                       │
+#                  ┌────┴────┐
+#                  │  Redis  │
+#                  │  :6379  │
+#                  └─────────┘
+#
+# Only Caddy is publicly accessible (ports 80/443). All other services
+# communicate over an internal Docker bridge network.
+#
+# Usage:
+#   cp .env.production.example .env.production   # then fill in secrets
+#   docker compose -f docker-compose.prod.yml up -d --build
+#   docker compose -f docker-compose.prod.yml down -v
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — primary relational database
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:?err: POSTGRES_USER must be set}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?err: POSTGRES_PASSWORD must be set}"
+      POSTGRES_DB: "${POSTGRES_DB:?err: POSTGRES_DB must be set}"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks:
+      - internal
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Redis — caching, pub/sub, BullMQ job queues (AOF persistence)
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+        --appendonly yes
+        --appendfsync everysec
+        --save 900 1
+        --save 300 10
+        --save 60 10000
+        --maxmemory 512mb
+        --maxmemory-policy noeviction
+    volumes:
+      - redis_data:/data
+    networks:
+      - internal
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 768M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # PokerTools API — REST + WebSocket server (internal network only)
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/aaurelions/pokertools:latest
+    pull_policy: build
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOST: "0.0.0.0"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: "${DATABASE_URL:?err: DATABASE_URL must be set}"
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      JWT_SECRET: "${JWT_SECRET:?err: JWT_SECRET must be set}"
+      COOKIE_SECRET: "${COOKIE_SECRET:?err: COOKIE_SECRET must be set}"
+      WALLET_ENCRYPTION_SECRET: "${WALLET_ENCRYPTION_SECRET:?err: WALLET_ENCRYPTION_SECRET must be set}"
+      WALLET_XPRIV_ENCRYPTION_SECRET: ${WALLET_XPRIV_ENCRYPTION_SECRET:-}
+      CORS_ORIGIN: ${CORS_ORIGIN:-}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      ALLOWED_SIWE_CHAIN_IDS: ${ALLOWED_SIWE_CHAIN_IDS:-1,31337}
+      TOURNAMENT_BLIND_INTERVAL_MS: ${TOURNAMENT_BLIND_INTERVAL_MS:-900000}
+      TOURNAMENT_BLIND_SCAN_INTERVAL_MS: ${TOURNAMENT_BLIND_SCAN_INTERVAL_MS:-15000}
+    networks:
+      - internal
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M,mode=1777
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Worker — BullMQ job processor (separate process, same image)
+  # ---------------------------------------------------------------------------
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/aaurelions/pokertools:latest
+    pull_policy: build
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: "${DATABASE_URL:?err: DATABASE_URL must be set}"
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      JWT_SECRET: "${JWT_SECRET:?err: JWT_SECRET must be set}"
+      COOKIE_SECRET: "${COOKIE_SECRET:?err: COOKIE_SECRET must be set}"
+      WALLET_ENCRYPTION_SECRET: "${WALLET_ENCRYPTION_SECRET:?err: WALLET_ENCRYPTION_SECRET must be set}"
+      WALLET_XPRIV_ENCRYPTION_SECRET: ${WALLET_XPRIV_ENCRYPTION_SECRET:-}
+      ALLOWED_SIWE_CHAIN_IDS: ${ALLOWED_SIWE_CHAIN_IDS:-1,31337}
+      TOURNAMENT_BLIND_INTERVAL_MS: ${TOURNAMENT_BLIND_INTERVAL_MS:-900000}
+      TOURNAMENT_BLIND_SCAN_INTERVAL_MS: ${TOURNAMENT_BLIND_SCAN_INTERVAL_MS:-15000}
+    networks:
+      - internal
+    entrypoint: ["/bin/sh", "-lc"]
+    command: ["node dist/workers.js"]
+    working_dir: /app/packages/api
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M,mode=1777
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Caddy — reverse proxy with automatic TLS and HSTS (only public service)
+  # ---------------------------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      CADDY_DOMAIN: "${CADDY_DOMAIN:?err: CADDY_DOMAIN must be set}"
+      CADDY_ACME_EMAIL: ${CADDY_ACME_EMAIL:-}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - internal
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Backup — scheduled PostgreSQL dumps with retention management
+  # ---------------------------------------------------------------------------
+  backup:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: "${POSTGRES_USER:?err: POSTGRES_USER must be set}"
+      PGPASSWORD: "${POSTGRES_PASSWORD:?err: POSTGRES_PASSWORD must be set}"
+      PGDATABASE: "${POSTGRES_DB:?err: POSTGRES_DB must be set}"
+      BACKUP_INTERVAL: ${BACKUP_INTERVAL:-86400}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
+    volumes:
+      - ./deploy/postgres-backup.sh:/backup.sh:ro
+      - ./deploy/postgres-restore.sh:/deploy/postgres-restore.sh:ro
+      - ./deploy/postgres-restore-test.sh:/deploy/postgres-restore-test.sh:ro
+      - pg_backups:/backups
+    networks:
+      - internal
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        trap 'echo "Backup service shutting down."; exit 0' SIGTERM SIGINT
+        echo "Backup service started — interval=$${BACKUP_INTERVAL}s retention=$${BACKUP_RETENTION_DAYS}d"
+        while true; do
+          echo "=== Backup run at $$(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+          sh /backup.sh && echo "Backup completed successfully." || echo "Backup FAILED — check logs."
+          echo "Next backup in $${BACKUP_INTERVAL} seconds."
+          sleep "$${BACKUP_INTERVAL}" &
+          wait $$!
+        done
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# =============================================================================
+# Named volumes — survive container removal / recreation
+# =============================================================================
+volumes:
+  pg_data:
+    driver: local
+  redis_data:
+    driver: local
+  pg_backups:
+    driver: local
+  caddy_data:
+    driver: local
+  caddy_config:
+    driver: local
+
+# =============================================================================
+# Internal bridge network — no service is reachable from outside except Caddy
+# =============================================================================
+networks:
+  internal:
+    driver: bridge

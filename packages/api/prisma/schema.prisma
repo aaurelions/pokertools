@@ -266,11 +266,12 @@ model Tournament {
 
   entries TournamentEntry[]
 
-  startsAt   DateTime?
-  startedAt  DateTime?
-  finishedAt DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  startsAt           DateTime?
+  startedAt          DateTime?
+  lastBlindAdvancedAt DateTime?
+  finishedAt         DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   @@index([status, createdAt])
   @@index([creatorId])

@@ -3,8 +3,10 @@
 # docker-entrypoint.sh — @pokertools/api container startup
 #
 # 1. Validates that production secrets are NOT set to dev defaults.
-# 2. Synchronises the Prisma schema for the configured datasource.
-# 3. Starts the compiled API server.
+# 2. In production, rejects file: SQLite DATABASE_URL — PostgreSQL is required.
+# 3. For PostgreSQL DATABASE_URL, runs idempotent production migrations.
+# 4. For SQLite (non-production), synchronises the schema via sync-db.mjs.
+# 5. Starts the compiled API server.
 #
 # Environment variables expected:
 #   DATABASE_URL   – Prisma datasource URL (e.g. file:.runtime/app.db)
@@ -56,6 +58,28 @@ if [ "${NODE_ENV:-production}" = "production" ]; then
   check_secret "JWT_SECRET"               "${JWT_SECRET:-}"
   check_secret "COOKIE_SECRET"            "${COOKIE_SECRET:-}"
   check_secret "WALLET_ENCRYPTION_SECRET" "${WALLET_ENCRYPTION_SECRET:-}"
+
+  # ---------------------------------------------------------------------------
+  # Production database gate — reject file: SQLite URLs.
+  # Production MUST use PostgreSQL.  The Prisma schema provider stays
+  # "sqlite" so local tests are unaffected, but at runtime a PostgreSQL
+  # DATABASE_URL coupled with the @prisma/adapter-pg driver is required.
+  # ---------------------------------------------------------------------------
+  DB_URL="${DATABASE_URL:-}"
+  if [ -z "$DB_URL" ] || [[ "$DB_URL" == file:* ]]; then
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════════╗"
+    echo "║  PRODUCTION DATABASE GATE — REFUSING TO START                   ║"
+    echo "╠══════════════════════════════════════════════════════════════════╣"
+    echo "║  Production requires a PostgreSQL DATABASE_URL.                 ║"
+    echo "║  SQLite (file:…) is only supported for local development/tests. ║"
+    echo "║                                                                  ║"
+    echo "║  Set DATABASE_URL to a PostgreSQL connection string:             ║"
+    echo "║    postgresql://user:password@host:5432/poker                    ║"
+    echo "╚══════════════════════════════════════════════════════════════════╝"
+    echo ""
+    exit 1
+  fi
 fi
 
 # ----- Resolve DATABASE_URL default for SQLite local dev --------------------
@@ -64,22 +88,27 @@ if [ -z "${DATABASE_URL:-}" ]; then
   echo "    DATABASE_URL not set — defaulting to ${DATABASE_URL}"
 fi
 
-# Ensure the runtime directory exists (SQLite file parent)
-RUNTIME_DIR="$(dirname "$(echo "$DATABASE_URL" | sed 's|^file:||')")"
-mkdir -p "/app/packages/api/${RUNTIME_DIR#../}" 2>/dev/null || true
-mkdir -p "/app/packages/api/.runtime" 2>/dev/null || true
-
-# ----- Synchronise database schema ---------------------------------------
-echo "--- Syncing database schema ---"
+# ---------------------------------------------------------------------------
+# Determine database kind and run appropriate initialisation
+# ---------------------------------------------------------------------------
 cd /app/packages/api
 
-# Runtime sync via the JS helper (better-sqlite3 + schema.sql).
-# For SQLite it bootstraps the database if empty; for other datasources
-# (e.g. PostgreSQL) it logs a message and exits cleanly — external
-# migration tooling should be used in those environments.
-node scripts/sync-db.mjs
+if [[ "$DATABASE_URL" == postgresql://* || "$DATABASE_URL" == postgres://* ]]; then
+  # ----- PostgreSQL production path -----------------------------------------
+  echo "--- Running PostgreSQL production migrations ---"
+  node scripts/migrate-postgres.mjs
+  echo "--- PostgreSQL migrations complete ---"
+else
+  # ----- SQLite non-production path -----------------------------------------
+  # Ensure the runtime directory exists (SQLite file parent)
+  RUNTIME_DIR="$(dirname "$(echo "$DATABASE_URL" | sed 's|^file:||')")"
+  mkdir -p "/app/packages/api/${RUNTIME_DIR#../}" 2>/dev/null || true
+  mkdir -p "/app/packages/api/.runtime" 2>/dev/null || true
 
-echo "--- Schema sync complete ---"
+  echo "--- Synchronising SQLite schema ---"
+  node scripts/sync-db.mjs
+  echo "--- SQLite schema sync complete ---"
+fi
 
 # ----- Start the API server -------------------------------------------------
 echo "--- Starting API server on 0.0.0.0:${PORT:-3000} ---"

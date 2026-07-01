@@ -478,8 +478,11 @@ async function canMovePlayer(fastify: FastifyInstance, tableId: string): Promise
   try {
     const state = await fastify.gameManager.getState(tableId);
     if (!state) return false;
-    // Tournament seats may be moved only after a completed hand, never before the
-    // first deal or while action is pending.
+    // Tournament seats may normally be moved only after a completed hand. A table
+    // with one or fewer live stacks is also safe to break because no further
+    // betting action can alter relative stacks on that table.
+    const livePlayers = state.players.filter((player) => player && player.stack > 0).length;
+    if (livePlayers <= 1) return true;
     const winners = state.winners;
     const actionTo = state.actionTo;
     return Boolean(winners && winners.length > 0 && actionTo == null);
@@ -621,21 +624,26 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
     if (!tournament) return reply.code(404).send({ error: "TOURNAMENT_NOT_FOUND" });
 
     // Compute player counts for each table
-    const tableInfos: TournamentTableInfo[] = tournament.tables.map((table) => {
-      let playerCount = 0;
-      if (table.state) {
+    const tableInfos: TournamentTableInfo[] = await Promise.all(
+      tournament.tables.map(async (table) => {
+        let playerCount = 0;
         try {
-          const state = typeof table.state === "string" ? JSON.parse(table.state) : table.state;
-          const players = (state as { players: unknown[] }).players ?? [];
-          playerCount = players.filter(
-            (p: unknown) => p && typeof p === "object" && "stack" in p && Number(p.stack) > 0
-          ).length;
+          const state = await fastify.gameManager.getState(table.id);
+          playerCount = state.players.filter(Boolean).length;
         } catch {
-          // ignore parse errors
+          if (table.state) {
+            try {
+              const state = typeof table.state === "string" ? JSON.parse(table.state) : table.state;
+              const players = (state as { players: unknown[] }).players ?? [];
+              playerCount = players.filter(Boolean).length;
+            } catch {
+              // ignore parse errors
+            }
+          }
         }
-      }
-      return { id: table.id, status: table.status, playerCount };
-    });
+        return { id: table.id, status: table.status, playerCount };
+      })
+    );
 
     const details: TournamentDetails = {
       ...toTournamentListItem(tournament),
@@ -818,9 +826,10 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
 
       try {
         // Mark tournament as RUNNING
+        const now = new Date();
         await fastify.prisma.tournament.update({
           where: { id: tournament.id },
-          data: { status: "RUNNING", startedAt: new Date() },
+          data: { status: "RUNNING", startedAt: now, lastBlindAdvancedAt: now },
         });
         await fastify.prisma.tournamentEntry.updateMany({
           where: { tournamentId: tournament.id, status: "REGISTERED" },
@@ -969,21 +978,27 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
         },
       });
 
-      const tableInfos: TournamentTableInfo[] = (updated?.tables ?? []).map((table) => {
-        let playerCount = 0;
-        if (table.state) {
+      const tableInfos: TournamentTableInfo[] = await Promise.all(
+        (updated?.tables ?? []).map(async (table) => {
+          let playerCount = 0;
           try {
-            const state = typeof table.state === "string" ? JSON.parse(table.state) : table.state;
-            const players = (state as { players: unknown[] }).players ?? [];
-            playerCount = players.filter(
-              (p: unknown) => p && typeof p === "object" && "stack" in p && Number(p.stack) > 0
-            ).length;
+            const state = await fastify.gameManager.getState(table.id);
+            playerCount = state.players.filter(Boolean).length;
           } catch {
-            // ignore
+            if (table.state) {
+              try {
+                const state =
+                  typeof table.state === "string" ? JSON.parse(table.state) : table.state;
+                const players = (state as { players: unknown[] }).players ?? [];
+                playerCount = players.filter(Boolean).length;
+              } catch {
+                // ignore
+              }
+            }
           }
-        }
-        return { id: table.id, status: table.status, playerCount };
-      });
+          return { id: table.id, status: table.status, playerCount };
+        })
+      );
 
       return {
         success: true,
@@ -1030,6 +1045,13 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
           results[table.id] = { error: "Failed to advance blinds" };
         }
       }
+
+      // Update lastBlindAdvancedAt so the scheduler doesn't immediately re-advance
+      await fastify.prisma.tournament.update({
+        where: { id: tournament.id },
+        data: { lastBlindAdvancedAt: new Date() },
+      });
+
       return { results };
     }
   );

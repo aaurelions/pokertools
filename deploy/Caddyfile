@@ -1,0 +1,65 @@
+# =============================================================================
+# Caddyfile — PokerTools production reverse proxy
+#
+# Features:
+#   - Automatic TLS via Let's Encrypt (ACME HTTP challenge on port 80)
+#   - HSTS (HTTP Strict Transport Security) with preload
+#   - Security headers (CSP, X-Frame-Options, X-Content-Type-Options, etc.)
+#   - WebSocket passthrough for real-time game connections
+#   - Gzip/Zstd compression
+#   - Client IP / scheme forwarding to the upstream API
+# =============================================================================
+
+{$CADDY_DOMAIN} {
+    # ---- Compression ----
+    encode zstd gzip
+
+    # ---- Security headers ----
+    header {
+        # Force HTTPS for 2 years; include subdomains; allow preload list opt-in
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+
+        # Restrict resource loading (tighten as needed for your frontend)
+        Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+
+        # Prevent clickjacking
+        X-Frame-Options "DENY"
+
+        # Prevent MIME-type sniffing
+        X-Content-Type-Options "nosniff"
+
+        # Send full referrer same-origin; only origin on cross-origin downgrades
+        Referrer-Policy "strict-origin-when-cross-origin"
+
+        # Block sensitive browser features
+        Permissions-Policy "camera=(), microphone=(), geolocation=(), fullscreen=(self), payment=()"
+
+        # Disable the defunct IE/Chrome XSS Auditor (modern browsers ignore this)
+        X-XSS-Protection "0"
+
+        # Remove headers that reveal server technology
+        -Server
+        -X-Powered-By
+    }
+
+    # ---- Reverse proxy to the API container (internal Docker network) ----
+    reverse_proxy api:3000 {
+        # Forward real client IP and scheme
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+        header_up Host {host}
+
+        # Health-check the upstream so Caddy can fail over / report status
+        health_uri /health
+        health_interval 15s
+        health_timeout 3s
+    }
+
+    # ---- Logging (JSON to stdout, collected by Docker) ----
+    log {
+        output stdout
+        format json
+        level INFO
+    }
+}

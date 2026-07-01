@@ -8,6 +8,7 @@ const jobQueueNames = [
   "next-hand",
   "persist-snapshot",
   "player-timeout",
+  "tournament-blinds",
 ] as const;
 
 export type JobQueueName = (typeof jobQueueNames)[number];

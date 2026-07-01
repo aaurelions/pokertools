@@ -66,6 +66,14 @@ export const config = cleanEnv(process.env, {
     choices: ["true", "false"],
     desc: "Explicit opt-in for test-only balance/state mutation routes. Must never be enabled outside isolated tests.",
   }),
+  TOURNAMENT_BLIND_INTERVAL_MS: num({
+    default: 900000,
+    desc: "Interval in milliseconds between automatic blind level advances (default 15 min)",
+  }),
+  TOURNAMENT_BLIND_SCAN_INTERVAL_MS: num({
+    default: 15000,
+    desc: "Interval in milliseconds between tournament-blind worker scans (default 15 sec)",
+  }),
 });
 
 export function allowedSiweChainIds(): Set<number> {

@@ -1,19 +1,17 @@
 # =============================================================================
-# docker-compose.yml — PokerTools local development / single-host deployment
+# docker-compose.yml — PokerTools local development / SQLite smoke deployment
 #
 # Usage:
-#   docker compose up --build       # build + start
+#   docker compose up --build       # build + start local SQLite stack
 #   docker compose up -d            # start in background
 #   docker compose down -v          # tear down (remove volumes)
 #
 # The API image is built from the monorepo root Dockerfile and tagged as
 # ghcr.io/aaurelions/pokertools.
 #
-# SECURITY: In production deployment, NEVER rely on the dev-default secrets.
-# The entrypoint will refuse to start in production if any secret matches a
-# known dev/test value.  Set JWT_SECRET, COOKIE_SECRET, and
-# WALLET_ENCRYPTION_SECRET via an .env file (or a secrets manager).
-# Generate with: openssl rand -base64 32
+# SECURITY: This file intentionally uses SQLite and is not the production
+# deployment profile. Use docker-compose.prod.yml for PostgreSQL, Caddy TLS,
+# Redis persistence, workers, and automated backups.
 # =============================================================================
 
 services:
@@ -21,6 +19,7 @@ services:
   redis:
     image: redis:8-alpine
     restart: unless-stopped
+    command: redis-server --appendonly yes --appendfsync everysec --save 60 1
     ports:
       - "6379:6379"
     volumes:
@@ -57,7 +56,7 @@ services:
         condition: service_healthy
     environment:
       # Application
-      NODE_ENV: ${NODE_ENV:-production}
+      NODE_ENV: ${NODE_ENV:-development}
       PORT: "3000"
       HOST: "0.0.0.0"
       LOG_LEVEL: ${LOG_LEVEL:-info}

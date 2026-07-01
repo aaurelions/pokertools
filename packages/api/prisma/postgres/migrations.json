@@ -1,0 +1,9 @@
+{
+  "migrations": [
+    {
+      "name": "001_initial_schema",
+      "file": "001_initial_schema.sql",
+      "description": "Initial PokerTools PostgreSQL schema — mirrors the SQLite schema including User, Account, LedgerEntry, PaymentTransaction, Table, Tournament, TournamentEntry, HandHistory, Session, PlayerNote, AuditLog, IdempotencyRecord, Blockchain, Token, AdminWallet, UserWallet, DepositSession, and Tournament.lastBlindAdvancedAt."
+    }
+  ]
+}

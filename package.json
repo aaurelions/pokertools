@@ -47,7 +47,13 @@
     "db:studio": "npm run db:studio -w @pokertools/api",
     "db:reset": "npm run db:reset -w @pokertools/api",
     "ci": "npm run clean && npm run setup && npm run test",
-    "e2e:docker": "npm run test:docker -w @pokertools/e2e"
+    "e2e:docker": "npm run test:docker -w @pokertools/e2e",
+    "deploy:prod": "docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build",
+    "deploy:prod:down": "docker compose --env-file .env.production -f docker-compose.prod.yml down",
+    "deploy:prod:logs": "docker compose --env-file .env.production -f docker-compose.prod.yml logs -f",
+    "deploy:prod:ps": "docker compose --env-file .env.production -f docker-compose.prod.yml ps",
+    "db:backup": "docker compose --env-file .env.production -f docker-compose.prod.yml exec backup sh /backup.sh",
+    "db:restore:test": "docker compose --env-file .env.production -f docker-compose.prod.yml exec backup sh -c \"BACKUP_DIR=/backups /deploy/postgres-restore-test.sh\""
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.5",
