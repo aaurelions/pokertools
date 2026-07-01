@@ -1,5 +1,15 @@
 import { spawn, ChildProcess } from "child_process";
-import { createPublicClient, createWalletClient, http, defineChain } from "viem";
+import {
+  createPublicClient,
+  createWalletClient,
+  http,
+  defineChain,
+  type PublicClient,
+  type WalletClient,
+  type Transport,
+  type Chain,
+  type Account,
+} from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
 // Standard Anvil Private Key #0
@@ -78,12 +88,12 @@ export async function deployContracts() {
   return { usdcAddress, sweeperAddress };
 }
 
-export const publicClient = createPublicClient({
+export const publicClient: PublicClient<Transport, Chain> = createPublicClient({
   chain: localChain,
   transport: http(ANVIL_RPC),
 });
 
-export const walletClient = createWalletClient({
+export const walletClient: WalletClient<Transport, Chain, Account> = createWalletClient({
   chain: localChain,
   transport: http(ANVIL_RPC),
   account: privateKeyToAccount(DEPLOYER_PK),
