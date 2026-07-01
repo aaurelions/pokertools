@@ -4,6 +4,11 @@
       "name": "001_initial_schema",
       "file": "001_initial_schema.sql",
       "description": "Initial PokerTools PostgreSQL schema — mirrors the SQLite schema including User, Account, LedgerEntry, PaymentTransaction, Table, Tournament, TournamentEntry, HandHistory, Session, PlayerNote, AuditLog, IdempotencyRecord, Blockchain, Token, AdminWallet, UserWallet, DepositSession, and Tournament.lastBlindAdvancedAt."
+    },
+    {
+      "name": "002_house_system_accounts",
+      "file": "002_house_system_accounts.sql",
+      "description": "Records HOUSE_RESERVE and TOURNAMENT_ESCROW AccountType values for full double-entry accounting. Account.type is a TEXT column so no DDL change is required; house system accounts are created by the application seed."
     }
   ]
 }

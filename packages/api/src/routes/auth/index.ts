@@ -40,7 +40,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (_request, _reply) => {
       const nonce = generateSiweNonce();
-      await fastify.redis.set(`nonce:${nonce}`, "1", "EX", 300);
+      await fastify.redis.set(`nonce:${nonce}`, "1", "EX", config.NONCE_TTL_SECONDS);
       return { nonce };
     }
   );
@@ -150,7 +150,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
 
       reply.setCookie("token", token, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
+        secure: config.NODE_ENV === "production",
         sameSite: "strict",
         maxAge: config.SESSION_TTL_SECONDS,
         path: "/",

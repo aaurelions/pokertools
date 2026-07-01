@@ -8,10 +8,10 @@ import { createPrismaClient } from "../utils/prisma-client.js";
 const prisma = createPrismaClient();
 const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
 const redlock = new Redlock([redis as any], {
-  driftFactor: 0.01,
-  retryCount: 10,
-  retryDelay: 200,
-  retryJitter: 100,
+  driftFactor: config.REDLOCK_DRIFT_FACTOR,
+  retryCount: config.REDLOCK_RETRY_COUNT,
+  retryDelay: config.REDLOCK_RETRY_DELAY_MS,
+  retryJitter: config.REDLOCK_RETRY_DELAY_MS / 2,
 });
 
 interface Snapshot extends EngineSnapshot {
@@ -33,7 +33,7 @@ const worker = new Worker(
     // If manual DEAL already happened, we can skip
     let lock;
     try {
-      lock = await redlock.acquire([`lock:table:${tableId}`], 3000);
+      lock = await redlock.acquire([`lock:table:${tableId}`], config.NEXT_HAND_LOCK_TTL_MS);
     } catch (err) {
       console.log(`⏭️  Could not acquire lock for table ${tableId}, likely manually dealt`);
       return;

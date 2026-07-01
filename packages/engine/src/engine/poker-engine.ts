@@ -17,6 +17,8 @@ import { exportHandHistory, getHandHistory } from "../history/exporter";
 import { HandHistory, ExportOptions } from "@pokertools/types";
 import { validateChipAmount, validateTimestamp } from "../utils/validation";
 
+const DEFAULT_MAX_PLAYERS = 9;
+
 /**
  * Event listener callback type
  */
@@ -291,7 +293,7 @@ export class PokerEngine {
       });
     }
 
-    const maxPlayers = config.maxPlayers ?? 9;
+    const maxPlayers = config.maxPlayers ?? DEFAULT_MAX_PLAYERS;
 
     if (maxPlayers < 2 || maxPlayers > 10) {
       throw new ConfigError("Max players must be between 2 and 10", {
@@ -304,7 +306,7 @@ export class PokerEngine {
    * Create initial game state
    */
   private createInitialState(config: TableConfig): GameState {
-    const maxPlayers = config.maxPlayers ?? 9;
+    const maxPlayers = config.maxPlayers ?? DEFAULT_MAX_PLAYERS;
     const players = Array(maxPlayers).fill(null);
 
     // For tournaments, use blindStructure[0] for initial blinds/ante

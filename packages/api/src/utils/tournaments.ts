@@ -1,3 +1,5 @@
+import { config } from "../config.js";
+
 export interface BlindLevel {
   smallBlind: number;
   bigBlind: number;
@@ -5,17 +7,32 @@ export interface BlindLevel {
 }
 
 /** Maximum number of tables allowed in a multi-table tournament. */
-export const MAX_TOURNAMENT_TABLES = 10;
+export const MAX_TOURNAMENT_TABLES = config.MAX_TOURNAMENT_TABLES;
 
 /** Maximum reconciliation iterations before aborting. */
 export const MAX_RECONCILE_ITERATIONS = 5;
 
-export const defaultBlindStructure = (smallBlind: number, bigBlind: number): BlindLevel[] => [
-  { smallBlind, bigBlind, ante: 0 },
-  { smallBlind: smallBlind * 2, bigBlind: bigBlind * 2, ante: 0 },
-  { smallBlind: smallBlind * 3, bigBlind: bigBlind * 3, ante: smallBlind },
-  { smallBlind: smallBlind * 4, bigBlind: bigBlind * 4, ante: smallBlind * 2 },
-];
+/**
+ * Generates a 20-level geometric blind structure starting from the given
+ * small blind / big blind pair.  Blinds grow by ~1.5× per level (doubling
+ * roughly every two levels).  Antes kick in at level 3 as ~10 % of the big
+ * blind and scale proportionally with subsequent levels.
+ */
+export const defaultBlindStructure = (smallBlind: number, bigBlind: number): BlindLevel[] => {
+  const levels: BlindLevel[] = [];
+  let sb = smallBlind;
+  let bb = bigBlind;
+  let ante = 0;
+  for (let i = 0; i < 20; i++) {
+    levels.push({ smallBlind: sb, bigBlind: bb, ante });
+    sb = Math.round(sb * 1.5);
+    bb = sb * 2;
+    if (i >= 2) {
+      ante = Math.max(1, Math.round(bb * 0.1));
+    }
+  }
+  return levels;
+};
 
 /**
  * Validates that a blind structure has strictly increasing blinds.

@@ -1,13 +1,18 @@
 import { Worker } from "bullmq";
 import { Redis } from "ioredis";
+import Redlock from "redlock";
 import pino from "pino";
-import crypto from "node:crypto";
 import { config } from "../config.js";
 import { getHouseUserId } from "../utils/house-user.js";
 import { createPrismaClient } from "../utils/prisma-client.js";
 
 const prisma = createPrismaClient();
 const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
+const redlock = new Redlock([redis as any], {
+  driftFactor: config.REDLOCK_DRIFT_FACTOR,
+  retryCount: 0,
+  retryDelay: config.REDLOCK_RETRY_DELAY_MS,
+});
 const logger = pino({ name: "settle-hand" });
 
 /**
@@ -23,9 +28,10 @@ const worker = new Worker(
     const rakeAmount = BigInt(rakeTotal);
 
     const lockKey = `lock:table:${tableId}`;
-    const lockToken = crypto.randomUUID();
-    const lockAcquired = await redis.set(lockKey, lockToken, "PX", 5000, "NX");
-    if (!lockAcquired) {
+    let lock;
+    try {
+      lock = await redlock.acquire([lockKey], config.SETTLE_HAND_LOCK_TTL_MS);
+    } catch {
       throw new Error(`Unable to acquire settlement lock for table ${tableId}`);
     }
 
@@ -108,9 +114,7 @@ const worker = new Worker(
         }
       });
     } finally {
-      const unlockScript =
-        "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
-      await redis.eval(unlockScript, 1, lockKey, lockToken);
+      await lock.release().catch(() => undefined);
     }
 
     logger.info({ handId, rakeTotal }, "Hand settled");

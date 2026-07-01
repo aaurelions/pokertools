@@ -6,6 +6,7 @@ import { BlockchainManager } from "../services/blockchain-manager.js";
 import { parseAbi } from "viem";
 import type { FastifyInstance } from "fastify";
 import { createPrismaClient } from "../utils/prisma-client.js";
+import { getHouseUserId } from "../utils/house-user.js";
 
 // ABI for ERC20 Transfer event and BalanceOf
 const ERC20_ABI = parseAbi([
@@ -93,7 +94,7 @@ export function createDepositMonitorWorker(
           // Determine scan range using lastScannedBlock
           const lastScanned = chain.lastScannedBlock
             ? BigInt(chain.lastScannedBlock)
-            : currentBlock - 100n; // Initial safe lookback
+            : currentBlock - BigInt(config.INITIAL_SCAN_LOOKBACK_BLOCKS);
 
           const fromBlock = lastScanned + 1n;
           const toBlock = currentBlock;
@@ -113,6 +114,7 @@ export function createDepositMonitorWorker(
           );
 
           // Scan each token on this chain
+          let allTokensSucceeded = true;
           for (const token of chain.tokens) {
             try {
               // Get ALL Transfer events for this token in block range
@@ -245,6 +247,38 @@ export function createDepositMonitorWorker(
                       data: { balance: { increment: chips } },
                     });
 
+                    // Double-entry: debit HOUSE_RESERVE for the on-chain funds leaving the hot wallet
+                    const houseUserId = await getHouseUserId(prisma);
+                    const houseReserveAccount = await tx.account.findUnique({
+                      where: {
+                        userId_currency_type: {
+                          userId: houseUserId,
+                          currency: config.DEFAULT_CURRENCY,
+                          type: "HOUSE_RESERVE",
+                        },
+                      },
+                    });
+                    if (houseReserveAccount) {
+                      await tx.ledgerEntry.create({
+                        data: {
+                          accountId: houseReserveAccount.id,
+                          amount: -chips,
+                          type: "DEPOSIT",
+                          referenceId: txHash,
+                          metadata: {
+                            chain: chain.name,
+                            token: token.symbol,
+                            blockHash,
+                            blockNumber: txBlockNumber.toString(),
+                          },
+                        },
+                      });
+                      await tx.account.update({
+                        where: { id: houseReserveAccount.id },
+                        data: { balance: { decrement: chips } },
+                      });
+                    }
+
                     // Record PaymentTransaction with link to ledger entry and blockHash
                     await tx.paymentTransaction.create({
                       data: {
@@ -309,6 +343,7 @@ export function createDepositMonitorWorker(
                 });
               }
             } catch (tokenErr) {
+              allTokensSucceeded = false;
               logger.error(
                 { error: tokenErr, token: token.symbol, chain: chain.name },
                 "Error processing token"
@@ -316,16 +351,23 @@ export function createDepositMonitorWorker(
             }
           }
 
-          // Update lastScannedBlock after successful scan
-          await prisma.blockchain.update({
-            where: { id: chain.id },
-            data: { lastScannedBlock: toBlock.toString() },
-          });
+          if (allTokensSucceeded) {
+            // Update lastScannedBlock only if all tokens on this chain succeeded
+            await prisma.blockchain.update({
+              where: { id: chain.id },
+              data: { lastScannedBlock: toBlock.toString() },
+            });
 
-          logger.info(
-            { chain: chain.name, lastScannedBlock: toBlock.toString() },
-            "Updated lastScannedBlock"
-          );
+            logger.info(
+              { chain: chain.name, lastScannedBlock: toBlock.toString() },
+              "Updated lastScannedBlock"
+            );
+          } else {
+            logger.warn(
+              { chain: chain.name, toBlock: toBlock.toString() },
+              "Skipping lastScannedBlock update due to partial token scan failure"
+            );
+          }
         } catch (chainErr) {
           logger.error({ error: chainErr, chain: chain.name }, "Error scanning chain");
         }
@@ -336,10 +378,10 @@ export function createDepositMonitorWorker(
     },
     {
       connection: redis as any,
-      concurrency: 5, // Scan 5 users in parallel
+      concurrency: config.DEPOSIT_SCAN_CONCURRENCY,
       limiter: {
-        max: 10, // Limit RPC calls
-        duration: 1000,
+        max: config.DEPOSIT_SCAN_MAX_RPCS,
+        duration: config.DEPOSIT_SCAN_LIMIT_DURATION_MS,
       },
     }
   );
@@ -504,6 +546,38 @@ async function checkPendingDeposits(
           where: { id: mainAccount.id },
           data: { balance: { increment: deposit.amountCredit } },
         });
+
+        // Double-entry: debit HOUSE_RESERVE for the on-chain funds leaving the hot wallet
+        const houseUserId = await getHouseUserId(prisma);
+        const houseReserveAccount = await tx.account.findUnique({
+          where: {
+            userId_currency_type: {
+              userId: houseUserId,
+              currency: config.DEFAULT_CURRENCY,
+              type: "HOUSE_RESERVE",
+            },
+          },
+        });
+        if (houseReserveAccount) {
+          await tx.ledgerEntry.create({
+            data: {
+              accountId: houseReserveAccount.id,
+              amount: -deposit.amountCredit,
+              type: "DEPOSIT",
+              referenceId: deposit.txHash!,
+              metadata: {
+                chain: deposit.blockchain.name,
+                token: deposit.token.symbol,
+                blockHash: deposit.blockHash,
+                blockNumber: deposit.blockNumber,
+              },
+            },
+          });
+          await tx.account.update({
+            where: { id: houseReserveAccount.id },
+            data: { balance: { decrement: deposit.amountCredit } },
+          });
+        }
 
         // Link ledger entry to payment transaction
         await tx.paymentTransaction.update({

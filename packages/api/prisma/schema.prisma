@@ -82,6 +82,11 @@ enum AccountType {
   MAIN // Available for withdrawal/transfer
   IN_PLAY // Locked on tables
   PENDING_WITHDRAWAL // Funds held for pending withdrawal (recoverable)
+  // System accounts owned by the HOUSE user. They are the counterparty for
+  // external money flows and tournament escrow so the ledger is fully
+  // double-entry: SUM(all account balances) == 0 at all times.
+  HOUSE_RESERVE // Counterparty for deposits/withdrawals (external on-chain flows)
+  TOURNAMENT_ESCROW // Counterparty for tournament buy-ins/payouts (prize pool custody)
 }
 
 model LedgerEntry {
@@ -114,7 +119,6 @@ enum TxType {
   REFUND
   HAND_WIN
   HAND_LOSS
-  UNCALLED_BET
   SWEEP
   TOURNAMENT_BUY_IN
   TOURNAMENT_FEE

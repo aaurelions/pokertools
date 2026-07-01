@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   computeTournamentPayouts,
   computeTournamentTableDistribution,
+  defaultBlindStructure,
   validateBlindStructure,
   MAX_TOURNAMENT_TABLES,
   MAX_RECONCILE_ITERATIONS,
@@ -85,6 +86,27 @@ describe("tournament utilities", () => {
         ])
       ).toThrow(/blinds must strictly increase/);
     });
+  });
+
+  it("generates a 20-level geometric blind structure that passes validation", () => {
+    const levels = defaultBlindStructure(25, 50);
+    expect(levels).toHaveLength(20);
+
+    // Verify strictly-increasing small blinds across all 20 levels.
+    for (let i = 1; i < levels.length; i++) {
+      expect(levels[i].smallBlind).toBeGreaterThan(levels[i - 1].smallBlind);
+    }
+
+    // Structure must satisfy the shared validateBlindStructure guard.
+    expect(() => validateBlindStructure(levels)).not.toThrow();
+
+    // Antes should be zero for the first three levels and then strictly positive.
+    for (let i = 0; i < 3; i++) {
+      expect(levels[i].ante).toBe(0);
+    }
+    for (let i = 3; i < levels.length; i++) {
+      expect(levels[i].ante).toBeGreaterThan(0);
+    }
   });
 
   it("exports reasonable reconciliation constants", () => {

@@ -12,6 +12,8 @@ import {
 import { getPlayerById } from "../utils/positioning";
 import { handleFold } from "./betting";
 
+const DEFAULT_TIME_BANK_SECONDS = 30;
+
 /**
  * Handle SIT action - add player to table
  */
@@ -28,7 +30,7 @@ export function handleSit(state: GameState, action: SitAction): GameState {
     betThisStreet: 0,
     totalInvestedThisHand: 0,
     isSittingOut: false,
-    timeBank: state.config.timeBankSeconds ?? 30,
+    timeBank: state.config.timeBankSeconds ?? DEFAULT_TIME_BANK_SECONDS,
     pendingAddOn: 0,
     sitInOption: action.sitInOption ?? SitInOption.IMMEDIATE,
     reservationExpiry: null,
@@ -153,7 +155,7 @@ export function handleReserveSeat(state: GameState, action: ReserveSeatAction): 
     betThisStreet: 0,
     totalInvestedThisHand: 0,
     isSittingOut: false,
-    timeBank: state.config.timeBankSeconds ?? 30,
+    timeBank: state.config.timeBankSeconds ?? DEFAULT_TIME_BANK_SECONDS,
     pendingAddOn: 0,
     sitInOption: SitInOption.IMMEDIATE,
     reservationExpiry: action.expiryTimestamp,

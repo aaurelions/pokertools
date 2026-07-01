@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import type { WebSocket } from "ws";
+import { WebSocket } from "ws";
 import type { Redis } from "ioredis";
 
 /**
@@ -72,7 +72,7 @@ export class SocketManager {
         });
 
         for (const socket of sockets) {
-          if (socket.readyState === 1) {
+          if (socket.readyState === WebSocket.OPEN) {
             socket.send(broadcastMessage);
           }
         }

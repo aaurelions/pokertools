@@ -18,7 +18,10 @@ const withdrawSchema = z.object({
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function retryTransient<T>(operation: () => Promise<T>, attempts = 10): Promise<T> {
+async function retryTransient<T>(
+  operation: () => Promise<T>,
+  attempts = config.RETRY_TRANSIENT_ATTEMPTS
+): Promise<T> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
@@ -26,7 +29,7 @@ async function retryTransient<T>(operation: () => Promise<T>, attempts = 10): Pr
     } catch (error) {
       lastError = error;
       if (attempt === attempts) break;
-      await sleep(100 * attempt);
+      await sleep(config.RETRY_TRANSIENT_BACKOFF_BASE_MS * attempt);
     }
   }
   throw lastError;
@@ -192,8 +195,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
 
     const msgTimestamp = parseInt(timestampMatch[1], 10);
     const now = Date.now();
-    const fiveMinutes = 5 * 60 * 1000;
-    if (Math.abs(now - msgTimestamp) > fiveMinutes) {
+    if (msgTimestamp > now || now - msgTimestamp > config.WITHDRAWAL_MESSAGE_TTL_MS) {
       return reply.code(400).send({
         error: "Withdrawal message has expired. Please sign a new message.",
       });
@@ -257,7 +259,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     // Check balance (amount is in USD cents, i.e., 100 = $1.00)
-    const amountInCents = Math.floor(amount * 100);
+    const amountInCents = Math.round(amount * 100);
     const amountCentsBigInt = BigInt(amountInCents);
     const risk = await fastify.riskManager.assertAllowed({
       userId,
@@ -305,7 +307,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
 
         // 2. Credit PENDING_WITHDRAWAL account (hold funds in recoverable state)
         // Use upsert in case the user doesn't have a PENDING_WITHDRAWAL account yet
-        await tx.account.upsert({
+        const pendingWithdrawalAccount = await tx.account.upsert({
           where: {
             userId_currency_type: {
               userId,
@@ -324,7 +326,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
           },
         });
 
-        // 3. Create LedgerEntry for the withdrawal request
+        // 3. Create debit LedgerEntry on MAIN account
         const entry = await tx.ledgerEntry.create({
           data: {
             accountId: mainAccount.id,
@@ -345,7 +347,28 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
           },
         });
 
-        // 4. Create PaymentTransaction with AWAITING_BROADCAST recovery state
+        // 4. Create credit LedgerEntry on PENDING_WITHDRAWAL account for double-entry completeness
+        await tx.ledgerEntry.create({
+          data: {
+            accountId: pendingWithdrawalAccount.id,
+            amount: amountCentsBigInt,
+            type: "WITHDRAWAL",
+            metadata: {
+              blockchainId,
+              tokenId,
+              address,
+              amountRaw: amountRaw.toString(),
+              proof: {
+                signer: user.address,
+                message,
+                signature,
+              },
+              idempotencyKey: effectiveIdempotencyKey,
+            },
+          },
+        });
+
+        // 5. Create PaymentTransaction with AWAITING_BROADCAST recovery state
         const paymentTx = await tx.paymentTransaction.create({
           data: {
             userId,

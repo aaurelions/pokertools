@@ -77,7 +77,7 @@ export const config = cleanEnv(process.env, {
 
   // Operational Thresholds
   MAX_GAS_PRICE_GWEI: num({ default: 50 }),
-  MIN_SWEEP_VALUE_USD: num({ default: 10 }),
+  MIN_SWEEP_VALUE_RAW_UNITS: num({ default: 10 }),
   LOW_GAS_THRESHOLD_ETH: num({ default: 0.1 }),
 
   // RPC resilience

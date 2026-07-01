@@ -145,7 +145,7 @@ export class SweeperService {
 
         this.logger.info(`  Balance: ${formatUnits(balance, token.decimals)} ${token.symbol}`);
 
-        const minSweep = parseUnits(config.MIN_SWEEP_VALUE_USD.toString(), token.decimals);
+        const minSweep = parseUnits(config.MIN_SWEEP_VALUE_RAW_UNITS.toString(), token.decimals);
 
         if (balance >= minSweep) {
           const userAccount = await this.chainService.getUserAccount(wallet.derivationIndex);

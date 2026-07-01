@@ -1,5 +1,5 @@
 import type { Redis } from "ioredis";
-import type { JobsOptions, Queue } from "bullmq";
+import type { JobsOptions } from "bullmq";
 import type Redlock from "redlock";
 import type { PrismaClient } from "../../generated/prisma/index.js";
 import type { JobQueues } from "../plugins/queue.js";
@@ -34,7 +34,7 @@ export class GameManager {
   constructor(
     private redis: Redis,
     private redlock: Redlock,
-    private queues: JobQueues | Queue,
+    private queues: JobQueues,
     private prisma: PrismaClient
   ) {}
 
@@ -358,7 +358,7 @@ export class GameManager {
     // Auto-deal next hand if enough players
     const activePlayers = engine.state.players.filter((p) => p && p.stack > 0).length;
     if (activePlayers >= 2) {
-      await this.enqueue("next-hand", { tableId }, { delay: 5000 });
+      await this.enqueue("next-hand", { tableId }, { delay: appConfig.AUTO_DEAL_DELAY_MS });
     }
   }
 
@@ -405,10 +405,6 @@ export class GameManager {
     data: Record<string, unknown>,
     options?: JobsOptions
   ): Promise<void> {
-    if (queueName in this.queues) {
-      await (this.queues as JobQueues)[queueName].add(queueName, data, options);
-      return;
-    }
-    await (this.queues as Queue).add(queueName, data, options);
+    await this.queues[queueName].add(queueName, data, options);
   }
 }

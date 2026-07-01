@@ -44,6 +44,21 @@ async function main() {
   });
 
   console.log(`✅ House Account ensured: ${houseAccount.id}`);
+
+  // 3. Create House system accounts that act as the counterparty for external
+  //    money flows (deposits/withdrawals) and tournament escrow. These make the
+  //    ledger fully double-entry: SUM(all account balances) == 0.
+  for (const type of ["HOUSE_RESERVE", "TOURNAMENT_ESCROW"] as const) {
+    const sysAccount = await prisma.account.upsert({
+      where: {
+        userId_currency_type: { userId: houseUser.id, currency: "USDC", type },
+      },
+      create: { userId: houseUser.id, currency: "USDC", type, balance: 0 },
+      update: {},
+    });
+    console.log(`✅ House ${type} Account ensured: ${sysAccount.id}`);
+  }
+
   console.log("🌱 Seeding completed.");
 }
 

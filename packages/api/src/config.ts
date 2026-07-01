@@ -96,6 +96,65 @@ export const config = cleanEnv(process.env, {
     default: 15000,
     desc: "Interval in milliseconds between tournament-blind worker scans (default 15 sec)",
   }),
+
+  // ---------------------------------------------------------------------------
+  // Operational constants. Defaults are conservative; override via the
+  // environment to tune for deployment scale and latency requirements.
+  // ---------------------------------------------------------------------------
+  INITIAL_SCAN_LOOKBACK_BLOCKS: num({
+    default: 100,
+    desc: "Number of blocks to look back on the first deposit scan of a chain (default 100)",
+  }),
+  DEPOSIT_SCAN_CONCURRENCY: num({ default: 5, desc: "Deposit monitor worker concurrency" }),
+  DEPOSIT_SCAN_MAX_RPCS: num({
+    default: 10,
+    desc: "Max RPC calls per second for the deposit monitor limiter",
+  }),
+  DEPOSIT_SCAN_LIMIT_DURATION_MS: num({
+    default: 1000,
+    desc: "Duration window in ms for the deposit monitor limiter",
+  }),
+  SETTLE_HAND_LOCK_TTL_MS: num({ default: 5000, desc: "Redis lock TTL for settle-hand worker" }),
+  NEXT_HAND_LOCK_TTL_MS: num({ default: 3000, desc: "Redlock TTL for next-hand worker" }),
+  REDLOCK_RETRY_COUNT: num({ default: 3, desc: "Redlock retry attempts" }),
+  REDLOCK_RETRY_DELAY_MS: num({ default: 100, desc: "Redlock retry delay in ms" }),
+  REDLOCK_DRIFT_FACTOR: num({ default: 0.01, desc: "Redlock drift factor" }),
+  RECONCILIATION_WINDOW_HOURS: num({
+    default: 24,
+    desc: "Reconciliation lookback window in hours",
+  }),
+  RECONCILIATION_BATCH_SIZE: num({ default: 100, desc: "Reconciliation batch size (take)" }),
+  AUTO_DEAL_DELAY_MS: num({ default: 5000, desc: "Delay before auto-dealing the next hand" }),
+  WITHDRAWAL_MESSAGE_TTL_MS: num({
+    default: 5 * 60 * 1000,
+    desc: "Max age of a signed withdrawal message in ms",
+  }),
+  NONCE_TTL_SECONDS: num({ default: 300, desc: "TTL of SIWE auth nonces in seconds" }),
+  RETRY_TRANSIENT_ATTEMPTS: num({ default: 10, desc: "Retry attempts for transient failures" }),
+  RETRY_TRANSIENT_BACKOFF_BASE_MS: num({
+    default: 100,
+    desc: "Base backoff for transient retries (multiplied by attempt number)",
+  }),
+  TABLE_LISTING_PAGE_SIZE: num({ default: 50, desc: "Default page size for table listing" }),
+  IDEMPOTENCY_TTL_SECONDS: num({ default: 3600, desc: "TTL for idempotency records in seconds" }),
+  TOURNAMENT_LOCK_TTL_MS: num({ default: 30000, desc: "Redlock TTL for tournament operations" }),
+  TOURNAMENT_LISTING_PAGE_SIZE: num({
+    default: 100,
+    desc: "Default page size for tournament listing",
+  }),
+  MAX_TOURNAMENT_TABLES: num({
+    default: 10,
+    desc: "Maximum tables allowed in a multi-table tournament",
+  }),
+  WS_MAX_CONNECTIONS_PER_USER: num({
+    default: 4,
+    desc: "Max concurrent WebSocket connections per user",
+  }),
+  WS_MAX_PRE_AUTH_QUEUE: num({ default: 8, desc: "Max buffered pre-auth WebSocket messages" }),
+  WS_HEARTBEAT_INTERVAL_MS: num({
+    default: 30000,
+    desc: "WebSocket heartbeat ping interval in ms",
+  }),
 });
 
 export function allowedSiweChainIds(): Set<number> {

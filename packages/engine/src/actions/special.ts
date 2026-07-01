@@ -8,6 +8,8 @@ import {
 import { getPlayerById } from "../utils/positioning";
 import { getNextToAct } from "../rules/action-order";
 
+const DEFAULT_TIME_BANK_DEDUCTION_SECONDS = 10;
+
 function getTotalPot(state: GameState): number {
   let total = 0;
   for (const pot of state.pots) total += pot.amount;
@@ -124,7 +126,7 @@ export function handleTimeBank(state: GameState, action: TimeBankAction): GameSt
 
   // Deduct time from player's time bank (configurable, default 10 seconds)
   // Uses pay-per-activation model: deduct full amount even if less is available
-  const deduction = state.config.timeBankDeductionSeconds ?? 10;
+  const deduction = state.config.timeBankDeductionSeconds ?? DEFAULT_TIME_BANK_DEDUCTION_SECONDS;
   const newTimeBank = Math.max(0, currentTimeBank - deduction);
 
   const newTimeBanks = new Map(state.timeBanks);

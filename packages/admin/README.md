@@ -63,8 +63,8 @@ A Telegram bot that acts as a security gatekeeper for outgoing funds.
 
 - **Workflow**:
   1. User requests withdrawal via the API (`POST /user/withdraw`).
-  2. The API debits the user's MAIN account and creates a `PaymentTransaction` in a single DB transaction, then pushes the ledger entry ID onto a Redis queue.
-  3. The bot pops from the Redis queue, verifies the withdrawal signature and daily limits, and posts a notification to the admin Telegram chat with inline **Approve** / **Reject** buttons.
+  2. The API debits the user's MAIN account and creates a `PaymentTransaction` in `AWAITING_BROADCAST` state in a single DB transaction.
+  3. The withdrawal bot polls the database for withdrawals in `AWAITING_BROADCAST` state (using `prisma.paymentTransaction.findFirst`) and sends a Telegram approval request to admins with inline **Approve** / **Reject** buttons.
   4. On approval, the bot broadcasts the ERC-20 transfer from the hot wallet.
 - **Security Checks**: Verifies nonce/timestamp withdrawal signatures at both queue time and approval time, checks daily withdrawal limits, uses Redis `SET NX EX` to prevent double-approval, and employs a circuit breaker for RPC resilience.
 - **Broadcast Safety**: Hot-wallet sends use coordinated nonces via Redis with bounded retry/backoff and circuit-breaker protection so withdrawals and sweeps do not race each other during RPC instability.
@@ -128,7 +128,7 @@ TELEGRAM_ADMIN_CHAT_ID="-100…"          # required
 
 # ── Operational Thresholds ───────────────────────────
 MAX_GAS_PRICE_GWEI=50                   # skip sweeps above this price
-MIN_SWEEP_VALUE_USD=10                  # smallest balance to sweep
+MIN_SWEEP_VALUE_RAW_UNITS=10            # smallest balance to sweep
 LOW_GAS_THRESHOLD_ETH=0.1               # alert threshold for gas monitor
 
 # ── RPC Resilience ───────────────────────────────────

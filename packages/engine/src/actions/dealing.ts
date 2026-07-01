@@ -155,17 +155,13 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
     }
   }
 
-  // Post blinds and antes.
-  const finalBlindPositions = getBlindPositions({
-    ...state,
-    buttonSeat: newButtonSeat,
-    players: newPlayers,
-  });
-
+  // Post blinds and antes. Reuses blindPositions from line 56:
+  // the mutations to newPlayers between calls (isSittingOut for WAIT_FOR_BB,
+  // hand/status resetting, card dealing) do not affect seat-only position logic.
   const currentBets = new Map<number, number>();
 
-  if (finalBlindPositions) {
-    const { smallBlindSeat, bigBlindSeat } = finalBlindPositions;
+  if (blindPositions) {
+    const { smallBlindSeat, bigBlindSeat } = blindPositions;
 
     const sbPlayer = newPlayers[smallBlindSeat];
     if (sbPlayer && sbPlayer.stack > 0) {

@@ -90,7 +90,14 @@ describe("E2E: Deposit -> Game -> Sweep -> Withdraw", () => {
     await redis.flushdb();
 
     const redlock = new Redlock([redis as any]);
-    const queue = new Queue("poker-jobs", { connection: redis as any });
+    const queues = {
+      "settle-hand": new Queue("settle-hand", { connection: redis as any }),
+      "archive-hand": new Queue("archive-hand", { connection: redis as any }),
+      "next-hand": new Queue("next-hand", { connection: redis as any }),
+      "persist-snapshot": new Queue("persist-snapshot", { connection: redis as any }),
+      "player-timeout": new Queue("player-timeout", { connection: redis as any }),
+      "tournament-blinds": new Queue("tournament-blinds", { connection: redis as any }),
+    };
 
     // Generate xPriv for admin wallet
     const seed = mnemonicToSeedSync(process.env.MASTER_MNEMONIC!);
@@ -171,7 +178,7 @@ describe("E2E: Deposit -> Game -> Sweep -> Withdraw", () => {
     blockchainService = new BlockchainService(prisma, logger);
     apiBlockchainManager = new BlockchainManager(prisma);
     financialManager = new FinancialManager(prisma);
-    gameManager = new GameManager(redis, redlock, queue, prisma);
+    gameManager = new GameManager(redis, redlock, queues, prisma);
 
     sweeperService = new SweeperService(prisma, blockchainService, logger);
     // @ts-ignore - Override for local testing

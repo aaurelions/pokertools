@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS "Account" (
     "userId" TEXT NOT NULL,
     "currency" TEXT NOT NULL DEFAULT 'USDC',
     "type" TEXT NOT NULL,
-    "balance" INTEGER NOT NULL DEFAULT 0,
+    "balance" BIGINT NOT NULL DEFAULT 0,
     CONSTRAINT "Account_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS "IdempotencyRecord" (
 CREATE TABLE IF NOT EXISTS "LedgerEntry" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "accountId" TEXT NOT NULL,
-    "amount" INTEGER NOT NULL,
+    "amount" BIGINT NOT NULL,
     "type" TEXT NOT NULL,
     "referenceId" TEXT,
     "metadata" JSONB,
@@ -110,7 +110,7 @@ CREATE TABLE IF NOT EXISTS "PaymentTransaction" (
     "blockNumber" TEXT,
     "blockHash" TEXT,
     "amountRaw" TEXT NOT NULL,
-    "amountCredit" INTEGER NOT NULL,
+    "amountCredit" BIGINT NOT NULL,
     "fee" TEXT,
     "status" TEXT NOT NULL DEFAULT 'PENDING',
     "recoveryState" TEXT,

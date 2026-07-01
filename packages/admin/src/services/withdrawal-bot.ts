@@ -483,14 +483,16 @@ export class WithdrawalBot {
 
     const isSigValid = await this.verifyWithdrawalProof(meta, user.address);
 
+    const todayMidnight = new Date(new Date().setHours(0, 0, 0, 0));
     const dailyTotal = await this.prisma.ledgerEntry.aggregate({
       where: {
         type: "WITHDRAWAL",
-        createdAt: { gte: new Date(new Date().setHours(0, 0, 0, 0)) },
+        accountId: tx.accountId,
+        createdAt: { gte: todayMidnight },
       },
       _sum: { amount: true },
     });
-    const currentDaily = Number(dailyTotal._sum.amount ?? 0n) / 100;
+    const currentDaily = Math.abs(Number(dailyTotal._sum.amount ?? 0n)) / 100;
 
     let riskAlert = "";
     if (amountUsd > config.MAX_SINGLE_WITHDRAWAL_USD)
@@ -646,6 +648,47 @@ Dest: <code>${meta.address}</code>
         });
       }
 
+      // Create balanced ledger entries for broadcast completion
+      const broadcastAmount = tx.amount < 0n ? -tx.amount : tx.amount;
+      const houseUser = await dbTx.user.findFirst({
+        where: { username: "HOUSE" },
+        select: { id: true },
+      });
+      const houseReserveAccount = houseUser
+        ? await dbTx.account.findUnique({
+            where: {
+              userId_currency_type: {
+                userId: houseUser.id,
+                currency: config.DEFAULT_CURRENCY,
+                type: "HOUSE_RESERVE",
+              },
+            },
+          })
+        : null;
+
+      const broadcastLedgerEntries = [
+        {
+          accountId: pendingAccount?.id ?? tx.accountId,
+          amount: -broadcastAmount,
+          type: "WITHDRAWAL" as const,
+          referenceId: reqId,
+          metadata: { stage: "broadcast-complete", paymentTxId: hash },
+        },
+        ...(houseReserveAccount
+          ? [
+              {
+                accountId: houseReserveAccount.id,
+                amount: broadcastAmount,
+                type: "WITHDRAWAL" as const,
+                referenceId: reqId,
+                metadata: { stage: "broadcast-complete", paymentTxId: hash },
+              } as const,
+            ]
+          : []),
+      ];
+
+      await dbTx.ledgerEntry.createMany({ data: broadcastLedgerEntries });
+
       // Update payment transaction
       await dbTx.paymentTransaction.update({
         where: { ledgerEntryId: reqId },
@@ -767,7 +810,8 @@ Dest: <code>${meta.address}</code>
       if (!timestampMatch) return false;
       const timestamp = Number(timestampMatch[1]);
       if (!Number.isFinite(timestamp)) return false;
-      return Math.abs(Date.now() - timestamp) <= config.WITHDRAWAL_SIGNATURE_MAX_AGE_MS;
+      const now = Date.now();
+      return timestamp <= now && now - timestamp <= config.WITHDRAWAL_SIGNATURE_MAX_AGE_MS;
     } catch (e) {
       this.logger.warn(e, "Signature verification failed");
       return false;

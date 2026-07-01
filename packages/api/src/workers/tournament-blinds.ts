@@ -78,7 +78,10 @@ export async function scanAndAdvanceTournamentBlinds(
 
       let lock;
       try {
-        lock = await redlock.acquire([lockKey], config.TABLE_LOCK_TTL_MS_TEST);
+        lock = await redlock.acquire(
+          [lockKey],
+          config.NODE_ENV === "test" ? config.TABLE_LOCK_TTL_MS_TEST : config.TABLE_LOCK_TTL_MS
+        );
       } catch {
         logger.warn(
           { tournamentId: tournament.id },

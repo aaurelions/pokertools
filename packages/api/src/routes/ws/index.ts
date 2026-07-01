@@ -20,11 +20,7 @@ function tokenFromProtocolHeader(header: string | undefined): string | undefined
   return bearer?.slice(4);
 }
 
-const MAX_CONNECTIONS_PER_USER = 4;
-const MAX_PRE_AUTH_QUEUE = 8;
 const MAX_BUFFERED_BYTES = 1_000_000;
-
-const userConnectionCounts = new Map<string, number>();
 
 async function canJoinTable(fastify: FastifyInstance, tableId: string, userId: string) {
   if (config.NODE_ENV === "test") return { allowed: true } as const;
@@ -75,7 +71,7 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
       if (messageHandler) {
         void messageHandler(data);
       } else {
-        if (queuedMessages.length >= MAX_PRE_AUTH_QUEUE) {
+        if (queuedMessages.length >= config.WS_MAX_PRE_AUTH_QUEUE) {
           socket.close(1008, "Pre-authentication message limit exceeded");
           return;
         }
@@ -103,12 +99,14 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
       return;
     }
 
-    const existingConnections = userConnectionCounts.get(userId) ?? 0;
-    if (existingConnections >= MAX_CONNECTIONS_PER_USER) {
+    let connectionAccepted = false;
+    const connCount = await fastify.redis.hincrby("ws:connections", userId, 1);
+    if (connCount > config.WS_MAX_CONNECTIONS_PER_USER) {
+      await fastify.redis.hincrby("ws:connections", userId, -1);
       socket.close(1008, "Connection limit exceeded");
       return;
     }
-    userConnectionCounts.set(userId, existingConnections + 1);
+    connectionAccepted = true;
 
     const subscriptions = new Set<string>();
 
@@ -134,7 +132,7 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
 
       isAlive = false;
       socket.ping();
-    }, 30000);
+    }, config.WS_HEARTBEAT_INTERVAL_MS);
 
     socket.on("pong", () => {
       isAlive = true;
@@ -244,13 +242,19 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
       void messageHandler(queued);
     }
 
-    socket.on("close", () => {
+    socket.on("close", async () => {
       clearInterval(heartbeatInterval);
-      const currentCount = userConnectionCounts.get(userId) ?? 0;
-      if (currentCount <= 1) {
-        userConnectionCounts.delete(userId);
-      } else {
-        userConnectionCounts.set(userId, currentCount - 1);
+      if (connectionAccepted) {
+        // Best-effort decrement; the Redis connection may already be closing
+        // during shutdown, so swallow connection-closed errors.
+        try {
+          const currentCount = await fastify.redis.hincrby("ws:connections", userId, -1);
+          if (currentCount <= 0) {
+            await fastify.redis.hdel("ws:connections", userId);
+          }
+        } catch {
+          // Connection closed during shutdown — nothing to do.
+        }
       }
       for (const tableId of subscriptions) {
         fastify.socketManager.leaveTable(tableId, socket);

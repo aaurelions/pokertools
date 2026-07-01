@@ -7,10 +7,10 @@ import { createPrismaClient } from "../utils/prisma-client.js";
 
 const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
 const redlock = new Redlock([redis as any], {
-  driftFactor: 0.01,
-  retryCount: 10,
-  retryDelay: 200,
-  retryJitter: 100,
+  driftFactor: config.REDLOCK_DRIFT_FACTOR,
+  retryCount: config.REDLOCK_RETRY_COUNT,
+  retryDelay: config.REDLOCK_RETRY_DELAY_MS,
+  retryJitter: config.REDLOCK_RETRY_DELAY_MS / 2,
 });
 const prisma = createPrismaClient();
 

@@ -16,6 +16,7 @@ import {
   type BlindLevel,
 } from "../../utils/tournaments.js";
 import { config } from "../../config.js";
+import { getHouseUserId } from "../../utils/house-user.js";
 
 type TournamentStatus = "REGISTRATION" | "RUNNING" | "FINISHED" | "CANCELLED";
 
@@ -139,7 +140,10 @@ export async function reconcileTournament(
   tournamentId: string,
   actorUserId: string
 ): Promise<void> {
-  const lock = await fastify.redlock.acquire([`lock:tournament:${tournamentId}`], 30000);
+  const lock = await fastify.redlock.acquire(
+    [`lock:tournament:${tournamentId}`],
+    config.TOURNAMENT_LOCK_TTL_MS
+  );
   try {
     await reconcileTournamentState(fastify, tournamentId, actorUserId, MAX_RECONCILE_ITERATIONS);
   } finally {
@@ -512,7 +516,7 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
       where: { status: { in: ["REGISTRATION", "RUNNING"] } },
       include: { entries: true },
       orderBy: [{ status: "asc" }, { createdAt: "desc" }],
-      take: 100,
+      take: config.TOURNAMENT_LISTING_PAGE_SIZE,
     });
 
     return { tournaments: tournaments.map(toTournamentListItem) };
@@ -724,6 +728,7 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
           const totalCostBigInt = BigInt(totalCost);
 
           // Debit MAIN only — do NOT sit into engine tables at registration
+          const houseUserId = await getHouseUserId(fastify.prisma);
           await fastify.prisma.$transaction(async (tx) => {
             const mainAccount = await tx.account.findUniqueOrThrow({
               where: {
@@ -768,6 +773,43 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
               where: { id },
               data: { prizePool: { increment: tournament.buyIn } },
             });
+
+            // Credit the TOURNAMENT_ESCROW account (double-entry)
+            const escrowAccount = await tx.account.findUnique({
+              where: {
+                userId_currency_type: {
+                  userId: houseUserId,
+                  currency: config.DEFAULT_CURRENCY,
+                  type: "TOURNAMENT_ESCROW",
+                },
+              },
+            });
+            if (escrowAccount) {
+              await tx.ledgerEntry.createMany({
+                data: [
+                  {
+                    accountId: escrowAccount.id,
+                    amount: BigInt(tournament.buyIn),
+                    type: "TOURNAMENT_BUY_IN",
+                    referenceId: id,
+                  },
+                  ...(tournament.fee > 0
+                    ? [
+                        {
+                          accountId: escrowAccount.id,
+                          amount: BigInt(tournament.fee),
+                          type: "TOURNAMENT_FEE" as const,
+                          referenceId: id,
+                        },
+                      ]
+                    : []),
+                ],
+              });
+              await tx.account.update({
+                where: { id: escrowAccount.id },
+                data: { balance: { increment: totalCostBigInt } },
+              });
+            }
           });
 
           return { success: true };
@@ -828,7 +870,10 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: errorMessage(error) });
       }
 
-      const lock = await fastify.redlock.acquire([`lock:tournament:${tournament.id}`], 30000);
+      const lock = await fastify.redlock.acquire(
+        [`lock:tournament:${tournament.id}`],
+        config.TOURNAMENT_LOCK_TTL_MS
+      );
       const tableIds: string[] = [tournament.tableId];
       const createdTableIds: string[] = [];
       const seatedPlayers: Array<{ tableId: string; userId: string }> = [];
@@ -1116,7 +1161,10 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
       await requireTournamentManager(fastify, tournamentId, request.user.userId);
 
       // Acquire tournament lock before reading state and executing settlement
-      const lock = await fastify.redlock.acquire([`lock:tournament:${tournamentId}`], 30000);
+      const lock = await fastify.redlock.acquire(
+        [`lock:tournament:${tournamentId}`],
+        config.TOURNAMENT_LOCK_TTL_MS
+      );
       try {
         // Re-fetch full tournament state under lock
         const tournament = await fastify.prisma.tournament.findUnique({
@@ -1224,6 +1272,8 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
           );
 
         await fastify.prisma.$transaction(async (tx) => {
+          const totalPayoutBigInt = payouts.reduce((sum, p) => sum + BigInt(p.amount), 0n);
+
           for (const payout of payouts) {
             const mainAccount = await tx.account.findUniqueOrThrow({
               where: {
@@ -1286,6 +1336,34 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
             where: { tournamentId: tournament.id },
             data: { status: "CLOSED" },
           });
+
+          // Debit the TOURNAMENT_ESCROW account for total payouts (double-entry)
+          if (totalPayoutBigInt > 0n) {
+            const houseUserId = await getHouseUserId(fastify.prisma);
+            const escrowAccount = await tx.account.findUnique({
+              where: {
+                userId_currency_type: {
+                  userId: houseUserId,
+                  currency: config.DEFAULT_CURRENCY,
+                  type: "TOURNAMENT_ESCROW",
+                },
+              },
+            });
+            if (escrowAccount) {
+              await tx.ledgerEntry.create({
+                data: {
+                  accountId: escrowAccount.id,
+                  amount: -totalPayoutBigInt,
+                  type: "TOURNAMENT_PAYOUT",
+                  referenceId: tournament.id,
+                },
+              });
+              await tx.account.update({
+                where: { id: escrowAccount.id },
+                data: { balance: { decrement: totalPayoutBigInt } },
+              });
+            }
+          }
         });
 
         await fastify.auditManager.record({

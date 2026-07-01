@@ -57,7 +57,13 @@ const reconciliationWorker = new Worker(
     try {
       const recentAccounts = await prisma.account.findMany({
         where: {
-          entries: { some: { createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } } },
+          entries: {
+            some: {
+              createdAt: {
+                gte: new Date(Date.now() - config.RECONCILIATION_WINDOW_HOURS * 60 * 60 * 1000),
+              },
+            },
+          },
         },
         select: {
           id: true,
@@ -66,7 +72,7 @@ const reconciliationWorker = new Worker(
           type: true,
           balance: true,
         },
-        take: 100,
+        take: config.RECONCILIATION_BATCH_SIZE,
         orderBy: { id: "desc" },
       });
 

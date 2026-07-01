@@ -60,15 +60,16 @@ function main() {
     process.exit(1);
   }
 
-  const shutdown = () => {
+  const shutdown = async () => {
     logger.info("Shutting down...");
+    if (bot) await bot.stop().catch((e) => logger.error(e, "Bot stop failed"));
     void prisma.$disconnect();
     void redis.quit();
     process.exit(0);
   };
 
-  process.on("SIGTERM", shutdown);
-  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", () => void shutdown());
+  process.on("SIGINT", () => void shutdown());
 }
 
 void main();

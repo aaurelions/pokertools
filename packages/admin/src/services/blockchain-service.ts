@@ -24,7 +24,6 @@ export class BlockchainService {
   private localNonceCache = new Map<number, number>();
   private masterHDKey: HDKey;
   public hotWalletAccount: Account;
-  private cachedDerivationPath: string | null = null;
 
   constructor(
     private prisma: PrismaClient,
@@ -165,26 +164,6 @@ export class BlockchainService {
 
   getExplorerLink(chain: Blockchain, hash: `0x${string}`): string {
     return chain.explorerUrl + "/tx/" + hash;
-  }
-
-  /**
-   * Get and cache the active admin wallet derivation path
-   */
-  private async getDerivationPath(): Promise<string> {
-    if (this.cachedDerivationPath) {
-      return this.cachedDerivationPath;
-    }
-
-    const adminWallet = await this.prisma.adminWallet.findFirst({
-      where: { isActive: true },
-    });
-
-    if (!adminWallet) {
-      throw new Error("No active AdminWallet found");
-    }
-
-    this.cachedDerivationPath = adminWallet.derivationPath;
-    return this.cachedDerivationPath;
   }
 
   /**

@@ -4,6 +4,8 @@
  * These utilities help construct SIWE messages for wallet signing.
  */
 
+const DEFAULT_CHAIN_ID = 1;
+
 /**
  * SIWE message parameters
  */
@@ -67,7 +69,7 @@ export function createSiweMessage(params: SiweMessageParams): string {
     statement,
     uri,
     version = "1",
-    chainId = 1,
+    chainId = DEFAULT_CHAIN_ID,
     nonce,
     issuedAt = new Date().toISOString(),
     expirationTime,
