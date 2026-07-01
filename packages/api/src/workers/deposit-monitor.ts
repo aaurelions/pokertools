@@ -183,7 +183,7 @@ export function createDepositMonitorWorker(
                 // Convert token amount to Chips (cents) using BigInt arithmetic ONLY
                 const amountBigInt = BigInt(amount);
                 const decimalsBigInt = 10n ** BigInt(token.decimals);
-                const chips = Number((amountBigInt * 100n) / decimalsBigInt);
+                const chips = (amountBigInt * 100n) / decimalsBigInt;
 
                 // Safety check
                 if (chips > Number.MAX_SAFE_INTEGER) {
@@ -219,7 +219,7 @@ export function createDepositMonitorWorker(
                       where: {
                         userId_currency_type: {
                           userId,
-                          currency: "USDC",
+                          currency: config.DEFAULT_CURRENCY,
                           type: "MAIN",
                         },
                       },
@@ -269,7 +269,7 @@ export function createDepositMonitorWorker(
                         event: "deposit_confirmed",
                         userId,
                         txHash,
-                        amount: chips,
+                        amount: chips.toString(),
                         confirmations,
                         blockHash,
                       },
@@ -479,7 +479,7 @@ async function checkPendingDeposits(
           where: {
             userId_currency_type: {
               userId: deposit.userId,
-              currency: "USDC",
+              currency: config.DEFAULT_CURRENCY,
               type: "MAIN",
             },
           },

@@ -19,7 +19,8 @@ const AUTH_TAG_LENGTH = 16;
 const SALT_LENGTH = 32;
 
 function deriveKey(salt: Buffer, secret: string): Buffer {
-  return crypto.pbkdf2Sync(secret, salt, 100000, 32, "sha256");
+  const iterations = Number(process.env.PBKDF2_ITERATIONS ?? 600_000);
+  return crypto.pbkdf2Sync(secret, salt, iterations, 32, "sha256");
 }
 
 export function encryptXpub(xpub: string, encryptionSecret: string): string {

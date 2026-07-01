@@ -69,7 +69,8 @@ model Account {
   type     AccountType
 
   // Cached balance in cents (1 chip = 1 cent). Source of truth is sum(entries).
-  balance Int @default(0)
+  // BigInt prevents overflow beyond $21M; arithmetic must use bigint internally.
+  balance BigInt @default(0)
 
   entries LedgerEntry[]
 
@@ -87,7 +88,7 @@ model LedgerEntry {
   id        String  @id @default(cuid())
   accountId String
   account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  amount    Int // Positive = Credit, Negative = Debit
+  amount    BigInt // Positive = Credit, Negative = Debit
   type      TxType
 
   // Polymorphic reference (TableID, HandID, or PaymentTransactionID)
@@ -145,7 +146,7 @@ model PaymentTransaction {
 
   // Amounts
   amountRaw    String // BigInt from blockchain (wei/satoshi)
-  amountCredit Int // Converted game chips (cents)
+  amountCredit BigInt // Converted game chips (cents)
   fee          String? // Network fee used (BigInt string)
 
   // Lifecycle

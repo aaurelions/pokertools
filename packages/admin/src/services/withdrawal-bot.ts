@@ -24,13 +24,13 @@ interface WithdrawalMetadata {
  * Recovery scanner interval in milliseconds (default 5 minutes).
  * Periodically scans for withdrawals stuck in non-terminal states.
  */
-const RECOVERY_SCAN_INTERVAL_MS = 5 * 60 * 1000;
+const RECOVERY_SCAN_INTERVAL_MS = config.RECOVERY_SCAN_INTERVAL_MS;
 
 /**
  * Maximum age in milliseconds for a withdrawal in AWAITING_BROADCAST state
  * before it is considered stuck and eligible for auto-refund (default 6 hours).
  */
-const STUCK_WITHDRAWAL_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+const STUCK_WITHDRAWAL_MAX_AGE_MS = config.STUCK_WITHDRAWAL_MAX_AGE_MS;
 
 export class WithdrawalBot {
   public bot: Bot;
@@ -158,7 +158,7 @@ export class WithdrawalBot {
               `⚠️ <b>Failed Broadcast</b>\n` +
                 `ID: ${withdrawal.id}\n` +
                 `User: ${withdrawal.user.username}\n` +
-                `Amount: $${(withdrawal.amountCredit / 100).toFixed(2)}\n` +
+                `Amount: $${(Number(withdrawal.amountCredit) / 100).toFixed(2)}\n` +
                 `Chain: ${withdrawal.blockchain?.name ?? "N/A"}\n` +
                 `Status: BROADCAST_FAILED\n\n` +
                 `Manual action required: refund or retry.`,
@@ -269,7 +269,7 @@ export class WithdrawalBot {
           where: {
             userId_currency_type: {
               userId,
-              currency: "USDC",
+              currency: config.DEFAULT_CURRENCY,
               type: "PENDING_WITHDRAWAL",
             },
           },
@@ -287,7 +287,7 @@ export class WithdrawalBot {
           where: {
             userId_currency_type: {
               userId,
-              currency: "USDC",
+              currency: config.DEFAULT_CURRENCY,
               type: "MAIN",
             },
           },
@@ -298,18 +298,30 @@ export class WithdrawalBot {
           data: { balance: { increment: amount } },
         });
 
-        // 3. Create REFUND ledger entry
-        await tx.ledgerEntry.create({
-          data: {
-            accountId: mainAccount.id,
-            amount: amount,
-            type: "REFUND",
-            referenceId: withdrawal.id,
-            metadata: {
-              reason: "Auto-refund: withdrawal stuck in AWAITING_BROADCAST",
-              originalPaymentTxId: withdrawal.id,
+        // 3. Create balanced REFUND ledger entries
+        await tx.ledgerEntry.createMany({
+          data: [
+            {
+              accountId: pendingAccount?.id ?? mainAccount.id,
+              amount: -amount,
+              type: "REFUND",
+              referenceId: withdrawal.id,
+              metadata: {
+                reason: "Auto-refund: release pending withdrawal hold",
+                originalPaymentTxId: withdrawal.id,
+              },
             },
-          },
+            {
+              accountId: mainAccount.id,
+              amount,
+              type: "REFUND",
+              referenceId: withdrawal.id,
+              metadata: {
+                reason: "Auto-refund: withdrawal stuck in AWAITING_BROADCAST",
+                originalPaymentTxId: withdrawal.id,
+              },
+            },
+          ],
         });
 
         // 4. Update payment transaction status
@@ -339,7 +351,7 @@ export class WithdrawalBot {
           `🔄 <b>Auto-Refunded</b>\n` +
             `ID: ${withdrawal.id}\n` +
             `User: ${withdrawal.user?.username ?? userId}\n` +
-            `Amount: $${(amount / 100).toFixed(2)}\n` +
+            `Amount: $${(Number(amount) / 100).toFixed(2)}\n` +
             `Reason: Stuck in AWAITING_BROADCAST for >${STUCK_WITHDRAWAL_MAX_AGE_MS / 3600000}h`,
           { parse_mode: "HTML" }
         );
@@ -358,7 +370,7 @@ export class WithdrawalBot {
    * Mark a withdrawal as FAILED and refund funds to user.
    */
   private async markFailedAndRefund(
-    withdrawal: { id: string; userId: string; amountCredit: number },
+    withdrawal: { id: string; userId: string; amountCredit: bigint },
     reason: string
   ) {
     try {
@@ -368,7 +380,7 @@ export class WithdrawalBot {
           where: {
             userId_currency_type: {
               userId: withdrawal.userId,
-              currency: "USDC",
+              currency: config.DEFAULT_CURRENCY,
               type: "PENDING_WITHDRAWAL",
             },
           },
@@ -385,7 +397,7 @@ export class WithdrawalBot {
           where: {
             userId_currency_type: {
               userId: withdrawal.userId,
-              currency: "USDC",
+              currency: config.DEFAULT_CURRENCY,
               type: "MAIN",
             },
           },
@@ -396,14 +408,23 @@ export class WithdrawalBot {
           data: { balance: { increment: withdrawal.amountCredit } },
         });
 
-        await tx.ledgerEntry.create({
-          data: {
-            accountId: mainAccount.id,
-            amount: withdrawal.amountCredit,
-            type: "REFUND",
-            referenceId: withdrawal.id,
-            metadata: { reason },
-          },
+        await tx.ledgerEntry.createMany({
+          data: [
+            {
+              accountId: pendingAccount?.id ?? mainAccount.id,
+              amount: -withdrawal.amountCredit,
+              type: "REFUND",
+              referenceId: withdrawal.id,
+              metadata: { reason: `${reason}: release pending withdrawal hold` },
+            },
+            {
+              accountId: mainAccount.id,
+              amount: withdrawal.amountCredit,
+              type: "REFUND",
+              referenceId: withdrawal.id,
+              metadata: { reason },
+            },
+          ],
         });
 
         await tx.paymentTransaction.update({
@@ -424,12 +445,24 @@ export class WithdrawalBot {
   }
 
   private async processQueue() {
-    this.logger.info("📦 Queue Processor Started");
+    this.logger.info("📦 Withdrawal DB Poller Started");
     while (this.isRunning) {
       try {
-        // BLOCKING READ: block 2s to prevent tight loop
-        const item = await this.redis.blpop("withdrawal_queue", 2);
-        if (item) await this.handleRequest(item[1]);
+        const payment = await this.prisma.paymentTransaction.findFirst({
+          where: {
+            type: "WITHDRAWAL",
+            status: "PENDING",
+            recoveryState: "AWAITING_BROADCAST",
+            ledgerEntryId: { not: null },
+          },
+          orderBy: { createdAt: "asc" },
+          select: { ledgerEntryId: true },
+        });
+        if (payment?.ledgerEntryId) {
+          await this.handleRequest(payment.ledgerEntryId);
+        } else {
+          await new Promise((r) => setTimeout(r, config.WITHDRAWAL_POLL_INTERVAL_MS));
+        }
       } catch (e) {
         this.logger.error(e, "Queue Processing Error");
         await new Promise((r) => setTimeout(r, 1000));
@@ -446,7 +479,7 @@ export class WithdrawalBot {
 
     const user = tx.account.user;
     const meta = tx.metadata as unknown as WithdrawalMetadata;
-    const amountUsd = Math.abs(tx.amount / 100);
+    const amountUsd = Number(tx.amount < 0n ? -tx.amount : tx.amount) / 100;
 
     const isSigValid = await this.verifyWithdrawalProof(meta, user.address);
 
@@ -457,7 +490,7 @@ export class WithdrawalBot {
       },
       _sum: { amount: true },
     });
-    const currentDaily = Math.abs((dailyTotal._sum.amount ?? 0) / 100);
+    const currentDaily = Number(dailyTotal._sum.amount ?? 0n) / 100;
 
     let riskAlert = "";
     if (amountUsd > config.MAX_SINGLE_WITHDRAWAL_USD)
@@ -545,7 +578,7 @@ Dest: <code>${meta.address}</code>
       throw new Error("Invalid or expired withdrawal signature");
     }
 
-    if (Math.abs(tx.amount / 100) > config.MAX_SINGLE_WITHDRAWAL_USD)
+    if (Number(tx.amount < 0n ? -tx.amount : tx.amount) / 100 > config.MAX_SINGLE_WITHDRAWAL_USD)
       throw new Error("Limit exceeded");
 
     const chain = await this.prisma.blockchain.findUniqueOrThrow({
@@ -600,7 +633,7 @@ Dest: <code>${meta.address}</code>
         where: {
           userId_currency_type: {
             userId: tx.account.userId,
-            currency: "USDC",
+            currency: config.DEFAULT_CURRENCY,
             type: "PENDING_WITHDRAWAL",
           },
         },
@@ -609,7 +642,7 @@ Dest: <code>${meta.address}</code>
       if (pendingAccount) {
         await dbTx.account.update({
           where: { id: pendingAccount.id },
-          data: { balance: { decrement: Math.abs(tx.amount) } },
+          data: { balance: { decrement: tx.amount < 0n ? -tx.amount : tx.amount } },
         });
       }
 
@@ -646,7 +679,7 @@ Dest: <code>${meta.address}</code>
     });
 
     const userId = tx.account.user.id;
-    const refundAmount = Math.abs(tx.amount);
+    const refundAmount = tx.amount < 0n ? -tx.amount : tx.amount;
 
     await this.prisma.$transaction(async (dbTx) => {
       // 1. Debit PENDING_WITHDRAWAL account (release held funds)
@@ -654,7 +687,7 @@ Dest: <code>${meta.address}</code>
         where: {
           userId_currency_type: {
             userId,
-            currency: "USDC",
+            currency: config.DEFAULT_CURRENCY,
             type: "PENDING_WITHDRAWAL",
           },
         },
@@ -672,7 +705,7 @@ Dest: <code>${meta.address}</code>
         where: {
           userId_currency_type: {
             userId,
-            currency: "USDC",
+            currency: config.DEFAULT_CURRENCY,
             type: "MAIN",
           },
         },
@@ -683,15 +716,24 @@ Dest: <code>${meta.address}</code>
         data: { balance: { increment: refundAmount } },
       });
 
-      // 3. Create REFUND ledger entry
-      await dbTx.ledgerEntry.create({
-        data: {
-          accountId: mainAccount.id,
-          amount: refundAmount,
-          type: "REFUND",
-          referenceId: reqId,
-          metadata: { reason },
-        },
+      // 3. Create balanced REFUND ledger entries
+      await dbTx.ledgerEntry.createMany({
+        data: [
+          {
+            accountId: pendingAccount?.id ?? mainAccount.id,
+            amount: -refundAmount,
+            type: "REFUND",
+            referenceId: reqId,
+            metadata: { reason: `${reason}: release pending withdrawal hold` },
+          },
+          {
+            accountId: mainAccount.id,
+            amount: refundAmount,
+            type: "REFUND",
+            referenceId: reqId,
+            metadata: { reason },
+          },
+        ],
       });
 
       // 4. Update payment transaction with recovery state

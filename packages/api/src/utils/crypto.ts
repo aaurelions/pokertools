@@ -27,7 +27,7 @@ function deriveKey(salt: Buffer, secret: string): Buffer {
   return crypto.pbkdf2Sync(
     secret,
     salt,
-    100000, // iterations
+    config.PBKDF2_ITERATIONS,
     32, // key length (256 bits)
     "sha256"
   );
@@ -77,27 +77,6 @@ export function decryptWithSecret(encryptedData: string, secret: string): string
 
   const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
   return plaintext.toString("utf8");
-}
-
-/**
- * Encrypts data using AES-256-GCM
- *
- * Format: salt (32) || iv (16) || authTag (16) || ciphertext
- * All returned as base64 string
- *
- * @deprecated Use encryptWithSecret with explicit secret for new code
- */
-export function encrypt(plaintext: string): string {
-  return encryptWithSecret(plaintext, config.WALLET_ENCRYPTION_SECRET);
-}
-
-/**
- * Decrypts data encrypted with encrypt()
- *
- * @deprecated Use decryptWithSecret with explicit secret for new code
- */
-export function decrypt(encryptedData: string): string {
-  return decryptWithSecret(encryptedData, config.WALLET_ENCRYPTION_SECRET);
 }
 
 /**

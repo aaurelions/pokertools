@@ -1,4 +1,4 @@
-import { cleanEnv, str, num } from "envalid";
+import { cleanEnv, str, num, makeValidator } from "envalid";
 import dotenv from "dotenv";
 import path from "path";
 import fs from "fs";
@@ -25,6 +25,28 @@ const loadSecret = (envVarName: string, fileVarName: string): string => {
   return process.env[envVarName] ?? "";
 };
 
+const DEV_SECRET_FRAGMENTS = [
+  "dev-jwt-secret-not-for-production",
+  "dev-wallet-encryption-secret-not-for-production",
+  "CHANGE_THIS_IN_PRODUCTION",
+  "test-jwt-secret",
+  "e2e-jwt-secret",
+];
+
+const productionSecret = makeValidator((input: string) => {
+  if (process.env.NODE_ENV === "production") {
+    if (!input) throw new Error("Production secret must be set");
+    for (const fragment of DEV_SECRET_FRAGMENTS) {
+      if (input.includes(fragment)) {
+        throw new Error(
+          `Production security gate: secret contains a dev/test default value (matches "${fragment}").`
+        );
+      }
+    }
+  }
+  return input;
+});
+
 // Manually load mnemonic
 const MASTER_MNEMONIC = loadSecret("MASTER_MNEMONIC", "MASTER_MNEMONIC_FILE");
 
@@ -38,6 +60,7 @@ export const config = cleanEnv(process.env, {
   // Infrastructure
   DATABASE_URL: str(),
   REDIS_URL: str({ default: "redis://localhost:6379" }),
+  DEFAULT_CURRENCY: str({ default: "USDC" }),
 
   // Wallet Configuration
   HOT_WALLET_DERIVATION_PATH: str({ default: "m/44'/60'/0'/0/0" }),
@@ -46,6 +69,7 @@ export const config = cleanEnv(process.env, {
   BATCH_SWEEPER_ADDRESS_MAINNET: str({ default: "" }),
   BATCH_SWEEPER_ADDRESS_POLYGON: str({ default: "" }),
   BATCH_SWEEPER_ADDRESS_LOCAL: str({ default: "" }),
+  SWEEPER_CONTRACT_MAP: str({ default: "" }),
 
   // Telegram
   TELEGRAM_BOT_TOKEN: str(),
@@ -63,20 +87,26 @@ export const config = cleanEnv(process.env, {
   CIRCUIT_BREAKER_FAILURE_THRESHOLD: num({ default: 5 }),
   CIRCUIT_BREAKER_OPEN_MS: num({ default: 30_000 }),
   WITHDRAWAL_SIGNATURE_MAX_AGE_MS: num({ default: 5 * 60 * 1000 }),
+  WITHDRAWAL_POLL_INTERVAL_MS: num({ default: 3000 }),
+  RECOVERY_SCAN_INTERVAL_MS: num({ default: 5 * 60 * 1000 }),
+  TRANSACTION_MONITOR_INTERVAL_MS: num({ default: 60 * 1000 }),
+  SWEEP_INTERVAL_MS: num({ default: 10 * 60 * 1000 }),
+  GAS_MONITOR_INTERVAL_MS: num({ default: 30 * 60 * 1000 }),
+  STUCK_WITHDRAWAL_MAX_AGE_MS: num({ default: 6 * 60 * 60 * 1000 }),
 
   // Security
-  JWT_SECRET: str(),
+  JWT_SECRET: productionSecret(),
 
   // Velocity Limits (Risk Management)
   MAX_SINGLE_WITHDRAWAL_USD: num({ default: 5000 }),
   MAX_DAILY_WITHDRAWAL_USD: num({ default: 50000 }),
 
   // Security
-  WALLET_ENCRYPTION_SECRET: str(),
-  WALLET_XPRIV_ENCRYPTION_SECRET: str({
-    default: "",
+  WALLET_ENCRYPTION_SECRET: productionSecret(),
+  WALLET_XPRIV_ENCRYPTION_SECRET: productionSecret({
     desc: "Separate secret for private wallet material (xpriv encryption). Required in production.",
   }),
+  PBKDF2_ITERATIONS: num({ default: 600_000 }),
 
   // Logging
   LOG_LEVEL: str({ default: "info" }),

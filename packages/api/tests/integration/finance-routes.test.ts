@@ -222,7 +222,7 @@ describe("Finance Routes Integration Tests", () => {
           address: user.address,
           blockNumber: "1000",
           amountRaw: "100000000",
-          amountCredit: 10000,
+          amountCredit: 10000n,
           status: "CONFIRMED",
           confirmedAt: new Date(),
         },
@@ -253,7 +253,7 @@ describe("Finance Routes Integration Tests", () => {
       expect(deposit).toHaveProperty("explorerUrl");
 
       expect(deposit.txHash).toBe("0xtest123");
-      expect(deposit.amountCredit).toBe(10000);
+      expect(Number(deposit.amountCredit)).toBe(10000);
       expect(deposit.status).toBe("CONFIRMED");
 
       // Cleanup

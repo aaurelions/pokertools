@@ -16,6 +16,7 @@ import persistSnapshotWorker from "./persist-snapshot.js";
 import timeoutWorker from "./timeout.js";
 import createDepositMonitorWorker from "./deposit-monitor.js";
 import createTournamentBlindsWorker from "./tournament-blinds.js";
+import reconciliationWorker from "./reconciliation.js";
 
 // Initialize deposit monitor worker (standalone mode)
 const depositMonitorWorker = await createDepositMonitorWorker();
@@ -34,6 +35,7 @@ logger.info(
       "player-timeout",
       "deposit-monitor",
       "tournament-blinds",
+      "reconciliation",
     ],
   },
   "BullMQ Workers initialized"
@@ -48,28 +50,28 @@ export const workers = [
   timeoutWorker,
   depositMonitorWorker,
   tournamentBlindsWorker,
+  reconciliationWorker,
 ];
 
 // ============================================================================
 // Schedule Deposit Monitor as Repeatable Job
 // ============================================================================
 
-const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
-const redis = new Redis(redisUrl, { maxRetriesPerRequest: null });
+const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
 
 (async () => {
   try {
-    // Schedule deposit monitor as a repeatable job (every 15 seconds)
+    // Schedule deposit monitor as a repeatable job
     const depositQueue = new Queue("deposit-monitor", { connection: redis as any });
     await depositQueue.add(
       "deposit-monitor",
       {},
       {
-        repeat: { every: 15000 },
+        repeat: { every: config.DEPOSIT_MONITOR_INTERVAL_MS },
         jobId: "deposit-monitor-singleton",
       }
     );
-    logger.info("Deposit monitor scheduled: every 15 seconds");
+    logger.info(`Deposit monitor scheduled: every ${config.DEPOSIT_MONITOR_INTERVAL_MS}ms`);
 
     // Schedule tournament blinds as a repeatable job
     const blindsQueue = new Queue("tournament-blinds", { connection: redis as any });
@@ -82,6 +84,17 @@ const redis = new Redis(redisUrl, { maxRetriesPerRequest: null });
       }
     );
     logger.info(`Tournament blinds scheduler: every ${config.TOURNAMENT_BLIND_SCAN_INTERVAL_MS}ms`);
+
+    const reconciliationQueue = new Queue("reconciliation", { connection: redis as any });
+    await reconciliationQueue.add(
+      "reconciliation",
+      {},
+      {
+        repeat: { every: config.RECONCILIATION_INTERVAL_MS },
+        jobId: "reconciliation-singleton",
+      }
+    );
+    logger.info(`Reconciliation scheduler: every ${config.RECONCILIATION_INTERVAL_MS}ms`);
   } catch (error) {
     logger.error({ error }, "Failed to schedule repeatable jobs");
   }

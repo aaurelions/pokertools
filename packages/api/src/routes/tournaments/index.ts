@@ -15,6 +15,7 @@ import {
   MAX_RECONCILE_ITERATIONS,
   type BlindLevel,
 } from "../../utils/tournaments.js";
+import { config } from "../../config.js";
 
 type TournamentStatus = "REGISTRATION" | "RUNNING" | "FINISHED" | "CANCELLED";
 
@@ -720,13 +721,16 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
           }
 
           const totalCost = tournament.buyIn + tournament.fee;
+          const totalCostBigInt = BigInt(totalCost);
 
           // Debit MAIN only — do NOT sit into engine tables at registration
           await fastify.prisma.$transaction(async (tx) => {
             const mainAccount = await tx.account.findUniqueOrThrow({
-              where: { userId_currency_type: { userId, currency: "USDC", type: "MAIN" } },
+              where: {
+                userId_currency_type: { userId, currency: config.DEFAULT_CURRENCY, type: "MAIN" },
+              },
             });
-            if (mainAccount.balance < totalCost) {
+            if (mainAccount.balance < totalCostBigInt) {
               throw Object.assign(new Error("Insufficient funds for tournament registration"), {
                 statusCode: 402,
                 code: "INSUFFICIENT_FUNDS",
@@ -740,7 +744,7 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
               data: [
                 {
                   accountId: mainAccount.id,
-                  amount: -tournament.buyIn,
+                  amount: -BigInt(tournament.buyIn),
                   type: "TOURNAMENT_BUY_IN",
                   referenceId: id,
                 },
@@ -748,7 +752,7 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
                   ? [
                       {
                         accountId: mainAccount.id,
-                        amount: -tournament.fee,
+                        amount: -BigInt(tournament.fee),
                         type: "TOURNAMENT_FEE" as const,
                         referenceId: id,
                       },
@@ -758,7 +762,7 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
             });
             await tx.account.update({
               where: { id: mainAccount.id },
-              data: { balance: { decrement: totalCost } },
+              data: { balance: { decrement: totalCostBigInt } },
             });
             await tx.tournament.update({
               where: { id },
@@ -806,6 +810,11 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
 
       // Validate blind structure at start time (defense-in-depth)
       const blindStructure = (tournament.blindStructure as unknown as BlindLevel[]) ?? [];
+      const primaryTable = await fastify.prisma.table.findUniqueOrThrow({
+        where: { id: tournament.tableId },
+        select: { config: true },
+      });
+      const primaryConfig = primaryTable.config as { smallBlind: number; bigBlind: number };
       try {
         validateBlindStructure(blindStructure);
       } catch (error: unknown) {
@@ -856,7 +865,11 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
             const blindLevel =
               blindStructure.length > 0
                 ? blindStructure[0]
-                : { smallBlind: 25, bigBlind: 50, ante: 0 };
+                : {
+                    smallBlind: primaryConfig.smallBlind,
+                    bigBlind: primaryConfig.bigBlind,
+                    ante: 0,
+                  };
 
             tableId = await fastify.gameManager.createTable({
               name: `${tournament.name} - Table ${tableIdx + 1}`,
@@ -1216,7 +1229,7 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
               where: {
                 userId_currency_type: {
                   userId: payout.entry.userId,
-                  currency: "USDC",
+                  currency: config.DEFAULT_CURRENCY,
                   type: "MAIN",
                 },
               },
@@ -1224,7 +1237,7 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
             await tx.ledgerEntry.create({
               data: {
                 accountId: mainAccount.id,
-                amount: payout.amount,
+                amount: BigInt(payout.amount),
                 type: "TOURNAMENT_PAYOUT",
                 referenceId: tournament.id,
                 metadata: { placement: payout.placement },
@@ -1232,7 +1245,7 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
             });
             await tx.account.update({
               where: { id: mainAccount.id },
-              data: { balance: { increment: payout.amount } },
+              data: { balance: { increment: BigInt(payout.amount) } },
             });
           }
 

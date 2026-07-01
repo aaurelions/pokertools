@@ -1024,18 +1024,18 @@ describe("Docker E2E Integration", () => {
     const totalBalances = await Promise.all(
       mtUsers.map(async (u) => {
         const accounts = await prisma.account.findMany({ where: { userId: u.userId } });
-        return accounts.reduce((sum, a) => sum + a.balance, 0);
+        return accounts.reduce((sum, a) => sum + BigInt(a.balance), 0n);
       })
     );
-    const totalSystem = totalBalances.reduce((sum, b) => sum + b, 0);
-    expect(totalSystem).toBe(150000);
+    const totalSystem = totalBalances.reduce((sum, b) => sum + b, 0n);
+    expect(totalSystem).toBe(150000n);
     console.log(`[E2E] Ledger conservation verified: total = ${totalSystem}`);
 
     // Verify winner balance
     const winnerMainAcc = await prisma.account.findFirstOrThrow({
       where: { userId: winningUserId, type: "MAIN" },
     });
-    expect(winnerMainAcc.balance).toBe(5000 - 100 + 3000); // started 5000, paid 100 buy-in, won 3000
+    expect(winnerMainAcc.balance).toBe(BigInt(5000 - 100 + 3000)); // started 5000, paid 100 buy-in, won 3000
     console.log(`[E2E] Winner balance: ${winnerMainAcc.balance}`);
 
     // Verify all tables are closed
@@ -1479,9 +1479,9 @@ describe("Docker E2E Integration", () => {
   /**
    * Withdrawal processing via on-chain transfer.
    *
-   * In production, the WithdrawalBot (admin package) listens to the Redis
-   * withdrawal_queue, sends a Telegram approval prompt, and processes the
-   * on-chain transfer when an admin approves. For this E2E test, we simulate
+   * In production, the WithdrawalBot (admin package) polls durable withdrawal
+   * PaymentTransaction rows, sends a Telegram approval prompt, and processes
+   * the on-chain transfer when an admin approves. For this E2E test, we simulate
    * the approval by:
    *   1. Deriving the hot wallet from the test mnemonic.
    *   2. Transferring USDC on-chain from the hot wallet to the destination.

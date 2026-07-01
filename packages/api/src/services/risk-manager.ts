@@ -1,5 +1,6 @@
 import type { Redis } from "ioredis";
 import type { FastifyRequest } from "fastify";
+import { config } from "../config.js";
 
 export class RiskDeniedError extends Error {
   statusCode = 429;
@@ -40,7 +41,7 @@ export class RiskManager {
     const blocked =
       userCount > this.userLimit(input.endpoint) ||
       ipCount > this.ipLimit(input.endpoint) ||
-      score >= 70;
+      score >= config.RISK_SCORE_THRESHOLD;
 
     if (blocked) {
       throw new RiskDeniedError("Request blocked by velocity/risk controls", score);
@@ -50,15 +51,15 @@ export class RiskManager {
   }
 
   private userLimit(endpoint: string): number {
-    if (endpoint === "withdraw") return 5;
-    if (endpoint === "buy-in" || endpoint === "add-chips") return 12;
-    return 60;
+    if (endpoint === "withdraw") return config.RISK_WITHDRAW_USER_LIMIT;
+    if (endpoint === "buy-in" || endpoint === "add-chips") return config.RISK_BUY_IN_USER_LIMIT;
+    return config.RISK_ACTION_USER_LIMIT;
   }
 
   private ipLimit(endpoint: string): number {
-    if (endpoint === "withdraw") return 20;
-    if (endpoint === "buy-in" || endpoint === "add-chips") return 40;
-    return 200;
+    if (endpoint === "withdraw") return config.RISK_WITHDRAW_IP_LIMIT;
+    if (endpoint === "buy-in" || endpoint === "add-chips") return config.RISK_BUY_IN_IP_LIMIT;
+    return config.RISK_ACTION_IP_LIMIT;
   }
 
   private async hit(key: string, now: number, windowMs: number): Promise<number> {

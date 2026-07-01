@@ -1,11 +1,12 @@
 import type { PrismaClient } from "../../generated/prisma/index.js";
+import { config } from "../config.js";
 import { InsufficientFundsError } from "../utils/errors.js";
 
 /**
  * Financial Manager - Double-Entry Ledger System
  *
- * All monetary operations use standard Number (integer cents).
- * 1 chip = 1 cent. Safe for up to $21 million with Int.
+ * Monetary values are persisted as BigInt cents/chips. Public API boundaries
+ * convert to Number only after database arithmetic is complete.
  */
 export class FinancialManager {
   constructor(private prisma: PrismaClient) {}
@@ -15,6 +16,7 @@ export class FinancialManager {
    * Transfers funds from MAIN account to IN_PLAY account
    */
   async buyIn(userId: string, tableId: string, amount: number): Promise<void> {
+    const amountCents = BigInt(amount);
     await this.prisma.$transaction(
       async (
         tx: Omit<
@@ -26,7 +28,7 @@ export class FinancialManager {
           where: {
             userId_currency_type: {
               userId,
-              currency: "USDC",
+              currency: config.DEFAULT_CURRENCY,
               type: "MAIN",
             },
           },
@@ -37,7 +39,7 @@ export class FinancialManager {
         }
 
         const mainBalance = mainAccount.balance;
-        if (mainBalance < amount) {
+        if (mainBalance < amountCents) {
           throw new InsufficientFundsError(
             `Insufficient balance. Has: ${mainBalance}, Needs: ${amount}`
           );
@@ -48,15 +50,15 @@ export class FinancialManager {
           where: {
             userId_currency_type: {
               userId,
-              currency: "USDC",
+              currency: config.DEFAULT_CURRENCY,
               type: "IN_PLAY",
             },
           },
           create: {
             userId,
-            currency: "USDC",
+            currency: config.DEFAULT_CURRENCY,
             type: "IN_PLAY",
-            balance: 0,
+            balance: 0n,
           },
           update: {},
         });
@@ -66,13 +68,13 @@ export class FinancialManager {
           data: [
             {
               accountId: mainAccount.id,
-              amount: -amount,
+              amount: -amountCents,
               type: "BUY_IN",
               referenceId: tableId,
             },
             {
               accountId: inPlayAccount.id,
-              amount: amount,
+              amount: amountCents,
               type: "BUY_IN",
               referenceId: tableId,
             },
@@ -82,12 +84,12 @@ export class FinancialManager {
         // Update cached balances
         await tx.account.update({
           where: { id: mainAccount.id },
-          data: { balance: { decrement: amount } },
+          data: { balance: { decrement: amountCents } },
         });
 
         await tx.account.update({
           where: { id: inPlayAccount.id },
-          data: { balance: { increment: amount } },
+          data: { balance: { increment: amountCents } },
         });
       }
     );
@@ -98,6 +100,7 @@ export class FinancialManager {
    * Transfers funds from IN_PLAY account back to MAIN account
    */
   async cashOut(userId: string, tableId: string, amount: number): Promise<void> {
+    const amountCents = BigInt(amount);
     await this.prisma.$transaction(
       async (
         tx: Omit<
@@ -109,7 +112,7 @@ export class FinancialManager {
           where: {
             userId_currency_type: {
               userId,
-              currency: "USDC",
+              currency: config.DEFAULT_CURRENCY,
               type: "IN_PLAY",
             },
           },
@@ -120,7 +123,7 @@ export class FinancialManager {
         }
 
         const inPlayBalance = inPlayAccount.balance;
-        if (inPlayBalance < amount) {
+        if (inPlayBalance < amountCents) {
           throw new InsufficientFundsError(
             `Insufficient in-play balance. Has: ${inPlayBalance}, Needs: ${amount}`
           );
@@ -130,7 +133,7 @@ export class FinancialManager {
           where: {
             userId_currency_type: {
               userId,
-              currency: "USDC",
+              currency: config.DEFAULT_CURRENCY,
               type: "MAIN",
             },
           },
@@ -140,13 +143,13 @@ export class FinancialManager {
           data: [
             {
               accountId: inPlayAccount.id,
-              amount: -amount,
+              amount: -amountCents,
               type: "CASH_OUT",
               referenceId: tableId,
             },
             {
               accountId: mainAccount.id,
-              amount: amount,
+              amount: amountCents,
               type: "CASH_OUT",
               referenceId: tableId,
             },
@@ -156,12 +159,12 @@ export class FinancialManager {
         // Update balances
         await tx.account.update({
           where: { id: inPlayAccount.id },
-          data: { balance: { decrement: amount } },
+          data: { balance: { decrement: amountCents } },
         });
 
         await tx.account.update({
           where: { id: mainAccount.id },
-          data: { balance: { increment: amount } },
+          data: { balance: { increment: amountCents } },
         });
       }
     );
@@ -174,7 +177,7 @@ export class FinancialManager {
     userId: string
   ): Promise<{ main: number; inPlay: number; pendingWithdrawal: number }> {
     const accounts = await this.prisma.account.findMany({
-      where: { userId, currency: "USDC" },
+      where: { userId, currency: config.DEFAULT_CURRENCY },
     });
 
     const mainAccount = accounts.find((a) => a.type === "MAIN");
@@ -182,9 +185,9 @@ export class FinancialManager {
     const pendingWithdrawalAccount = accounts.find((a) => a.type === "PENDING_WITHDRAWAL");
 
     return {
-      main: mainAccount ? mainAccount.balance : 0,
-      inPlay: inPlayAccount ? inPlayAccount.balance : 0,
-      pendingWithdrawal: pendingWithdrawalAccount ? pendingWithdrawalAccount.balance : 0,
+      main: mainAccount ? Number(mainAccount.balance) : 0,
+      inPlay: inPlayAccount ? Number(inPlayAccount.balance) : 0,
+      pendingWithdrawal: pendingWithdrawalAccount ? Number(pendingWithdrawalAccount.balance) : 0,
     };
   }
 
@@ -204,15 +207,15 @@ export class FinancialManager {
           where: {
             userId_currency_type: {
               userId,
-              currency: "USDC",
+              currency: config.DEFAULT_CURRENCY,
               type: "MAIN",
             },
           },
           create: {
             userId,
-            currency: "USDC",
+            currency: config.DEFAULT_CURRENCY,
             type: "MAIN",
-            balance: 0,
+            balance: 0n,
           },
           update: {},
         });

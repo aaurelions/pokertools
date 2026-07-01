@@ -26,7 +26,7 @@ The repository is organized into workspaces managed by NPM.
 - **High Performance**: Evaluator can process millions of hands per second.
 - **Scalable Infrastructure**: API designed for horizontal scaling with Redis Pub/Sub and atomic database transactions.
 - **Financial Integrity**: Double-entry ledger system for all chip movements.
-- **Blockchain Integration**: Built-in support for EVM deposits, withdrawals, worker queues, sweep batching, and operator approvals.
+- **Blockchain Integration**: Built-in support for EVM deposits, withdrawals, worker queues, sweep batching, and operator approvals via the admin service.
 - **Developer Experience**: Fully typed SDK, React hooks, comprehensive package READMEs, and workspace-level scripts for build/test/lint/format workflows.
 
 ## 🚀 Getting Started
@@ -66,7 +66,7 @@ The fastest way to get started is with Docker Compose:
 docker compose up --build
 ```
 
-This starts the API on `http://localhost:3000` with a Redis service and a persistent SQLite database volume. In production always replace the dev-only fallback `JWT_SECRET`, `COOKIE_SECRET`, and `WALLET_ENCRYPTION_SECRET` with strong values.
+This starts the API on `http://localhost:3000` with a Redis service and a persistent SQLite database volume. For production PostgreSQL + Caddy TLS + worker + admin + backup deployment, see `docker-compose.prod.yml` and `deploy/README.md`. In production always replace the dev-only fallback `JWT_SECRET`, `COOKIE_SECRET`, and `WALLET_ENCRYPTION_SECRET` with strong values.
 
 To use the pre-built image from GitHub Container Registry:
 
@@ -138,21 +138,22 @@ cp packages/admin/.env.example packages/admin/.env
 
 ### Endpoints
 
-| Endpoint        | Description                                            |
-| :-------------- | :----------------------------------------------------- |
-| `GET  /health`  | Dependency health check for API, DB, Redis, and queues |
-| `GET  /metrics` | Prometheus-compatible operational metrics              |
-| `GET  /docs`    | Swagger UI (Fastify `@fastify/swagger-ui`)             |
+| Endpoint        | Description                                                                       |
+| :-------------- | :-------------------------------------------------------------------------------- |
+| `GET  /health`  | Dependency health check for API, DB, Redis, and queues                            |
+| `GET  /metrics` | Prometheus-compatible operational metrics (requires `METRICS_TOKEN` bearer token) |
+| `GET  /docs`    | Swagger UI (Fastify `@fastify/swagger-ui`)                                        |
 
 The API also exposes authenticated SIWE auth routes, user/profile routes, table/gameplay routes, finance routes, player notes, and `/ws/play` for real-time table state. See [`packages/api/README.md`](./packages/api/README.md) for the current route and WebSocket message reference.
 
 ### Security-Sensitive Environment Variables
 
-| Variable                   | Purpose                                   |
-| :------------------------- | :---------------------------------------- |
-| `JWT_SECRET`               | Signs JWT access tokens                   |
-| `COOKIE_SECRET`            | Signs httpOnly session cookies            |
-| `WALLET_ENCRYPTION_SECRET` | Encrypts/decrypts HD wallet xpub material |
+| Variable                         | Purpose                                                         |
+| :------------------------------- | :-------------------------------------------------------------- |
+| `JWT_SECRET`                     | Signs JWT access tokens                                         |
+| `COOKIE_SECRET`                  | Signs httpOnly session cookies                                  |
+| `WALLET_ENCRYPTION_SECRET`       | Encrypts/decrypts HD wallet xpub material                       |
+| `WALLET_XPRIV_ENCRYPTION_SECRET` | Encrypts/decrypts HD wallet xpriv material (admin service only) |
 
 These are loaded at startup via `envalid` and must be set to strong, unique values in production. The Docker Compose file provides dev-only fallback defaults — never use those fallbacks outside of local development.
 

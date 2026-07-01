@@ -5,12 +5,17 @@
 ```
 Internet ──► Caddy (:80/443) ──► API (:3000) ──► PostgreSQL (:5432)
                  │                     │
-                 │                ┌────┴──────┐
-                 │                │  Worker    │
-                 │                │ (BullMQ)   │
-                 │                └────┬───────┘
+                 │                ┌────┴──────────┐
+                 │                │  Worker        │
+                 │                │ (BullMQ)       │
+                 │                └────┬───────────┘
                  │                     │
                  │                Redis (:6379)
+                 │                     │
+                 │                ┌────┴──────────┐
+                 │                │  Admin         │
+                 │                │ (sweeper/bot)  │
+                 │                └───────────────┘
                  │
             Backup Service ────► PostgreSQL (:5432)
 ```
@@ -18,6 +23,7 @@ Internet ──► Caddy (:80/443) ──► API (:3000) ──► PostgreSQL (:
 - **Caddy**: Reverse proxy with automatic TLS (Let's Encrypt), HSTS, and security headers. The _only_ service with public port exposure (80/443).
 - **API**: Fastify REST + WebSocket server. Internal network only.
 - **Worker**: Separate process running BullMQ job consumers (deposit monitor, hand settlement, etc.).
+- **Admin**: Fund sweeper, withdrawal approval bot (Telegram), gas monitor, and transaction monitor. Internal network only.
 - **PostgreSQL 17**: Primary relational database with persistent named volume.
 - **Redis 8**: Caching, pub/sub, and BullMQ backing store with AOF persistence (`appendfsync everysec`).
 - **Backup**: Scheduled `pg_dump` service with configurable interval and retention.
@@ -30,6 +36,8 @@ Internet ──► Caddy (:80/443) ──► API (:3000) ──► PostgreSQL (:
 cp .env.production.example .env.production
 # Edit .env.production — generate secrets with:
 #   openssl rand -base64 32
+# The admin service requires MASTER_MNEMONIC, TELEGRAM_BOT_TOKEN,
+# and TELEGRAM_ADMIN_CHAT_ID in addition to the standard secrets.
 ```
 
 ### 2. Start the stack
@@ -48,14 +56,15 @@ curl -k https://localhost/health
 
 ## Services
 
-| Service  | Internal Port | Public? | Description                          |
-| -------- | ------------- | ------- | ------------------------------------ |
-| caddy    | 80, 443       | Yes     | TLS termination, reverse proxy, HSTS |
-| api      | 3000          | No      | REST + WebSocket API server          |
-| worker   | —             | No      | BullMQ job processors                |
-| postgres | 5432          | No      | Primary database                     |
-| redis    | 6379          | No      | Cache, pub/sub, queue backend        |
-| backup   | —             | No      | Scheduled pg_dump with retention     |
+| Service  | Internal Port | Public? | Description                              |
+| -------- | ------------- | ------- | ---------------------------------------- |
+| caddy    | 80, 443       | Yes     | TLS termination, reverse proxy, HSTS     |
+| api      | 3000          | No      | REST + WebSocket API server              |
+| worker   | —             | No      | BullMQ job processors                    |
+| admin    | —             | No      | Sweeper, withdrawal bot, gas/tx monitors |
+| postgres | 5432          | No      | Primary database                         |
+| redis    | 6379          | No      | Cache, pub/sub, queue backend            |
+| backup   | —             | No      | Scheduled pg_dump with retention         |
 
 ## Backup & Restore
 
@@ -148,4 +157,4 @@ Add a cron job on the Docker host:
 - **HSTS enforced.** 2-year `max-age` with `includeSubDomains` and `preload`.
 - **Caddy auto-renews TLS.** Let's Encrypt certificates renew automatically 30 days before expiry.
 - **Production secret guard.** The Docker entrypoint refuses to start if any secret matches a known dev/test default.
-- **Read-only rootfs.** API and worker containers run with `read_only: true` and minimal capabilities.
+- **Read-only rootfs.** API, worker, and admin containers run with `read_only: true` and minimal capabilities.

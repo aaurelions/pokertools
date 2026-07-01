@@ -256,8 +256,8 @@ describe("Cash Game - Full Lifecycle Integration Test", () => {
 
     expect(buyInDebit).toBeTruthy();
     expect(buyInCredit).toBeTruthy();
-    expect(buyInDebit?.amount).toBe(-1000); // Debit from MAIN
-    expect(buyInCredit?.amount).toBe(1000); // Credit to IN_PLAY
+    expect(buyInDebit?.amount).toBe(-1000n); // Debit from MAIN
+    expect(buyInCredit?.amount).toBe(1000n); // Credit to IN_PLAY
 
     console.log(`✅ Ledger entries verified: ${ledgerEntries.length} entries for player 1`);
 

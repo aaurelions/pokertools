@@ -77,7 +77,7 @@ export async function buildApp() {
 
   await app.register(rateLimit, {
     global: config.NODE_ENV !== "test",
-    max: 100,
+    max: config.RATE_LIMIT_MAX,
     timeWindow: "1 minute",
   });
 

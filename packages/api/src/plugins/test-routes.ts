@@ -1,6 +1,7 @@
 import fp from "fastify-plugin";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { config } from "../config.js";
 
 const testCreditSchema = z.object({
   amount: z.number().int().min(0).max(1_000_000),
@@ -22,11 +23,13 @@ const testRoutesPlugin: FastifyPluginAsync = async (fastify) => {
       const { userId } = request.user;
       await fastify.financialManager.ensureAccounts(userId);
       const account = await fastify.prisma.account.update({
-        where: { userId_currency_type: { userId, currency: "USDC", type: "MAIN" } },
-        data: { balance: parsed.data.amount },
+        where: {
+          userId_currency_type: { userId, currency: config.DEFAULT_CURRENCY, type: "MAIN" },
+        },
+        data: { balance: BigInt(parsed.data.amount) },
       });
 
-      return { success: true, balance: account.balance };
+      return { success: true, balance: Number(account.balance) };
     }
   );
 
@@ -52,7 +55,12 @@ const testRoutesPlugin: FastifyPluginAsync = async (fastify) => {
       }
       const serialized = JSON.stringify(request.body.state);
       await Promise.all([
-        fastify.redis.set(`table:${request.params.id}`, serialized, "EX", 86400),
+        fastify.redis.set(
+          `table:${request.params.id}`,
+          serialized,
+          "EX",
+          config.TABLE_REDIS_TTL_SECONDS
+        ),
         fastify.prisma.table.update({
           where: { id: request.params.id },
           data: { state: serialized },

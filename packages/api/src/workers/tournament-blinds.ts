@@ -78,7 +78,7 @@ export async function scanAndAdvanceTournamentBlinds(
 
       let lock;
       try {
-        lock = await redlock.acquire([lockKey], 15000);
+        lock = await redlock.acquire([lockKey], config.TABLE_LOCK_TTL_MS_TEST);
       } catch {
         logger.warn(
           { tournamentId: tournament.id },

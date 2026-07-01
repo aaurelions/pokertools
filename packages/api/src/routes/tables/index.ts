@@ -8,6 +8,7 @@ import {
   AddChipsRequest,
   GameActionRequest,
 } from "@pokertools/types";
+import { config } from "../../config.js";
 import { reconcileTournament } from "../tournaments/index.js";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -149,28 +150,31 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
             where: { id },
             select: { config: true, mode: true },
           });
-          const config = table.config as { minBuyIn?: number; maxBuyIn?: number };
+          const tableConfig = table.config as { minBuyIn?: number; maxBuyIn?: number };
           if (
             table.mode === "CASH" &&
-            config.minBuyIn !== undefined &&
-            amountNum < config.minBuyIn
+            tableConfig.minBuyIn !== undefined &&
+            amountNum < tableConfig.minBuyIn
           ) {
-            throw Object.assign(new Error(`Buy-in must be at least ${config.minBuyIn}`), {
+            throw Object.assign(new Error(`Buy-in must be at least ${tableConfig.minBuyIn}`), {
               statusCode: 400,
               code: "BUY_IN_BELOW_MINIMUM",
             });
           }
           if (
             table.mode === "CASH" &&
-            config.maxBuyIn !== undefined &&
-            amountNum > config.maxBuyIn
+            tableConfig.maxBuyIn !== undefined &&
+            amountNum > tableConfig.maxBuyIn
           ) {
-            throw Object.assign(new Error(`Buy-in must not exceed ${config.maxBuyIn}`), {
+            throw Object.assign(new Error(`Buy-in must not exceed ${tableConfig.maxBuyIn}`), {
               statusCode: 400,
               code: "BUY_IN_ABOVE_MAXIMUM",
             });
           }
-          const lock = await fastify.redlock.acquire([`lock:table:${id}`], 10000);
+          const lock = await fastify.redlock.acquire(
+            [`lock:table:${id}`],
+            config.TABLE_LOCK_TTL_MS
+          );
           let debited = false;
           try {
             const state = await fastify.gameManager.getState(id);
@@ -480,9 +484,16 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
 
       // Use the same table lock namespace as game actions/settlement so engine
       // state reads and financial writes are serialized for the table.
-      const lock = await fastify.redlock.acquire([`lock:table:${id}`], 30000);
+      const lock = await fastify.redlock.acquire(
+        [`lock:table:${id}`],
+        config.TABLE_LOCK_TTL_MS * 3
+      );
 
       try {
+        const table = await fastify.prisma.table.findUniqueOrThrow({
+          where: { id },
+          select: { mode: true },
+        });
         const state = await fastify.gameManager.getState(id);
         const player = state.players.find((p) => p?.id === userId);
 
@@ -491,6 +502,17 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
         }
 
         const stack = player.stack;
+
+        if (table.mode === "TOURNAMENT") {
+          await fastify.gameManager.processAction(
+            id,
+            { type: "STAND" as ActionType.STAND, playerId: userId },
+            userId,
+            { skipLock: true }
+          );
+
+          return { success: true };
+        }
 
         // Get current IN_PLAY balance to calculate the delta
         const balances = await fastify.financialManager.getBalances(userId);
@@ -504,15 +526,15 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
             await retryTransient(() =>
               fastify.prisma.$transaction(async (tx) => {
                 // First, sync the IN_PLAY balance to match engine reality
-                const delta = stack - currentInPlay;
+                const delta = BigInt(stack - currentInPlay);
 
-                if (delta !== 0) {
-                  const syncAmount = Math.abs(delta);
+                if (delta !== 0n) {
+                  const syncAmount = delta < 0n ? -delta : delta;
                   const inPlayAccount = await tx.account.findUniqueOrThrow({
                     where: {
                       userId_currency_type: {
                         userId,
-                        currency: "USDC",
+                        currency: config.DEFAULT_CURRENCY,
                         type: "IN_PLAY",
                       },
                     },
@@ -522,18 +544,18 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
                     data: {
                       accountId: inPlayAccount.id,
                       amount: delta,
-                      type: delta > 0 ? "HAND_WIN" : "HAND_LOSS",
+                      type: delta > 0n ? "HAND_WIN" : "HAND_LOSS",
                       referenceId: id,
                       metadata: { reason: "stand_engine_stack_sync", tableId: id },
                     },
                   });
 
-                  if (delta < 0) {
+                  if (delta < 0n) {
                     await tx.account.update({
                       where: {
                         userId_currency_type: {
                           userId,
-                          currency: "USDC",
+                          currency: config.DEFAULT_CURRENCY,
                           type: "IN_PLAY",
                         },
                       },
@@ -544,7 +566,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
                       where: {
                         userId_currency_type: {
                           userId,
-                          currency: "USDC",
+                          currency: config.DEFAULT_CURRENCY,
                           type: "IN_PLAY",
                         },
                       },
@@ -558,7 +580,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
                   where: {
                     userId_currency_type: {
                       userId,
-                      currency: "USDC",
+                      currency: config.DEFAULT_CURRENCY,
                       type: "IN_PLAY",
                     },
                   },
@@ -568,7 +590,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
                   where: {
                     userId_currency_type: {
                       userId,
-                      currency: "USDC",
+                      currency: config.DEFAULT_CURRENCY,
                       type: "MAIN",
                     },
                   },
@@ -578,13 +600,13 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
                   data: [
                     {
                       accountId: inPlayAccount.id,
-                      amount: -stack,
+                      amount: -BigInt(stack),
                       type: "CASH_OUT",
                       referenceId: id,
                     },
                     {
                       accountId: mainAccount.id,
-                      amount: stack,
+                      amount: BigInt(stack),
                       type: "CASH_OUT",
                       referenceId: id,
                     },
@@ -593,12 +615,12 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
 
                 await tx.account.update({
                   where: { id: inPlayAccount.id },
-                  data: { balance: { decrement: stack } },
+                  data: { balance: { decrement: BigInt(stack) } },
                 });
 
                 await tx.account.update({
                   where: { id: mainAccount.id },
-                  data: { balance: { increment: stack } },
+                  data: { balance: { increment: BigInt(stack) } },
                 });
               })
             );
@@ -615,7 +637,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
                 where: {
                   userId_currency_type: {
                     userId,
-                    currency: "USDC",
+                    currency: config.DEFAULT_CURRENCY,
                     type: "IN_PLAY",
                   },
                 },
@@ -623,7 +645,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
               await tx.ledgerEntry.create({
                 data: {
                   accountId: inPlayAccount.id,
-                  amount: -currentInPlay,
+                  amount: -BigInt(currentInPlay),
                   type: "HAND_LOSS",
                   referenceId: id,
                   metadata: { reason: "stand_busted_sync", tableId: id },
@@ -631,7 +653,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
               });
               await tx.account.update({
                 where: { id: inPlayAccount.id },
-                data: { balance: 0 },
+                data: { balance: 0n },
               });
             })
           );
@@ -644,6 +666,13 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
           userId,
           { skipLock: true }
         );
+
+        const residualBalances = await fastify.financialManager.getBalances(userId);
+        if (residualBalances.inPlay > 0) {
+          await retryTransient(() =>
+            fastify.financialManager.cashOut(userId, id, residualBalances.inPlay)
+          );
+        }
 
         return { success: true };
       } finally {

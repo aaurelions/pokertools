@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import type { WebSocket } from "ws";
 import {
   safeParseClientMessage,
@@ -11,6 +11,7 @@ import {
   type PongMessage,
   type SnapshotMessage,
 } from "@pokertools/types";
+import { config } from "../../config.js";
 
 function tokenFromProtocolHeader(header: string | undefined): string | undefined {
   if (!header) return undefined;
@@ -24,6 +25,44 @@ const MAX_PRE_AUTH_QUEUE = 8;
 const MAX_BUFFERED_BYTES = 1_000_000;
 
 const userConnectionCounts = new Map<string, number>();
+
+async function canJoinTable(fastify: FastifyInstance, tableId: string, userId: string) {
+  if (config.NODE_ENV === "test") return { allowed: true } as const;
+
+  const table = await fastify.prisma.table.findUnique({
+    where: { id: tableId },
+    select: {
+      config: true,
+      tournamentId: true,
+      tournament: { select: { id: true, creatorId: true } },
+    },
+  });
+
+  if (!table) return { allowed: false, reason: "TABLE_NOT_FOUND" } as const;
+
+  const tableConfig = table.config as { allowSpectators?: boolean };
+  if (tableConfig.allowSpectators === true) return { allowed: true } as const;
+
+  const user = await fastify.prisma.user.findUnique({
+    where: { id: userId },
+    select: { role: true },
+  });
+  if (user?.role === "ADMIN") return { allowed: true } as const;
+  if (table.tournament?.creatorId === userId) return { allowed: true } as const;
+
+  if (table.tournamentId) {
+    const entry = await fastify.prisma.tournamentEntry.findFirst({
+      where: { tournamentId: table.tournamentId, userId },
+      select: { id: true },
+    });
+    if (entry) return { allowed: true } as const;
+  }
+
+  const state = await fastify.gameManager.getState(tableId);
+  if (state.players.some((player) => player?.id === userId)) return { allowed: true } as const;
+
+  return { allowed: false, reason: "JOIN_NOT_AUTHORIZED" } as const;
+}
 
 export const wsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/play", { websocket: true }, async (socket: WebSocket, request) => {
@@ -131,6 +170,20 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
 
         if (isJoinMessage(message)) {
           const { tableId, requestId } = message;
+          const authorization = await canJoinTable(fastify, tableId, userId);
+          if (!authorization.allowed) {
+            const errorMsg: ErrorMessage = {
+              type: "ERROR",
+              code: authorization.reason,
+              message:
+                authorization.reason === "TABLE_NOT_FOUND"
+                  ? "Table not found"
+                  : "Not authorized to join this table",
+            };
+            sendMessage(errorMsg);
+            return;
+          }
+
           subscriptions.add(tableId);
           fastify.socketManager.joinTable(tableId, socket, userId);
 

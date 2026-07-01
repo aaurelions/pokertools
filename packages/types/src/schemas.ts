@@ -224,6 +224,14 @@ export const CreateTableSchema = z
     maxPlayers: z.number().int().min(2).max(10).default(9),
     minBuyIn: z.number().int().positive().optional(),
     maxBuyIn: z.number().int().positive().optional(),
+    ante: z.number().int().min(0).optional(),
+    rakePercent: z.number().min(0).max(100).optional(),
+    rakeCap: z.number().int().min(0).optional(),
+    noFlopNoDrop: z.boolean().optional(),
+    timeBankSeconds: z.number().int().positive().optional(),
+    timeBankDeductionSeconds: z.number().int().positive().optional(),
+    actionTimeoutSeconds: z.number().int().positive().optional(),
+    allowSpectators: z.boolean().optional(),
   })
   .refine((config) => config.bigBlind > config.smallBlind, {
     message: "Big blind must be greater than small blind",

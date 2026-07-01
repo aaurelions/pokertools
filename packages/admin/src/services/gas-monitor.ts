@@ -21,7 +21,7 @@ export class GasMonitor {
   private async monitorLoop() {
     while (true) {
       await this.checkBalances();
-      await new Promise((resolve) => setTimeout(resolve, 30 * 60 * 1000));
+      await new Promise((resolve) => setTimeout(resolve, config.GAS_MONITOR_INTERVAL_MS));
     }
   }
 

@@ -1,9 +1,13 @@
 import type { FastifyPluginAsync } from "fastify";
 import { verifyMessage } from "viem";
 import { z } from "zod";
+import { config } from "../../config.js";
 
 const withdrawSchema = z.object({
-  amount: z.number().positive().max(1000000), // Max $10,000 per withdrawal
+  amount: z
+    .number()
+    .positive()
+    .max(config.MAX_WITHDRAWAL_AMOUNT_CENTS / 100),
   blockchainId: z.string().cuid(),
   tokenId: z.string().cuid(),
   address: z.string().regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address"),
@@ -93,7 +97,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
     return {
       history: entries.map((entry) => ({
         id: entry.id,
-        amount: entry.amount,
+        amount: Number(entry.amount),
         type: entry.type,
         referenceId: entry.referenceId,
         createdAt:
@@ -133,7 +137,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
           id: existingPayment.id,
           ledgerEntryId: existingPayment.ledgerEntryId,
           status: existingPayment.status,
-          amount: existingPayment.amountCredit / 100,
+          amount: Number(existingPayment.amountCredit) / 100,
           destination: existingPayment.address,
           blockchain: existingPayment.blockchain.name,
           token: existingPayment.token.symbol,
@@ -205,7 +209,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
         id: existingPaymentByNonce.id,
         ledgerEntryId: existingPaymentByNonce.ledgerEntryId,
         status: existingPaymentByNonce.status,
-        amount: existingPaymentByNonce.amountCredit / 100,
+        amount: Number(existingPaymentByNonce.amountCredit) / 100,
         destination: existingPaymentByNonce.address,
         blockchain: existingPaymentByNonce.blockchain.name,
         token: existingPaymentByNonce.token.symbol,
@@ -242,7 +246,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       where: {
         userId_currency_type: {
           userId,
-          currency: "USDC",
+          currency: config.DEFAULT_CURRENCY,
           type: "MAIN",
         },
       },
@@ -254,16 +258,17 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
 
     // Check balance (amount is in USD cents, i.e., 100 = $1.00)
     const amountInCents = Math.floor(amount * 100);
+    const amountCentsBigInt = BigInt(amountInCents);
     const risk = await fastify.riskManager.assertAllowed({
       userId,
       endpoint: "withdraw",
       request,
       amountCents: amountInCents,
     });
-    if (mainAccount.balance < amountInCents) {
+    if (mainAccount.balance < amountCentsBigInt) {
       return reply.code(400).send({
         error: "Insufficient balance",
-        available: mainAccount.balance / 100,
+        available: Number(mainAccount.balance) / 100,
         requested: amount,
       });
     }
@@ -295,7 +300,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
         // 1. Debit MAIN account (move funds out of available balance)
         await tx.account.update({
           where: { id: mainAccount.id },
-          data: { balance: { decrement: amountInCents } },
+          data: { balance: { decrement: amountCentsBigInt } },
         });
 
         // 2. Credit PENDING_WITHDRAWAL account (hold funds in recoverable state)
@@ -304,18 +309,18 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
           where: {
             userId_currency_type: {
               userId,
-              currency: "USDC",
+              currency: config.DEFAULT_CURRENCY,
               type: "PENDING_WITHDRAWAL",
             },
           },
           create: {
             userId,
-            currency: "USDC",
+            currency: config.DEFAULT_CURRENCY,
             type: "PENDING_WITHDRAWAL",
-            balance: amountInCents,
+            balance: amountCentsBigInt,
           },
           update: {
-            balance: { increment: amountInCents },
+            balance: { increment: amountCentsBigInt },
           },
         });
 
@@ -323,7 +328,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
         const entry = await tx.ledgerEntry.create({
           data: {
             accountId: mainAccount.id,
-            amount: -amountInCents,
+            amount: -amountCentsBigInt,
             type: "WITHDRAWAL",
             metadata: {
               blockchainId,
@@ -349,7 +354,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
             tokenId,
             address,
             amountRaw: amountRaw.toString(),
-            amountCredit: amountInCents,
+            amountCredit: amountCentsBigInt,
             status: "PENDING",
             recoveryState: "AWAITING_BROADCAST",
             ledgerEntryId: entry.id,
@@ -361,14 +366,6 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       }
     );
 
-    // Queue withdrawal for admin approval (best-effort, PaymentTransaction is already in DB)
-    await fastify.redis.rpush("withdrawal_queue", result.ledgerEntry.id).catch((err: Error) => {
-      fastify.log.warn(
-        { err, paymentTxId: result.paymentTx.id },
-        "Failed to queue withdrawal in Redis, but PaymentTransaction saved in DB"
-      );
-    });
-
     fastify.log.info(
       {
         userId,
@@ -377,7 +374,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
         amount: amountInCents,
         destination: address,
       },
-      "Withdrawal request queued"
+      "Withdrawal request stored for admin processing"
     );
 
     await fastify.auditManager.record({
@@ -438,7 +435,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
         token: withdrawal.token.symbol,
         address: withdrawal.address,
         amountRaw: withdrawal.amountRaw,
-        amountUSD: withdrawal.amountCredit / 100,
+        amountUSD: Number(withdrawal.amountCredit) / 100,
         status: withdrawal.status,
         createdAt: withdrawal.ledgerEntry?.createdAt || withdrawal.createdAt,
         confirmedAt: withdrawal.confirmedAt,

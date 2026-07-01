@@ -11,6 +11,7 @@ import {
   type Snapshot as EngineSnapshot,
 } from "@pokertools/engine";
 import crypto from "node:crypto";
+import { config as appConfig } from "../config.js";
 import { NotFoundError } from "../utils/errors.js";
 import { defaultBlindStructure } from "../utils/tournaments.js";
 
@@ -53,7 +54,10 @@ export class GameManager {
     userId: string,
     options: { skipLock?: boolean; skipIdentity?: boolean } = {}
   ): Promise<PublicState> {
-    const lockTTL = process.env.NODE_ENV === "test" ? 15000 : 10000;
+    const lockTTL =
+      appConfig.NODE_ENV === "test"
+        ? appConfig.TABLE_LOCK_TTL_MS_TEST
+        : appConfig.TABLE_LOCK_TTL_MS;
     const lock = options.skipLock
       ? null
       : await this.redlock.acquire([`lock:table:${tableId}`], lockTTL);
@@ -138,7 +142,7 @@ export class GameManager {
           `table:${tableId}`,
           initialVersion.toString(),
           JSON.stringify(newSnapshot),
-          "86400"
+          String(appConfig.TABLE_REDIS_TTL_SECONDS)
         );
       } catch (err) {
         if (err instanceof Error && err.message.includes("Version mismatch")) {
@@ -193,6 +197,14 @@ export class GameManager {
     maxBuyIn?: number;
     blindStructure?: Array<{ smallBlind: number; bigBlind: number; ante: number }>;
     startingStack?: number;
+    ante?: number;
+    rakePercent?: number;
+    rakeCap?: number;
+    noFlopNoDrop?: boolean;
+    timeBankSeconds?: number;
+    timeBankDeductionSeconds?: number;
+    actionTimeoutSeconds?: number;
+    allowSpectators?: boolean;
   }): Promise<string> {
     const table = await this.prisma.table.create({
       data: {
@@ -207,11 +219,23 @@ export class GameManager {
       smallBlind: number;
       bigBlind: number;
       maxPlayers: number;
+      ante?: number;
+      rakePercent?: number;
+      rakeCap?: number;
+      noFlopNoDrop?: boolean;
+      timeBankSeconds?: number;
+      timeBankDeductionSeconds?: number;
       blindStructure?: Array<{ smallBlind: number; bigBlind: number; ante: number }>;
     } = {
       smallBlind: config.smallBlind,
       bigBlind: config.bigBlind,
       maxPlayers: config.maxPlayers,
+      ante: config.ante,
+      rakePercent: config.rakePercent,
+      rakeCap: config.rakeCap,
+      noFlopNoDrop: config.noFlopNoDrop,
+      timeBankSeconds: config.timeBankSeconds,
+      timeBankDeductionSeconds: config.timeBankDeductionSeconds,
     };
 
     // Add default blind structure for tournaments
@@ -226,7 +250,12 @@ export class GameManager {
     snapshot._version = 0;
 
     await Promise.all([
-      this.redis.set(`table:${table.id}`, JSON.stringify(snapshot), "EX", 86400),
+      this.redis.set(
+        `table:${table.id}`,
+        JSON.stringify(snapshot),
+        "EX",
+        appConfig.TABLE_REDIS_TTL_SECONDS
+      ),
       this.prisma.table.update({
         where: { id: table.id },
         data: { state: JSON.stringify(snapshot) },
@@ -278,7 +307,7 @@ export class GameManager {
         ? (JSON.parse(table.state) as Snapshot)
         : (table.state as unknown as Snapshot);
     snapshot._version = snapshot._version ?? 0;
-    await this.redis.set(key, JSON.stringify(snapshot), "EX", 86400);
+    await this.redis.set(key, JSON.stringify(snapshot), "EX", appConfig.TABLE_REDIS_TTL_SECONDS);
     return snapshot;
   }
 
@@ -343,7 +372,9 @@ export class GameManager {
     if (!player) return;
 
     // Calculate timeout duration based on whether time bank is active
-    const baseTimeoutSeconds = state.config.timeBankSeconds ?? 30;
+    const storedConfig = state.config as typeof state.config & { actionTimeoutSeconds?: number };
+    const baseTimeoutSeconds =
+      storedConfig.actionTimeoutSeconds ?? appConfig.ACTION_TIMEOUT_SECONDS;
     let timeoutSeconds = baseTimeoutSeconds;
 
     // If time bank is active for this player, give them extended time

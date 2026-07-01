@@ -247,7 +247,7 @@ describe("Withdrawal Endpoint", () => {
     expect(paymentTx).toBeDefined();
     expect(paymentTx!.type).toBe("WITHDRAWAL");
     expect(paymentTx!.status).toBe("PENDING");
-    expect(paymentTx!.amountCredit).toBe(10000); // $100 in cents
+    expect(paymentTx!.amountCredit).toBe(10000n); // $100 in cents
 
     // Verify ledger entry was created and linked
     expect(body.ledgerEntryId).toBeDefined();
@@ -256,7 +256,7 @@ describe("Withdrawal Endpoint", () => {
     });
     expect(ledgerEntry).toBeDefined();
     expect(ledgerEntry!.type).toBe("WITHDRAWAL");
-    expect(ledgerEntry!.amount).toBe(-10000); // -$100 in cents
+    expect(ledgerEntry!.amount).toBe(-10000n); // -$100 in cents
 
     // Verify metadata contains proof
     const metadata = ledgerEntry!.metadata as any;
@@ -273,7 +273,7 @@ describe("Withdrawal Endpoint", () => {
         },
       },
     });
-    expect(mainAccount!.balance).toBe(90000); // $1000 - $100 = $900
+    expect(mainAccount!.balance).toBe(90000n); // $1000 - $100 = $900
 
     // Verify funds are held in PENDING_WITHDRAWAL account (recoverable)
     const pendingAccount = await prisma.account.findUnique({
@@ -286,11 +286,14 @@ describe("Withdrawal Endpoint", () => {
       },
     });
     expect(pendingAccount).toBeDefined();
-    expect(pendingAccount!.balance).toBe(10000); // $100 held
+    expect(pendingAccount!.balance).toBe(10000n); // $100 held
 
-    // Verify withdrawal was queued in Redis
-    const queuedId = await app.redis.rpop("withdrawal_queue");
-    expect(queuedId).toBe(body.ledgerEntryId);
+    // Verify withdrawal is durably available for admin DB polling
+    const queuedPaymentTx = await prisma.paymentTransaction.findUniqueOrThrow({
+      where: { id: body.id },
+    });
+    expect(queuedPaymentTx.ledgerEntryId).toBe(body.ledgerEntryId);
+    expect(queuedPaymentTx.recoveryState).toBe("AWAITING_BROADCAST");
   });
 
   it("should support idempotency key for duplicate withdrawal prevention", async () => {
@@ -344,14 +347,14 @@ describe("Withdrawal Endpoint", () => {
     });
     // After first withdrawal ($100) then second idempotent ($50), total debited should be $150
     // Starting at $1000: $1000 - $100 - $50 = $850
-    expect(mainAccount!.balance).toBe(85000); // $1000 - $100 - $50 = $850
+    expect(mainAccount!.balance).toBe(85000n); // $1000 - $100 - $50 = $850
 
     // Verify PENDING_WITHDRAWAL holds the sum of both withdrawals
     const pendingAccount = await prisma.account.findUnique({
       where: { userId_currency_type: { userId, currency: "USDC", type: "PENDING_WITHDRAWAL" } },
     });
     expect(pendingAccount).toBeDefined();
-    expect(pendingAccount!.balance).toBe(15000); // $100 + $50 = $150 held
+    expect(pendingAccount!.balance).toBe(15000n); // $100 + $50 = $150 held
   });
 
   it("should accept withdrawal with nonce and timestamp in signed message", async () => {

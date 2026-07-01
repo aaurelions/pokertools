@@ -20,7 +20,7 @@ const worker = new Worker(
   "settle-hand",
   async (job) => {
     const { tableId, handId, playerNetChanges, rakeTotal } = job.data;
-    const rakeAmount = Number(rakeTotal);
+    const rakeAmount = BigInt(rakeTotal);
 
     const lockKey = `lock:table:${tableId}`;
     const lockToken = crypto.randomUUID();
@@ -36,13 +36,13 @@ const worker = new Worker(
         });
         if (existingSettlement) return;
 
-        if (rakeAmount > 0) {
+        if (rakeAmount > 0n) {
           const houseUserId = await getHouseUserId(prisma);
           const houseAccount = await tx.account.findUniqueOrThrow({
             where: {
               userId_currency_type: {
                 userId: houseUserId,
-                currency: "USDC",
+                currency: config.DEFAULT_CURRENCY,
                 type: "MAIN",
               },
             },
@@ -66,17 +66,17 @@ const worker = new Worker(
 
         // Process player changes
         for (const [userId, netChangeStr] of Object.entries(playerNetChanges)) {
-          const netChange = Number(netChangeStr);
-          if (netChange === 0) continue;
+          const netChange = BigInt(netChangeStr as string);
+          if (netChange === 0n) continue;
 
           const account = await tx.account.findUniqueOrThrow({
             where: {
-              userId_currency_type: { userId, currency: "USDC", type: "IN_PLAY" },
+              userId_currency_type: { userId, currency: config.DEFAULT_CURRENCY, type: "IN_PLAY" },
             },
           });
 
-          const newBalance = Number(account.balance) + netChange;
-          if (newBalance < 0) {
+          const newBalance = BigInt(account.balance) + netChange;
+          if (newBalance < 0n) {
             throw new Error(
               `Settlement would make IN_PLAY negative for user ${userId}: ${newBalance}`
             );
@@ -88,13 +88,13 @@ const worker = new Worker(
             data: {
               accountId: account.id,
               amount: netChange,
-              type: netChange > 0 ? "HAND_WIN" : "HAND_LOSS",
+              type: netChange > 0n ? "HAND_WIN" : "HAND_LOSS",
               referenceId: handId,
               metadata: { tableId },
             },
           });
 
-          if (netChange > 0) {
+          if (netChange > 0n) {
             await tx.account.update({
               where: { id: account.id },
               data: { balance: { increment: netChange } },
@@ -102,7 +102,7 @@ const worker = new Worker(
           } else {
             await tx.account.update({
               where: { id: account.id },
-              data: { balance: { decrement: Math.abs(netChange) } },
+              data: { balance: { decrement: -netChange } },
             });
           }
         }

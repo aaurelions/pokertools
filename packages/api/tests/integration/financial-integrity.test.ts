@@ -83,11 +83,11 @@ describe("Financial Integrity - Ledger and Balance Tests", () => {
     expect(inPlayCredit).toBeTruthy();
 
     // Amounts should be equal and opposite
-    expect(mainDebit?.amount).toBe(-2000);
-    expect(inPlayCredit?.amount).toBe(2000);
+    expect(mainDebit?.amount).toBe(-2000n);
+    expect(inPlayCredit?.amount).toBe(2000n);
 
     console.log(
-      `✅ Double-entry accounting verified: -${Math.abs(mainDebit!.amount)} MAIN, +${inPlayCredit!.amount} IN_PLAY`
+      `✅ Double-entry accounting verified: -${Number(mainDebit!.amount < 0n ? -mainDebit!.amount : mainDebit!.amount)} MAIN, +${Number(inPlayCredit!.amount)} IN_PLAY`
     );
 
     // =========================================================================
@@ -111,8 +111,8 @@ describe("Financial Integrity - Ledger and Balance Tests", () => {
       },
     });
 
-    expect(mainAccount?.balance).toBe(48000);
-    expect(inPlayAccount?.balance).toBe(2000);
+    expect(mainAccount?.balance).toBe(48000n);
+    expect(inPlayAccount?.balance).toBe(2000n);
 
     console.log(`✅ Account balances match ledger entries`);
 
@@ -346,8 +346,8 @@ describe("Financial Integrity - Ledger and Balance Tests", () => {
         });
 
         if (rakeEntries.length > 0) {
-          const totalRakeInLedger = rakeEntries.reduce((sum, entry) => sum + entry.amount, 0);
-          expect(totalRakeInLedger).toBeGreaterThan(0);
+          const totalRakeInLedger = rakeEntries.reduce((sum, entry) => sum + entry.amount, 0n);
+          expect(totalRakeInLedger).toBeGreaterThan(0n);
           console.log(`✅ House account received ${totalRakeInLedger} in rake`);
         }
       }

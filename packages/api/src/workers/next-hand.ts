@@ -52,7 +52,7 @@ const worker = new Worker(
           return;
         }
         stateJson = typeof table.state === "string" ? table.state : JSON.stringify(table.state);
-        await redis.set(`table:${tableId}`, stateJson, "EX", 86400);
+        await redis.set(`table:${tableId}`, stateJson, "EX", config.TABLE_REDIS_TTL_SECONDS);
       }
 
       const snapshot: Snapshot = JSON.parse(stateJson);
@@ -107,7 +107,7 @@ const worker = new Worker(
         `table:${tableId}`,
         expectedVersion.toString(),
         JSON.stringify(newSnapshot),
-        "86400"
+        String(config.TABLE_REDIS_TTL_SECONDS)
       )) as number;
 
       if (updateResult !== 1) {

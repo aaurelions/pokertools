@@ -1,5 +1,6 @@
 import { PrismaClient } from "../../../api/generated/prisma/index.js";
 import { BlockchainService } from "./blockchain-service.js";
+import { config } from "../config.js";
 import type { Logger } from "pino";
 
 export class TransactionMonitor {
@@ -17,7 +18,7 @@ export class TransactionMonitor {
   private async monitorLoop() {
     while (true) {
       await this.monitor();
-      await new Promise((resolve) => setTimeout(resolve, 60 * 1000));
+      await new Promise((resolve) => setTimeout(resolve, config.TRANSACTION_MONITOR_INTERVAL_MS));
     }
   }
 
@@ -47,26 +48,80 @@ export class TransactionMonitor {
           });
           this.logger.info(`Tx Confirmed: ${tx.txHash}`);
         } else {
+          // Transaction reverted: refund from PENDING_WITHDRAWAL back to MAIN
           await this.prisma.$transaction(async (db) => {
             const currentTx = await db.paymentTransaction.findUnique({
               where: { id: tx.id },
-              include: { ledgerEntry: true },
             });
-            if (!currentTx || currentTx.status === "FAILED" || !currentTx.ledgerEntry) return;
+            if (!currentTx || currentTx.status === "FAILED") return;
 
-            await db.account.update({
-              where: { id: currentTx.ledgerEntry.accountId },
-              data: { balance: { increment: Math.abs(currentTx.ledgerEntry.amount) } },
-            });
-            await db.ledgerEntry.create({
-              data: {
-                accountId: currentTx.ledgerEntry.accountId,
-                amount: Math.abs(currentTx.ledgerEntry.amount),
-                type: "REFUND",
-                referenceId: currentTx.ledgerEntry.id,
-                metadata: { reason: "Withdrawal transaction reverted", txHash: tx.txHash },
+            const userId = currentTx.userId;
+            const refundAmount = currentTx.amountCredit;
+
+            // Debit PENDING_WITHDRAWAL account (release held funds)
+            const pendingAccount = await db.account.findUnique({
+              where: {
+                userId_currency_type: {
+                  userId,
+                  currency: config.DEFAULT_CURRENCY,
+                  type: "PENDING_WITHDRAWAL",
+                },
               },
             });
+
+            if (pendingAccount && pendingAccount.balance >= refundAmount) {
+              await db.account.update({
+                where: { id: pendingAccount.id },
+                data: { balance: { decrement: refundAmount } },
+              });
+            }
+
+            // Credit MAIN account (return funds to available balance)
+            const mainAccount = await db.account.findUniqueOrThrow({
+              where: {
+                userId_currency_type: {
+                  userId,
+                  currency: config.DEFAULT_CURRENCY,
+                  type: "MAIN",
+                },
+              },
+            });
+
+            await db.account.update({
+              where: { id: mainAccount.id },
+              data: { balance: { increment: refundAmount } },
+            });
+
+            // Create REFUND ledger entries: credit MAIN, debit PENDING_WITHDRAWAL
+            await db.ledgerEntry.createMany({
+              data: [
+                {
+                  accountId: mainAccount.id,
+                  amount: refundAmount,
+                  type: "REFUND",
+                  referenceId: currentTx.id,
+                  metadata: {
+                    reason: "Withdrawal transaction reverted on chain",
+                    txHash: tx.txHash,
+                  },
+                },
+                ...(pendingAccount
+                  ? [
+                      {
+                        accountId: pendingAccount.id,
+                        amount: -refundAmount,
+                        type: "REFUND" as const,
+                        referenceId: currentTx.id,
+                        metadata: {
+                          reason: "PENDING_WITHDRAWAL release: withdrawal reverted on chain",
+                          txHash: tx.txHash,
+                        },
+                      },
+                    ]
+                  : []),
+              ],
+            });
+
             await db.paymentTransaction.update({
               where: { id: tx.id },
               data: { status: "FAILED", confirmedAt: new Date() },

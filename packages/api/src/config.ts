@@ -36,6 +36,8 @@ export const config = cleanEnv(process.env, {
   DATABASE_URL: str(),
   REDIS_URL: str({ default: "redis://localhost:6379" }),
 
+  DEFAULT_CURRENCY: str({ default: "USDC" }),
+
   JWT_SECRET: productionSecret(),
   COOKIE_SECRET: productionSecret(),
   WALLET_ENCRYPTION_SECRET: productionSecret(),
@@ -43,8 +45,28 @@ export const config = cleanEnv(process.env, {
     default: "",
     desc: "Separate secret for private wallet material (API should not have this set in production)",
   }),
+  PBKDF2_ITERATIONS: num({ default: 600_000 }),
 
   LOG_LEVEL: str({ default: "info", choices: ["debug", "info", "warn", "error"] }),
+
+  SESSION_TTL_SECONDS: num({ default: 7 * 24 * 60 * 60 }),
+  RATE_LIMIT_MAX: num({ default: 100 }),
+  AUTH_NONCE_RATE_LIMIT_MAX: num({ default: 5 }),
+  AUTH_LOGIN_RATE_LIMIT_MAX: num({ default: 10 }),
+  MAX_WITHDRAWAL_AMOUNT_CENTS: num({ default: 1_000_000 }),
+  TABLE_REDIS_TTL_SECONDS: num({ default: 24 * 60 * 60 }),
+  TABLE_LOCK_TTL_MS: num({ default: 10_000 }),
+  TABLE_LOCK_TTL_MS_TEST: num({ default: 15_000 }),
+  ACTION_TIMEOUT_SECONDS: num({ default: 30 }),
+  DEPOSIT_MONITOR_INTERVAL_MS: num({ default: 15_000 }),
+  RECONCILIATION_INTERVAL_MS: num({ default: 5 * 60 * 1000 }),
+  RISK_SCORE_THRESHOLD: num({ default: 70 }),
+  RISK_WITHDRAW_USER_LIMIT: num({ default: 5 }),
+  RISK_BUY_IN_USER_LIMIT: num({ default: 12 }),
+  RISK_ACTION_USER_LIMIT: num({ default: 60 }),
+  RISK_WITHDRAW_IP_LIMIT: num({ default: 20 }),
+  RISK_BUY_IN_IP_LIMIT: num({ default: 40 }),
+  RISK_ACTION_IP_LIMIT: num({ default: 200 }),
 
   // RPC configuration for blockchain clients
   RPC_RETRY_COUNT: num({ default: 3, desc: "Number of retries for RPC calls" }),

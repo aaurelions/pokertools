@@ -12,10 +12,10 @@
 #                  │ (BullMQ)│  │ (pg_dump)  │
 #                  └────┬────┘  └────────────┘
 #                       │
-#                  ┌────┴────┐
-#                  │  Redis  │
-#                  │  :6379  │
-#                  └─────────┘
+#                  ┌────┴────┐     ┌──────────┐
+#                  │  Redis  │     │  Admin   │
+#                  │  :6379  │     │(sweeper) │
+#                  └─────────┘     └──────────┘
 #
 # Only Caddy is publicly accessible (ports 80/443). All other services
 # communicate over an internal Docker bridge network.
@@ -123,9 +123,26 @@ services:
       COOKIE_SECRET: "${COOKIE_SECRET:?err: COOKIE_SECRET must be set}"
       WALLET_ENCRYPTION_SECRET: "${WALLET_ENCRYPTION_SECRET:?err: WALLET_ENCRYPTION_SECRET must be set}"
       WALLET_XPRIV_ENCRYPTION_SECRET: ${WALLET_XPRIV_ENCRYPTION_SECRET:-}
+      PBKDF2_ITERATIONS: ${PBKDF2_ITERATIONS:-600000}
       CORS_ORIGIN: ${CORS_ORIGIN:-}
       METRICS_TOKEN: ${METRICS_TOKEN:-}
       ALLOWED_SIWE_CHAIN_IDS: ${ALLOWED_SIWE_CHAIN_IDS:-1,31337}
+      DEFAULT_CURRENCY: ${DEFAULT_CURRENCY:-USDC}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-604800}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-100}
+      AUTH_NONCE_RATE_LIMIT_MAX: ${AUTH_NONCE_RATE_LIMIT_MAX:-5}
+      AUTH_LOGIN_RATE_LIMIT_MAX: ${AUTH_LOGIN_RATE_LIMIT_MAX:-10}
+      MAX_WITHDRAWAL_AMOUNT_CENTS: ${MAX_WITHDRAWAL_AMOUNT_CENTS:-1000000}
+      TABLE_REDIS_TTL_SECONDS: ${TABLE_REDIS_TTL_SECONDS:-86400}
+      TABLE_LOCK_TTL_MS: ${TABLE_LOCK_TTL_MS:-10000}
+      ACTION_TIMEOUT_SECONDS: ${ACTION_TIMEOUT_SECONDS:-30}
+      RISK_SCORE_THRESHOLD: ${RISK_SCORE_THRESHOLD:-70}
+      RISK_WITHDRAW_USER_LIMIT: ${RISK_WITHDRAW_USER_LIMIT:-5}
+      RISK_BUY_IN_USER_LIMIT: ${RISK_BUY_IN_USER_LIMIT:-12}
+      RISK_ACTION_USER_LIMIT: ${RISK_ACTION_USER_LIMIT:-60}
+      RISK_WITHDRAW_IP_LIMIT: ${RISK_WITHDRAW_IP_LIMIT:-20}
+      RISK_BUY_IN_IP_LIMIT: ${RISK_BUY_IN_IP_LIMIT:-40}
+      RISK_ACTION_IP_LIMIT: ${RISK_ACTION_IP_LIMIT:-200}
       TOURNAMENT_BLIND_INTERVAL_MS: ${TOURNAMENT_BLIND_INTERVAL_MS:-900000}
       TOURNAMENT_BLIND_SCAN_INTERVAL_MS: ${TOURNAMENT_BLIND_SCAN_INTERVAL_MS:-15000}
     networks:
@@ -184,7 +201,14 @@ services:
       COOKIE_SECRET: "${COOKIE_SECRET:?err: COOKIE_SECRET must be set}"
       WALLET_ENCRYPTION_SECRET: "${WALLET_ENCRYPTION_SECRET:?err: WALLET_ENCRYPTION_SECRET must be set}"
       WALLET_XPRIV_ENCRYPTION_SECRET: ${WALLET_XPRIV_ENCRYPTION_SECRET:-}
+      PBKDF2_ITERATIONS: ${PBKDF2_ITERATIONS:-600000}
       ALLOWED_SIWE_CHAIN_IDS: ${ALLOWED_SIWE_CHAIN_IDS:-1,31337}
+      DEFAULT_CURRENCY: ${DEFAULT_CURRENCY:-USDC}
+      TABLE_REDIS_TTL_SECONDS: ${TABLE_REDIS_TTL_SECONDS:-86400}
+      TABLE_LOCK_TTL_MS: ${TABLE_LOCK_TTL_MS:-10000}
+      ACTION_TIMEOUT_SECONDS: ${ACTION_TIMEOUT_SECONDS:-30}
+      DEPOSIT_MONITOR_INTERVAL_MS: ${DEPOSIT_MONITOR_INTERVAL_MS:-15000}
+      RECONCILIATION_INTERVAL_MS: ${RECONCILIATION_INTERVAL_MS:-300000}
       TOURNAMENT_BLIND_INTERVAL_MS: ${TOURNAMENT_BLIND_INTERVAL_MS:-900000}
       TOURNAMENT_BLIND_SCAN_INTERVAL_MS: ${TOURNAMENT_BLIND_SCAN_INTERVAL_MS:-15000}
     networks:
@@ -192,6 +216,81 @@ services:
     entrypoint: ["/bin/sh", "-lc"]
     command: ["node dist/workers.js"]
     working_dir: /app/packages/api
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M,mode=1777
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Admin — sweepers, withdrawal bot, gas/transaction monitors (internal only)
+  # ---------------------------------------------------------------------------
+  admin:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/aaurelions/pokertools:latest
+    pull_policy: build
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: "${DATABASE_URL:?err: DATABASE_URL must be set}"
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      DEFAULT_CURRENCY: ${DEFAULT_CURRENCY:-USDC}
+      JWT_SECRET: "${JWT_SECRET:?err: JWT_SECRET must be set}"
+      WALLET_ENCRYPTION_SECRET: "${WALLET_ENCRYPTION_SECRET:?err: WALLET_ENCRYPTION_SECRET must be set}"
+      WALLET_XPRIV_ENCRYPTION_SECRET: "${WALLET_XPRIV_ENCRYPTION_SECRET:?err: WALLET_XPRIV_ENCRYPTION_SECRET must be set}"
+      PBKDF2_ITERATIONS: ${PBKDF2_ITERATIONS:-600000}
+      MASTER_MNEMONIC: "${MASTER_MNEMONIC:?err: MASTER_MNEMONIC must be set}"
+      HOT_WALLET_DERIVATION_PATH: ${HOT_WALLET_DERIVATION_PATH:-m/44'/60'/0'/0/0}
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:?err: TELEGRAM_BOT_TOKEN must be set}"
+      TELEGRAM_ADMIN_CHAT_ID: "${TELEGRAM_ADMIN_CHAT_ID:?err: TELEGRAM_ADMIN_CHAT_ID must be set}"
+      BATCH_SWEEPER_ADDRESS_MAINNET: ${BATCH_SWEEPER_ADDRESS_MAINNET:-}
+      BATCH_SWEEPER_ADDRESS_POLYGON: ${BATCH_SWEEPER_ADDRESS_POLYGON:-}
+      BATCH_SWEEPER_ADDRESS_LOCAL: ${BATCH_SWEEPER_ADDRESS_LOCAL:-}
+      SWEEPER_CONTRACT_MAP: ${SWEEPER_CONTRACT_MAP:-}
+      MAX_GAS_PRICE_GWEI: ${MAX_GAS_PRICE_GWEI:-50}
+      MIN_SWEEP_VALUE_USD: ${MIN_SWEEP_VALUE_USD:-10}
+      LOW_GAS_THRESHOLD_ETH: ${LOW_GAS_THRESHOLD_ETH:-0.1}
+      MAX_SINGLE_WITHDRAWAL_USD: ${MAX_SINGLE_WITHDRAWAL_USD:-5000}
+      MAX_DAILY_WITHDRAWAL_USD: ${MAX_DAILY_WITHDRAWAL_USD:-50000}
+      RPC_RETRY_COUNT: ${RPC_RETRY_COUNT:-3}
+      RPC_RETRY_DELAY_MS: ${RPC_RETRY_DELAY_MS:-1000}
+      RPC_TIMEOUT_MS: ${RPC_TIMEOUT_MS:-10000}
+      CIRCUIT_BREAKER_FAILURE_THRESHOLD: ${CIRCUIT_BREAKER_FAILURE_THRESHOLD:-5}
+      CIRCUIT_BREAKER_OPEN_MS: ${CIRCUIT_BREAKER_OPEN_MS:-30000}
+      WITHDRAWAL_SIGNATURE_MAX_AGE_MS: ${WITHDRAWAL_SIGNATURE_MAX_AGE_MS:-300000}
+      WITHDRAWAL_POLL_INTERVAL_MS: ${WITHDRAWAL_POLL_INTERVAL_MS:-3000}
+      RECOVERY_SCAN_INTERVAL_MS: ${RECOVERY_SCAN_INTERVAL_MS:-300000}
+      TRANSACTION_MONITOR_INTERVAL_MS: ${TRANSACTION_MONITOR_INTERVAL_MS:-60000}
+      SWEEP_INTERVAL_MS: ${SWEEP_INTERVAL_MS:-600000}
+      GAS_MONITOR_INTERVAL_MS: ${GAS_MONITOR_INTERVAL_MS:-1800000}
+      STUCK_WITHDRAWAL_MAX_AGE_MS: ${STUCK_WITHDRAWAL_MAX_AGE_MS:-21600000}
+      ALLOWED_SIWE_CHAIN_IDS: ${ALLOWED_SIWE_CHAIN_IDS:-1,31337}
+    networks:
+      - internal
+    working_dir: /app/packages/admin
+    command: ["node", "dist/index.js"]
     deploy:
       resources:
         limits:

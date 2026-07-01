@@ -92,7 +92,7 @@ describe("Deposit Security Tests", () => {
       const account = await app.prisma.account.findFirst({
         where: { userId: user.id, type: "MAIN" },
       });
-      expect(account?.balance).toBe(0);
+      expect(account?.balance).toBe(0n);
 
       // Cleanup
       await app.prisma.paymentTransaction.delete({ where: { id: deposit.id } });
@@ -204,7 +204,7 @@ describe("Deposit Security Tests", () => {
       const account = await app.prisma.account.findFirst({
         where: { userId: user.id, type: "MAIN" },
       });
-      expect(account?.balance).toBe(5000);
+      expect(account?.balance).toBe(5000n);
 
       // Cleanup
       await app.prisma.paymentTransaction.delete({ where: { id: deposit.id } });
@@ -822,7 +822,7 @@ describe("Deposit Security Tests", () => {
       let account = await app.prisma.account.findFirstOrThrow({
         where: { userId: user.id, type: "MAIN" },
       });
-      expect(account.balance).toBe(10000);
+      expect(account.balance).toBe(10000n);
 
       // Attempt to credit again in a guarded transaction (simulating the guard)
       const deposit = await app.prisma.paymentTransaction.create({
@@ -892,7 +892,7 @@ describe("Deposit Security Tests", () => {
       account = await app.prisma.account.findFirstOrThrow({
         where: { userId: user.id, type: "MAIN" },
       });
-      expect(account.balance).toBe(20000); // 10000 (first) + 10000 (guarded once) = 20000
+      expect(account.balance).toBe(20000n); // 10000 (first) + 10000 (guarded once) = 20000
 
       // Cleanup
       await app.prisma.paymentTransaction.delete({ where: { id: deposit.id } });

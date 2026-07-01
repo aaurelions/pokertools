@@ -33,7 +33,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     {
       config: {
         rateLimit: {
-          max: config.NODE_ENV === "test" ? 100 : 5,
+          max: config.NODE_ENV === "test" ? 100 : config.AUTH_NONCE_RATE_LIMIT_MAX,
           timeWindow: "1 minute",
         },
       },
@@ -53,7 +53,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     {
       config: {
         rateLimit: {
-          max: config.NODE_ENV === "test" ? 100 : 10,
+          max: config.NODE_ENV === "test" ? 100 : config.AUTH_LOGIN_RATE_LIMIT_MAX,
           timeWindow: "1 minute",
         },
       },
@@ -136,7 +136,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
 
       // Create session
       const jti = crypto.randomUUID();
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      const expiresAt = new Date(Date.now() + config.SESSION_TTL_SECONDS * 1000);
 
       await fastify.prisma.session.create({
         data: { userId: user.id, jti, expiresAt },
@@ -145,14 +145,14 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       // Issue JWT
       const token = await reply.jwtSign(
         { userId: user.id, address: user.address, jti },
-        { jti, expiresIn: "7d" }
+        { jti, expiresIn: `${config.SESSION_TTL_SECONDS}s` }
       );
 
       reply.setCookie("token", token, {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
         sameSite: "strict",
-        maxAge: 7 * 24 * 60 * 60,
+        maxAge: config.SESSION_TTL_SECONDS,
         path: "/",
       });
 

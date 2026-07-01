@@ -39,11 +39,7 @@ type Candidate = [
 export class SweeperService {
   private isRunning = false;
   private sweepBreaker = new CircuitBreaker("sweep-broadcast");
-  private sweeperAddresses: Record<number, string> = {
-    137: config.BATCH_SWEEPER_ADDRESS_POLYGON,
-    1: config.BATCH_SWEEPER_ADDRESS_MAINNET,
-    31337: config.BATCH_SWEEPER_ADDRESS_LOCAL,
-  };
+  private sweeperAddresses = this.buildSweeperMap();
 
   constructor(
     private prisma: PrismaClient,
@@ -51,13 +47,35 @@ export class SweeperService {
     private logger: Logger
   ) {}
 
+  private buildSweeperMap(): Record<number, string> {
+    const fallback: Record<number, string> = {
+      137: config.BATCH_SWEEPER_ADDRESS_POLYGON,
+      1: config.BATCH_SWEEPER_ADDRESS_MAINNET,
+      31337: config.BATCH_SWEEPER_ADDRESS_LOCAL,
+    };
+
+    if (!config.SWEEPER_CONTRACT_MAP) {
+      return fallback;
+    }
+
+    try {
+      const parsed = JSON.parse(config.SWEEPER_CONTRACT_MAP) as Record<string, string>;
+      return Object.fromEntries(
+        Object.entries(parsed)
+          .map(([chainId, address]) => [Number(chainId), address] as const)
+          .filter(
+            ([chainId, address]) => Number.isInteger(chainId) && /^0x[a-fA-F0-9]{40}$/.test(address)
+          )
+      );
+    } catch {
+      throw new Error('SWEEPER_CONTRACT_MAP must be valid JSON: {"1":"0x..."}');
+    }
+  }
+
   async startCron() {
-    setInterval(
-      () => {
-        void this.run();
-      },
-      10 * 60 * 1000
-    ); // 10 minutes
+    setInterval(() => {
+      void this.run();
+    }, config.SWEEP_INTERVAL_MS);
     await this.run();
   }
 

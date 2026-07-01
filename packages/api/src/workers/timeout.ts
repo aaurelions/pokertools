@@ -31,7 +31,8 @@ const worker = new Worker(
     const { tableId, playerId, expectedVersion } = job.data;
 
     // Acquire distributed lock (same pattern as GameManager.processAction)
-    const lockTTL = process.env.NODE_ENV === "test" ? 15000 : 10000;
+    const lockTTL =
+      config.NODE_ENV === "test" ? config.TABLE_LOCK_TTL_MS_TEST : config.TABLE_LOCK_TTL_MS;
     let lock;
     try {
       lock = await redlock.acquire([`lock:table:${tableId}`], lockTTL);
@@ -127,7 +128,7 @@ const worker = new Worker(
           `table:${tableId}`,
           expectedVersion.toString(),
           JSON.stringify(newSnapshot),
-          "86400"
+          String(config.TABLE_REDIS_TTL_SECONDS)
         );
       } catch (err) {
         if (err instanceof Error && err.message.includes("Version mismatch")) {

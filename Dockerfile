@@ -40,6 +40,7 @@ COPY packages/engine/src packages/engine/src
 COPY packages/api/src packages/api/src
 COPY packages/api/types packages/api/types
 COPY packages/api/scripts packages/api/scripts
+COPY packages/admin/src packages/admin/src
 
 # ---- Generate Prisma client (output -> packages/api/generated/prisma) ----
 # prisma.config.ts requires DATABASE_URL at generation time.  A throw-away
@@ -54,17 +55,18 @@ RUN cd packages/api && \
 RUN node packages/api/scripts/export-schema.mjs
 
 # ---- Build workspace packages in topological order ----
-# Build dependency packages first, then the API itself.
-# We skip SDK, admin, and bench — the API runtime does not need them.
+# Build dependency packages first, then the API, then admin.
+# We skip SDK and bench — the API runtime does not need them.
 RUN npm run build -w @pokertools/types && \
     npm run build -w @pokertools/evaluator && \
     npm run build -w @pokertools/engine && \
-    npm run build -w @pokertools/api
+    npm run build -w @pokertools/api && \
+    npm run build -w @pokertools/admin
 
-# ---- Remove dev-only workspaces (not part of the API runtime) ----
+# ---- Remove dev-only workspaces (not part of the API/admin runtime) ----
 # This removes their package.json manifests so the following prune step drops
-# their entire dependency sub-trees (poker-evaluator ~178 MB, viem, grammy, etc.).
-RUN rm -rf packages/bench packages/admin packages/sdk
+# their entire dependency sub-trees (poker-evaluator ~178 MB, etc.).
+RUN rm -rf packages/bench packages/sdk
 
 # ---- Prune dev dependencies ----
 # Also removes packages that were only referenced by the workspaces deleted above.
@@ -182,6 +184,7 @@ COPY --from=build --chown=pokertools:pokertools /app/packages/types ./packages/t
 COPY --from=build --chown=pokertools:pokertools /app/packages/evaluator ./packages/evaluator
 COPY --from=build --chown=pokertools:pokertools /app/packages/engine ./packages/engine
 COPY --from=build --chown=pokertools:pokertools /app/packages/api ./packages/api
+COPY --from=build --chown=pokertools:pokertools /app/packages/admin ./packages/admin
 
 # ---- Entrypoint ----
 COPY --chown=pokertools:pokertools packages/api/scripts/docker-entrypoint.sh /app/docker-entrypoint.sh

@@ -21,6 +21,10 @@ export interface TableConfig {
   readonly timeBankSeconds?: number;
   /** Seconds deducted per time bank activation (default: 10). */
   readonly timeBankDeductionSeconds?: number;
+  /** Base decision timeout before time-bank extension is applied. */
+  readonly actionTimeoutSeconds?: number;
+  /** Whether authenticated non-seated users may subscribe as spectators. */
+  readonly allowSpectators?: boolean;
   /** RNG override. Omit to use the engine's secure Node crypto RNG. */
   readonly randomProvider?: () => number;
   /** Rake percentage 0-100 (cash games only, default: 0). */
