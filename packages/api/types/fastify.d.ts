@@ -3,6 +3,7 @@ import type { PrismaClient } from "../generated/prisma/index.js";
 import type { Redis } from "ioredis";
 import type Redlock from "redlock";
 import type { Queue } from "bullmq";
+import type { JobQueues } from "../src/plugins/queue.js";
 import type { FastifyRequest, FastifyReply } from "fastify";
 import type { GameManager } from "../src/services/game-manager.js";
 import type { SocketManager } from "../src/services/socket-manager.js";
@@ -29,6 +30,7 @@ declare module "fastify" {
     redis: Redis;
     redlock: Redlock;
     queue: Queue;
+    jobQueues: JobQueues;
     gameManager: GameManager;
     socketManager: SocketManager;
     financialManager: FinancialManager;

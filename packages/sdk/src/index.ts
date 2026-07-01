@@ -89,4 +89,9 @@ export type {
   LoginResponse,
   NonceResponse,
   TableListItem,
+  TournamentListItem,
+  TournamentDetails,
+  StartTournamentResponse,
+  ReconcileTournamentResponse,
+  SettleTournamentResponse,
 } from "@pokertools/types";

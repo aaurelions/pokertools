@@ -10,6 +10,22 @@ import {
 } from "@pokertools/types";
 import { reconcileTournament } from "../tournaments/index.js";
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function retryTransient<T>(operation: () => Promise<T>, attempts = 20): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts) break;
+      await sleep(250 * attempt);
+    }
+  }
+  throw lastError;
+}
+
 export const tableRoutes: FastifyPluginAsync = async (fastify) => {
   // GET /tables - List active tables
   fastify.get<{ Querystring: { mode?: "CASH" | "TOURNAMENT" } }>("/", async (request, reply) => {
@@ -154,35 +170,55 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
               code: "BUY_IN_ABOVE_MAXIMUM",
             });
           }
-          const state = await fastify.gameManager.getState(id);
-          const seatedPlayer = state.players[seat];
+          const lock = await fastify.redlock.acquire([`lock:table:${id}`], 10000);
+          let debited = false;
+          try {
+            const state = await fastify.gameManager.getState(id);
+            const seatedPlayer = state.players[seat];
 
-          if (seatedPlayer) {
-            if (seatedPlayer.id === userId) return { success: true };
-            throw Object.assign(new Error(`Seat ${seat} is already occupied`), {
-              statusCode: 400,
-              code: "SEAT_OCCUPIED",
+            if (seatedPlayer) {
+              if (seatedPlayer.id === userId) return { success: true };
+              throw Object.assign(new Error(`Seat ${seat} is already occupied`), {
+                statusCode: 400,
+                code: "SEAT_OCCUPIED",
+              });
+            }
+
+            await fastify.financialManager.buyIn(userId, id, amountNum);
+            debited = true;
+            const user = await fastify.prisma.user.findUniqueOrThrow({
+              where: { id: userId },
+              select: { username: true },
             });
+
+            await fastify.gameManager.processAction(
+              id,
+              {
+                type: "SIT" as ActionType.SIT,
+                playerId: userId,
+                playerName: user.username,
+                seat,
+                stack: amountNum,
+              },
+              userId,
+              { skipLock: true }
+            );
+            return { success: true };
+          } catch (error) {
+            if (debited) {
+              try {
+                await retryTransient(() => fastify.financialManager.cashOut(userId, id, amountNum));
+              } catch (rollbackError) {
+                fastify.log.error(
+                  { userId, tableId: id, amount: amountNum, error: rollbackError },
+                  "CRITICAL: failed to rollback buy-in after SIT failure"
+                );
+              }
+            }
+            throw error;
+          } finally {
+            await lock.release();
           }
-
-          await fastify.financialManager.buyIn(userId, id, amountNum);
-          const user = await fastify.prisma.user.findUniqueOrThrow({
-            where: { id: userId },
-            select: { username: true },
-          });
-
-          await fastify.gameManager.processAction(
-            id,
-            {
-              type: "SIT" as ActionType.SIT,
-              playerId: userId,
-              playerName: user.username,
-              seat,
-              stack: amountNum,
-            },
-            userId
-          );
-          return { success: true };
         },
       });
 
@@ -444,7 +480,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
 
       // Use the same table lock namespace as game actions/settlement so engine
       // state reads and financial writes are serialized for the table.
-      const lock = await fastify.redlock.acquire([`lock:table:${id}`], 5000);
+      const lock = await fastify.redlock.acquire([`lock:table:${id}`], 30000);
 
       try {
         const state = await fastify.gameManager.getState(id);
@@ -465,12 +501,59 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
         // We need to settle up the difference between current IN_PLAY and engine stack
         if (stack > 0) {
           try {
-            await fastify.prisma.$transaction(async (tx) => {
-              // First, sync the IN_PLAY balance to match engine reality
-              const delta = stack - currentInPlay;
+            await retryTransient(() =>
+              fastify.prisma.$transaction(async (tx) => {
+                // First, sync the IN_PLAY balance to match engine reality
+                const delta = stack - currentInPlay;
 
-              if (delta !== 0) {
-                const syncAmount = Math.abs(delta);
+                if (delta !== 0) {
+                  const syncAmount = Math.abs(delta);
+                  const inPlayAccount = await tx.account.findUniqueOrThrow({
+                    where: {
+                      userId_currency_type: {
+                        userId,
+                        currency: "USDC",
+                        type: "IN_PLAY",
+                      },
+                    },
+                  });
+
+                  await tx.ledgerEntry.create({
+                    data: {
+                      accountId: inPlayAccount.id,
+                      amount: delta,
+                      type: delta > 0 ? "HAND_WIN" : "HAND_LOSS",
+                      referenceId: id,
+                      metadata: { reason: "stand_engine_stack_sync", tableId: id },
+                    },
+                  });
+
+                  if (delta < 0) {
+                    await tx.account.update({
+                      where: {
+                        userId_currency_type: {
+                          userId,
+                          currency: "USDC",
+                          type: "IN_PLAY",
+                        },
+                      },
+                      data: { balance: { decrement: syncAmount } },
+                    });
+                  } else {
+                    await tx.account.update({
+                      where: {
+                        userId_currency_type: {
+                          userId,
+                          currency: "USDC",
+                          type: "IN_PLAY",
+                        },
+                      },
+                      data: { balance: { increment: syncAmount } },
+                    });
+                  }
+                }
+
+                // Cash out: move IN_PLAY -> MAIN with ledger entries
                 const inPlayAccount = await tx.account.findUniqueOrThrow({
                   where: {
                     userId_currency_type: {
@@ -481,42 +564,53 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
                   },
                 });
 
-                await tx.ledgerEntry.create({
-                  data: {
-                    accountId: inPlayAccount.id,
-                    amount: delta,
-                    type: delta > 0 ? "HAND_WIN" : "HAND_LOSS",
-                    referenceId: id,
-                    metadata: { reason: "stand_engine_stack_sync", tableId: id },
+                const mainAccount = await tx.account.findUniqueOrThrow({
+                  where: {
+                    userId_currency_type: {
+                      userId,
+                      currency: "USDC",
+                      type: "MAIN",
+                    },
                   },
                 });
 
-                if (delta < 0) {
-                  await tx.account.update({
-                    where: {
-                      userId_currency_type: {
-                        userId,
-                        currency: "USDC",
-                        type: "IN_PLAY",
-                      },
+                await tx.ledgerEntry.createMany({
+                  data: [
+                    {
+                      accountId: inPlayAccount.id,
+                      amount: -stack,
+                      type: "CASH_OUT",
+                      referenceId: id,
                     },
-                    data: { balance: { decrement: syncAmount } },
-                  });
-                } else {
-                  await tx.account.update({
-                    where: {
-                      userId_currency_type: {
-                        userId,
-                        currency: "USDC",
-                        type: "IN_PLAY",
-                      },
+                    {
+                      accountId: mainAccount.id,
+                      amount: stack,
+                      type: "CASH_OUT",
+                      referenceId: id,
                     },
-                    data: { balance: { increment: syncAmount } },
-                  });
-                }
-              }
+                  ],
+                });
 
-              // Cash out: move IN_PLAY -> MAIN with ledger entries
+                await tx.account.update({
+                  where: { id: inPlayAccount.id },
+                  data: { balance: { decrement: stack } },
+                });
+
+                await tx.account.update({
+                  where: { id: mainAccount.id },
+                  data: { balance: { increment: stack } },
+                });
+              })
+            );
+          } catch (cashOutError) {
+            fastify.log.error({ userId, error: cashOutError }, "Cash out failed");
+            throw new Error("Cash out failed. Please try again.", { cause: cashOutError });
+          }
+        } else if (currentInPlay > 0) {
+          // Player is busted (stack = 0) but still has IN_PLAY balance
+          // This means they lost all their chips, sync IN_PLAY to 0
+          await retryTransient(() =>
+            fastify.prisma.$transaction(async (tx) => {
               const inPlayAccount = await tx.account.findUniqueOrThrow({
                 where: {
                   userId_currency_type: {
@@ -526,75 +620,21 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
                   },
                 },
               });
-
-              const mainAccount = await tx.account.findUniqueOrThrow({
-                where: {
-                  userId_currency_type: {
-                    userId,
-                    currency: "USDC",
-                    type: "MAIN",
-                  },
+              await tx.ledgerEntry.create({
+                data: {
+                  accountId: inPlayAccount.id,
+                  amount: -currentInPlay,
+                  type: "HAND_LOSS",
+                  referenceId: id,
+                  metadata: { reason: "stand_busted_sync", tableId: id },
                 },
               });
-
-              await tx.ledgerEntry.createMany({
-                data: [
-                  {
-                    accountId: inPlayAccount.id,
-                    amount: -stack,
-                    type: "CASH_OUT",
-                    referenceId: id,
-                  },
-                  {
-                    accountId: mainAccount.id,
-                    amount: stack,
-                    type: "CASH_OUT",
-                    referenceId: id,
-                  },
-                ],
-              });
-
               await tx.account.update({
                 where: { id: inPlayAccount.id },
-                data: { balance: { decrement: stack } },
+                data: { balance: 0 },
               });
-
-              await tx.account.update({
-                where: { id: mainAccount.id },
-                data: { balance: { increment: stack } },
-              });
-            });
-          } catch (cashOutError) {
-            fastify.log.error({ userId, error: cashOutError }, "Cash out failed");
-            throw new Error("Cash out failed. Please try again.", { cause: cashOutError });
-          }
-        } else if (currentInPlay > 0) {
-          // Player is busted (stack = 0) but still has IN_PLAY balance
-          // This means they lost all their chips, sync IN_PLAY to 0
-          await fastify.prisma.$transaction(async (tx) => {
-            const inPlayAccount = await tx.account.findUniqueOrThrow({
-              where: {
-                userId_currency_type: {
-                  userId,
-                  currency: "USDC",
-                  type: "IN_PLAY",
-                },
-              },
-            });
-            await tx.ledgerEntry.create({
-              data: {
-                accountId: inPlayAccount.id,
-                amount: -currentInPlay,
-                type: "HAND_LOSS",
-                referenceId: id,
-                metadata: { reason: "stand_busted_sync", tableId: id },
-              },
-            });
-            await tx.account.update({
-              where: { id: inPlayAccount.id },
-              data: { balance: 0 },
-            });
-          });
+            })
+          );
         }
 
         // Only remove from table after successful cash out

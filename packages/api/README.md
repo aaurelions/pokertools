@@ -438,17 +438,18 @@ curl -X POST http://localhost:3000/tables/clx789ghi/action \
 ```
 
 **Allowed Actions:**
-| Action | Description | Amount Required |
-|--------|-------------|-----------------|
-| `BET` | Open betting | ✅ |
-| `RAISE` | Raise current bet | ✅ |
-| `CALL` | Match current bet | ❌ |
-| `CHECK` | Pass action | ❌ |
-| `FOLD` | Surrender hand | ❌ |
-| `DEAL` | Start new hand | ❌ |
-| `SHOW` | Show cards at showdown | ❌ |
-| `MUCK` | Hide cards at showdown | ❌ |
-| `TIME_BANK` | Use time bank | ❌ |
+
+| Action      | Description            | Amount Required |
+| ----------- | ---------------------- | --------------- |
+| `BET`       | Open betting           | ✅              |
+| `RAISE`     | Raise current bet      | ✅              |
+| `CALL`      | Match current bet      | ❌              |
+| `CHECK`     | Pass action            | ❌              |
+| `FOLD`      | Surrender hand         | ❌              |
+| `DEAL`      | Start new hand         | ❌              |
+| `SHOW`      | Show cards at showdown | ❌              |
+| `MUCK`      | Hide cards at showdown | ❌              |
+| `TIME_BANK` | Use time bank          | ❌              |
 
 **Response:**
 
@@ -841,9 +842,7 @@ const ws = new WebSocket("ws://localhost:3000/ws/play", "jwt.eyJhbGciOi...");
 {
   "type": "SNAPSHOT",
   "tableId": "clx789ghi",
-  "state": {
-    /* full game state */
-  },
+  "state": {/* full game state */},
   "version": 42,
   "timestamp": 1705316400000
 }
@@ -889,9 +888,7 @@ const ws = new WebSocket("ws://localhost:3000/ws/play", "jwt.eyJhbGciOi...");
   "type": "ERROR",
   "code": "INVALID_MESSAGE",
   "message": "Invalid message format",
-  "context": {
-    /* additional details */
-  }
+  "context": {/* additional details */}
 }
 ```
 

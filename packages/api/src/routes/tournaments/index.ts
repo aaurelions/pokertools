@@ -46,7 +46,7 @@ interface TournamentDetails extends TournamentListItem {
   tables: TournamentTableInfo[];
   entries: Array<{
     id: string;
-    userId: string;
+    userId?: string;
     username?: string;
     seat: number;
     status: "REGISTERED" | "ACTIVE" | "ELIMINATED" | "PAID";
@@ -597,6 +597,20 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
   );
 
   fastify.get<{ Params: { id: string } }>("/:id", async (request, reply) => {
+    let includePrivateFields = false;
+    if (request.headers.authorization) {
+      try {
+        await request.jwtVerify();
+        const { jti } = request.user;
+        const session = await fastify.prisma.session.findUnique({ where: { jti } });
+        if (session === null || session.revoked || session.expiresAt <= new Date()) {
+          throw new Error("Session invalid");
+        }
+        includePrivateFields = true;
+      } catch {
+        return reply.code(401).send({ error: "Unauthorized" });
+      }
+    }
     const tournament = await fastify.prisma.tournament.findUnique({
       where: { id: request.params.id },
       include: {
@@ -632,8 +646,7 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
       finishedAt: tournament.finishedAt?.toISOString() ?? null,
       entries: tournament.entries.map((entry) => ({
         id: entry.id,
-        userId: entry.userId,
-        username: entry.user.username,
+        ...(includePrivateFields ? { userId: entry.userId, username: entry.user.username } : {}),
         seat: entry.seat,
         status: entry.status,
         placement: entry.placement,
@@ -798,98 +811,136 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: errorMessage(error) });
       }
 
-      // Mark tournament as RUNNING
-      await fastify.prisma.tournament.update({
-        where: { id: tournament.id },
-        data: { status: "RUNNING", startedAt: new Date() },
-      });
-      await fastify.prisma.tournamentEntry.updateMany({
-        where: { tournamentId: tournament.id, status: "REGISTERED" },
-        data: { status: "ACTIVE" },
-      });
-
-      // Activate primary table
-      await fastify.prisma.table.update({
-        where: { id: tournament.tableId },
-        data: { status: "ACTIVE" },
-      });
-
-      // Create additional tables and sit players
-      const engineMax = Math.min(tournament.tableMaxPlayers, 10);
-
-      let entryIndex = 0;
+      const lock = await fastify.redlock.acquire([`lock:tournament:${tournament.id}`], 30000);
       const tableIds: string[] = [tournament.tableId];
+      const createdTableIds: string[] = [];
+      const seatedPlayers: Array<{ tableId: string; userId: string }> = [];
 
-      for (let tableIdx = 0; tableIdx < distribution.length; tableIdx++) {
-        const playersForTable = distribution[tableIdx];
-        let tableId: string;
-        if (tableIdx === 0) {
-          // Use primary table for first group
-          tableId = tournament.tableId;
-        } else {
-          // Create new table — use the first blind level from the structure
-          const blindLevel =
-            blindStructure.length > 0
-              ? blindStructure[0]
-              : { smallBlind: 25, bigBlind: 50, ante: 0 };
+      try {
+        // Mark tournament as RUNNING
+        await fastify.prisma.tournament.update({
+          where: { id: tournament.id },
+          data: { status: "RUNNING", startedAt: new Date() },
+        });
+        await fastify.prisma.tournamentEntry.updateMany({
+          where: { tournamentId: tournament.id, status: "REGISTERED" },
+          data: { status: "ACTIVE" },
+        });
 
-          tableId = await fastify.gameManager.createTable({
-            name: `${tournament.name} - Table ${tableIdx + 1}`,
-            mode: "TOURNAMENT",
-            smallBlind: blindLevel.smallBlind,
-            bigBlind: blindLevel.bigBlind,
-            maxPlayers: engineMax,
-            blindStructure,
-            startingStack: tournament.startingStack,
-          });
-          await fastify.prisma.table.update({
-            where: { id: tableId },
-            data: { tournamentId: tournament.id, status: "ACTIVE" },
-          });
-          tableIds.push(tableId);
+        // Activate primary table
+        await fastify.prisma.table.update({
+          where: { id: tournament.tableId },
+          data: { status: "ACTIVE" },
+        });
+
+        // Create additional tables and sit players
+        const engineMax = Math.min(tournament.tableMaxPlayers, 10);
+
+        let entryIndex = 0;
+
+        for (let tableIdx = 0; tableIdx < distribution.length; tableIdx++) {
+          const playersForTable = distribution[tableIdx];
+          let tableId: string;
+          if (tableIdx === 0) {
+            tableId = tournament.tableId;
+          } else {
+            const blindLevel =
+              blindStructure.length > 0
+                ? blindStructure[0]
+                : { smallBlind: 25, bigBlind: 50, ante: 0 };
+
+            tableId = await fastify.gameManager.createTable({
+              name: `${tournament.name} - Table ${tableIdx + 1}`,
+              mode: "TOURNAMENT",
+              smallBlind: blindLevel.smallBlind,
+              bigBlind: blindLevel.bigBlind,
+              maxPlayers: engineMax,
+              blindStructure,
+              startingStack: tournament.startingStack,
+            });
+            createdTableIds.push(tableId);
+            await fastify.prisma.table.update({
+              where: { id: tableId },
+              data: { tournamentId: tournament.id, status: "ACTIVE" },
+            });
+            tableIds.push(tableId);
+          }
+
+          for (let i = 0; i < playersForTable; i++) {
+            const entry = registeredEntries[entryIndex];
+            const seatIdx = i;
+
+            await fastify.gameManager.processAction(
+              tableId,
+              {
+                type: ActionType.SIT,
+                playerId: entry.userId,
+                playerName: entry.user.username,
+                seat: seatIdx,
+                stack: tournament.startingStack,
+              },
+              request.user.userId,
+              { skipIdentity: true }
+            );
+            seatedPlayers.push({ tableId, userId: entry.userId });
+
+            await fastify.prisma.tournamentEntry.update({
+              where: { id: entry.id },
+              data: { currentTableId: tableId, currentSeat: seatIdx },
+            });
+
+            entryIndex++;
+          }
         }
 
-        // Sit players into this table
-        for (let i = 0; i < playersForTable; i++) {
-          const entry = registeredEntries[entryIndex];
-          const seatIdx = i; // Seat index within the table
-
-          await fastify.gameManager.processAction(
-            tableId,
-            {
-              type: ActionType.SIT,
-              playerId: entry.userId,
-              playerName: entry.user.username,
-              seat: seatIdx,
-              stack: tournament.startingStack,
-            },
-            request.user.userId,
-            { skipIdentity: true }
-          );
-
-          await fastify.prisma.tournamentEntry.update({
-            where: { id: entry.id },
-            data: { currentTableId: tableId, currentSeat: seatIdx },
-          });
-
-          entryIndex++;
+        // Deal first hand on each table that has enough players
+        for (const tableId of tableIds) {
+          const state = await fastify.gameManager.getState(tableId);
+          const playerCount = state.players.filter((p: unknown) => p !== null).length;
+          if (playerCount >= 2) {
+            await fastify.gameManager.processAction(
+              tableId,
+              { type: "DEAL" } as Action,
+              request.user.userId
+            );
+          }
         }
+
+        return { success: true, tableIds, distribution };
+      } catch (error) {
+        for (const seated of seatedPlayers.reverse()) {
+          await fastify.gameManager
+            .processAction(
+              seated.tableId,
+              { type: ActionType.STAND, playerId: seated.userId },
+              request.user.userId,
+              { skipIdentity: true }
+            )
+            .catch((rollbackError: unknown) => {
+              fastify.log.error(
+                { tournamentId: tournament.id, seated, error: rollbackError },
+                "CRITICAL: failed to rollback tournament start seat"
+              );
+            });
+        }
+        await Promise.all(
+          createdTableIds.map(async (tableId) => {
+            await fastify.prisma.table.delete({ where: { id: tableId } }).catch(() => undefined);
+            await fastify.redis.del(`table:${tableId}`).catch(() => undefined);
+          })
+        );
+        await fastify.prisma.tournament.update({
+          where: { id: tournament.id },
+          data: { status: "REGISTRATION", startedAt: null },
+        });
+        await fastify.prisma.tournamentEntry.updateMany({
+          where: { tournamentId: tournament.id, status: "ACTIVE" },
+          data: { status: "REGISTERED", currentTableId: null, currentSeat: null },
+        });
+        throw error;
+      } finally {
+        await lock.release();
       }
-
-      // Deal first hand on each table that has enough players
-      for (const tableId of tableIds) {
-        const state = await fastify.gameManager.getState(tableId);
-        const playerCount = state.players.filter((p: unknown) => p !== null).length;
-        if (playerCount >= 2) {
-          await fastify.gameManager.processAction(
-            tableId,
-            { type: "DEAL" } as Action,
-            request.user.userId
-          );
-        }
-      }
-
-      return { success: true, tableIds, distribution };
     }
   );
 

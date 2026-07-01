@@ -17,7 +17,7 @@ const servicesPlugin: FastifyPluginAsync = async (fastify) => {
   const gameManager = new GameManager(
     fastify.redis,
     fastify.redlock,
-    fastify.queue,
+    fastify.jobQueues,
     fastify.prisma
   );
 

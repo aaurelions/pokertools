@@ -1,7 +1,8 @@
 import type { Redis } from "ioredis";
-import type { Queue } from "bullmq";
+import type { JobsOptions, Queue } from "bullmq";
 import type Redlock from "redlock";
 import type { PrismaClient } from "../../generated/prisma/index.js";
+import type { JobQueues } from "../plugins/queue.js";
 import {
   PokerEngine,
   type Action,
@@ -32,7 +33,7 @@ export class GameManager {
   constructor(
     private redis: Redis,
     private redlock: Redlock,
-    private queue: Queue,
+    private queues: JobQueues | Queue,
     private prisma: PrismaClient
   ) {}
 
@@ -148,7 +149,7 @@ export class GameManager {
         throw err;
       }
 
-      await this.queue.add("persist-snapshot", {
+      await this.enqueue("persist-snapshot", {
         tableId,
         snapshot: newSnapshot,
       });
@@ -307,15 +308,19 @@ export class GameManager {
     }
 
     // Schedule settlement (Engine calculated rake already)
-    await this.queue.add("settle-hand", {
-      tableId,
-      handId,
-      playerNetChanges,
-      rakeTotal: engine.state.rakeThisHand.toString(),
-    });
+    await this.enqueue(
+      "settle-hand",
+      {
+        tableId,
+        handId,
+        playerNetChanges,
+        rakeTotal: engine.state.rakeThisHand.toString(),
+      },
+      { jobId: `settle_${handId}`, attempts: 10, backoff: { type: "exponential", delay: 500 } }
+    );
 
     // Archive hand history
-    await this.queue.add("archive-hand", {
+    await this.enqueue("archive-hand", {
       tableId,
       handId,
       snapshot: engine.snapshot,
@@ -324,7 +329,7 @@ export class GameManager {
     // Auto-deal next hand if enough players
     const activePlayers = engine.state.players.filter((p) => p && p.stack > 0).length;
     if (activePlayers >= 2) {
-      await this.queue.add("next-hand", { tableId }, { delay: 5000 });
+      await this.enqueue("next-hand", { tableId }, { delay: 5000 });
     }
   }
 
@@ -350,7 +355,7 @@ export class GameManager {
 
     const timeoutMs = timeoutSeconds * 1000;
 
-    await this.queue.add(
+    await this.enqueue(
       "player-timeout",
       {
         tableId,
@@ -362,5 +367,17 @@ export class GameManager {
         jobId: `timeout_${tableId}_${state.actionTo}_${version}`,
       }
     );
+  }
+
+  private async enqueue(
+    queueName: keyof JobQueues,
+    data: Record<string, unknown>,
+    options?: JobsOptions
+  ): Promise<void> {
+    if (queueName in this.queues) {
+      await (this.queues as JobQueues)[queueName].add(queueName, data, options);
+      return;
+    }
+    await (this.queues as Queue).add(queueName, data, options);
   }
 }

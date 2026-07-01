@@ -44,6 +44,7 @@ export interface PokerSDKConfig {
 export interface UserBalances {
   main: number;
   inPlay: number;
+  pendingWithdrawal: number;
 }
 
 /**

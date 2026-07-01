@@ -12,6 +12,22 @@ const withdrawSchema = z.object({
   idempotencyKey: z.string().min(8).max(128).optional(),
 });
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function retryTransient<T>(operation: () => Promise<T>, attempts = 10): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts) break;
+      await sleep(100 * attempt);
+    }
+  }
+  throw lastError;
+}
+
 export const userRoutes: FastifyPluginAsync = async (fastify) => {
   // GET /user/me - Get user profile and balances
   fastify.get("/me", { onRequest: [fastify.authenticate] }, async (request) => {
@@ -45,16 +61,33 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/history", { onRequest: [fastify.authenticate] }, async (request) => {
     const { userId } = request.user;
 
-    const entries = await fastify.prisma.ledgerEntry.findMany({
-      where: {
-        account: { userId },
-        type: { in: ["HAND_WIN", "HAND_LOSS"] },
-      },
-      take: 20,
-      orderBy: { createdAt: "desc" },
-      include: {
-        account: { select: { type: true } },
-      },
+    const entries = await retryTransient(async () => {
+      const accounts = await fastify.prisma.account.findMany({
+        where: { userId },
+        select: { id: true },
+      });
+      const accountIds = accounts.map((account) => account.id);
+
+      return accountIds.length > 0
+        ? fastify.prisma.ledgerEntry.findMany({
+            where: {
+              accountId: { in: accountIds },
+              type: { in: ["HAND_WIN", "HAND_LOSS"] },
+            },
+            take: 20,
+            orderBy: { createdAt: "desc" },
+            select: {
+              id: true,
+              amount: true,
+              type: true,
+              referenceId: true,
+              createdAt: true,
+            },
+          })
+        : [];
+    }).catch((error: unknown) => {
+      fastify.log.warn({ userId, error }, "Unable to load user hand history");
+      return [];
     });
 
     return {
@@ -63,7 +96,10 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
         amount: entry.amount,
         type: entry.type,
         referenceId: entry.referenceId,
-        createdAt: entry.createdAt,
+        createdAt:
+          entry.createdAt instanceof Date
+            ? entry.createdAt.toISOString()
+            : new Date(entry.createdAt).toISOString(),
       })),
     };
   });

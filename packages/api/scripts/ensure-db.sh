@@ -100,9 +100,19 @@ if [ ! -d "generated/prisma" ]; then
   npx prisma generate
 fi
 
-# Run prisma db push to sync schema. Prisma 7 removed --skip-generate.
+# Production deploys are latest-schema only and must never accept data loss.
+# The application supports SQLite for local/test environments only; production
+# must use PostgreSQL and an explicit fresh-schema sync without destructive flags.
 set +e
-PUSH_OUTPUT=$(npx prisma db push --accept-data-loss 2>&1)
+if [ "${NODE_ENV:-}" = "production" ]; then
+  if [ "$DB_KIND" != "postgres" ]; then
+    echo "❌ Production requires a PostgreSQL DATABASE_URL. SQLite is only supported for local/test."
+    exit 1
+  fi
+  PUSH_OUTPUT=$(npx prisma db push 2>&1)
+else
+  PUSH_OUTPUT=$(npx prisma db push --accept-data-loss 2>&1)
+fi
 PUSH_EXIT_CODE=$?
 set -e
 

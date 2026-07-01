@@ -31,29 +31,27 @@ export class IdempotencyManager {
       where: { scope_key: { scope: input.scope, key: input.key } },
     });
 
-    if (existing) {
-      if (existing.userId !== input.userId || existing.requestHash !== input.requestHash) {
-        throw new IdempotencyConflictError(
-          "Idempotency key was already used for a different request"
-        );
-      }
-      if (existing.status === "COMPLETED" && existing.response) {
-        return { replayed: true, response: existing.response as T };
-      }
-      throw new IdempotencyInProgressError(
-        "A request with this idempotency key is still processing"
-      );
-    }
+    if (existing) return this.resolveExisting<T>(existing, input.userId, input.requestHash);
 
-    await this.prisma.idempotencyRecord.create({
-      data: {
-        key: input.key,
-        scope: input.scope,
-        userId: input.userId,
-        requestHash: input.requestHash,
-        expiresAt,
-      },
-    });
+    try {
+      await this.prisma.idempotencyRecord.create({
+        data: {
+          key: input.key,
+          scope: input.scope,
+          userId: input.userId,
+          requestHash: input.requestHash,
+          expiresAt,
+        },
+      });
+    } catch (error) {
+      if (this.isUniqueConstraintError(error)) {
+        const raced = await this.prisma.idempotencyRecord.findUniqueOrThrow({
+          where: { scope_key: { scope: input.scope, key: input.key } },
+        });
+        return this.resolveExisting<T>(raced, input.userId, input.requestHash);
+      }
+      throw error;
+    }
 
     try {
       const response = await input.handler();
@@ -80,5 +78,30 @@ export class IdempotencyManager {
       .sort()
       .map((k) => `${JSON.stringify(k)}:${this.stable((value as Record<string, unknown>)[k])}`)
       .join(",")}}`;
+  }
+
+  private resolveExisting<T extends Record<string, unknown>>(
+    existing: { userId: string; requestHash: string; status: string; response: unknown },
+    userId: string,
+    requestHash: string
+  ): { replayed: boolean; response: T } {
+    if (existing.userId !== userId || existing.requestHash !== requestHash) {
+      throw new IdempotencyConflictError(
+        "Idempotency key was already used for a different request"
+      );
+    }
+    if (existing.status === "COMPLETED" && existing.response) {
+      return { replayed: true, response: existing.response as T };
+    }
+    throw new IdempotencyInProgressError("A request with this idempotency key is still processing");
+  }
+
+  private isUniqueConstraintError(error: unknown): boolean {
+    return (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: string }).code === "P2002"
+    );
   }
 }

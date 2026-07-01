@@ -1253,9 +1253,7 @@ describe("Docker E2E Integration", () => {
       const curState = (curRes.data as { state: Record<string, unknown> }).state;
       const street = curState.street as string | undefined;
       const winners = curState.winners as
-        | Array<{ seat: number; amount: number }>
-        | null
-        | undefined;
+        Array<{ seat: number; amount: number }> | null | undefined;
       const actionTo = curState.actionTo as number | null | undefined;
 
       // Hand is complete if we have winners or street is SHOWDOWN with no action pending
@@ -1290,12 +1288,9 @@ describe("Docker E2E Integration", () => {
     const finalRes = await api("GET", `/tables/${tableId}`, undefined, player1.token);
     const finalState = (finalRes.data as { state: Record<string, unknown> }).state;
     const finalWinners = finalState.winners as
-      | Array<{ seat: number; amount: number }>
-      | null
-      | undefined;
+      Array<{ seat: number; amount: number }> | null | undefined;
     const finalPlayers = finalState.players as
-      | Array<{ stack: number; seat: number } | null>
-      | undefined;
+      Array<{ stack: number; seat: number } | null> | undefined;
 
     console.log(`[E2E] Post-hand street: ${finalState.street as string}`);
     console.log(
