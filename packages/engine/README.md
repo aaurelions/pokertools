@@ -11,6 +11,27 @@ A **production-ready** poker game engine featuring immutable state management, c
 
 ---
 
+## 📑 Table of Contents
+
+- [✨ Features](#-features)
+- [📦 Installation](#-installation)
+- [🚀 Quick Start](#-quick-start)
+- [🏗️ Architecture](#-architecture)
+- [📖 API Reference](#-api-reference)
+- [💰 Money Handling](#-money-handling)
+- [🏆 Tournament Mode](#-tournament-mode)
+- [🌐 Browser Usage](#-browser-usage)
+- [❌ Error Handling](#-error-handling)
+- [🎴 Action Types](#-action-types)
+- [📜 Hand History Export](#-hand-history-export)
+- [🔧 Utilities](#-utilities)
+- [🧪 Testing](#-testing)
+- [📊 State Structure](#-state-structure)
+- [🔗 Related Packages](#-related-packages)
+- [📄 License](#-license)
+
+---
+
 ## ✨ Features
 
 ```
@@ -145,20 +166,20 @@ const engine = new PokerEngine(config: TableConfig, timeProvider?: () => number)
 
 **TableConfig Options:**
 
-| Option              | Type           | Default       | Description                  |
-| ------------------- | -------------- | ------------- | ---------------------------- |
-| `smallBlind`        | `number`       | required      | Small blind amount           |
-| `bigBlind`          | `number`       | required      | Big blind amount             |
-| `ante`              | `number`       | `0`           | Ante per player              |
-| `maxPlayers`        | `number`       | `9`           | Maximum seats (2-10)         |
-| `blindStructure`    | `BlindLevel[]` | -             | Tournament blind levels      |
-| `timeBankSeconds`   | `number`       | `30`          | Time bank per player         |
-| `rakePercent`       | `number`       | `0`           | Rake percentage (0-100)      |
-| `rakeCap`           | `number`       | -             | Maximum rake per pot         |
-| `noFlopNoDrop`      | `boolean`      | `true`        | No rake if hand ends preflop |
-| `randomProvider`    | `() => number` | `Math.random` | RNG function                 |
-| `validateIntegrity` | `boolean`      | `true`        | Enable chip auditing         |
-| `isClient`          | `boolean`      | `false`       | Client/optimistic mode       |
+| Option              | Type           | Default             | Description                                        |
+| ------------------- | -------------- | ------------------- | -------------------------------------------------- |
+| `smallBlind`        | `number`       | required            | Small blind amount                                 |
+| `bigBlind`          | `number`       | required            | Big blind amount                                   |
+| `ante`              | `number`       | `0`                 | Ante per player                                    |
+| `maxPlayers`        | `number`       | `9`                 | Maximum seats (2-10)                               |
+| `blindStructure`    | `BlindLevel[]` | -                   | Tournament blind levels                            |
+| `timeBankSeconds`   | `number`       | `30`                | Time bank per player                               |
+| `rakePercent`       | `number`       | `0`                 | Rake percentage (0-100)                            |
+| `rakeCap`           | `number`       | -                   | Maximum rake per pot                               |
+| `noFlopNoDrop`      | `boolean`      | `true`              | No rake if hand ends preflop                       |
+| `randomProvider`    | `() => number` | `getSecureRandom()` | RNG function (Node.js crypto; never `Math.random`) |
+| `validateIntegrity` | `boolean`      | `true`              | Enable chip auditing                               |
+| `isClient`          | `boolean`      | `false`             | Client/optimistic mode                             |
 
 ---
 
@@ -452,7 +473,6 @@ const tournament = new PokerEngine({
   bigBlind: 50,
   ante: 5,
   maxPlayers: 9,
-  initialStack: 10000,
   blindStructure: [
     { smallBlind: 25, bigBlind: 50, ante: 5 },
     { smallBlind: 50, bigBlind: 100, ante: 10 },
@@ -461,6 +481,10 @@ const tournament = new PokerEngine({
     { smallBlind: 150, bigBlind: 300, ante: 50 },
   ],
 });
+
+// Seat players with their starting stacks
+tournament.sit(0, "alice", "Alice", 10000);
+tournament.sit(1, "bob", "Bob", 10000);
 
 // Advance blinds (e.g., on timer)
 tournament.nextBlindLevel();
@@ -524,12 +548,13 @@ try {
 
 **Available Error Codes:**
 
-| Category | Codes                                                                 |
-| -------- | --------------------------------------------------------------------- |
-| Player   | `PLAYER_NOT_FOUND`, `NOT_YOUR_TURN`, `NOT_SEATED`, `NO_CHIPS`         |
-| Betting  | `CANNOT_CHECK`, `NOTHING_TO_CALL`, `BET_TOO_SMALL`, `RAISE_TOO_SMALL` |
-| Deal     | `CANNOT_DEAL`, `NOT_ENOUGH_PLAYERS`                                   |
-| Seat     | `INVALID_SEAT`, `SEAT_OCCUPIED`, `INVALID_STACK`                      |
+| Category   | Codes                                                                                                   |
+| ---------- | ------------------------------------------------------------------------------------------------------- |
+| Player     | `PLAYER_NOT_FOUND`, `NOT_YOUR_TURN`, `PLAYER_NOT_ACTIVE`, `NOT_SEATED`, `NO_CHIPS`                      |
+| Betting    | `CANNOT_CHECK`, `NOTHING_TO_CALL`, `BET_TOO_SMALL`, `CANNOT_RAISE`, `CANNOT_RERAISE`, `RAISE_TOO_SMALL` |
+| Deal       | `CANNOT_DEAL`, `NOT_ENOUGH_PLAYERS`                                                                     |
+| Seat       | `INVALID_SEAT`, `SEAT_OCCUPIED`, `INVALID_STACK`                                                        |
+| Validation | `INVALID_ACTION`, `INVALID_AMOUNT`, `INVALID_TIMESTAMP`                                                 |
 
 ---
 
@@ -671,11 +696,11 @@ const restored = restoreFromSnapshot(JSON.parse(json));
 
 ## 🧪 Testing
 
-The engine includes 349 tests across 37 suites:
+The engine includes 349 tests across 38 suites:
 
 | Category       | Files | Description                  |
 | -------------- | ----- | ---------------------------- |
-| Unit           | 26    | Individual component tests   |
+| Unit           | 27    | Individual component tests   |
 | Integration    | 4     | Full game flow tests         |
 | Property       | 3     | Randomized invariant testing |
 | Bug Regression | 2     | Fixed bug verification       |
@@ -748,8 +773,6 @@ interface GameState {
 | [@pokertools/types](../types)         | Type definitions   |
 | [@pokertools/evaluator](../evaluator) | Hand evaluation    |
 | [@pokertools/api](../api)             | REST/WebSocket API |
-
----
 
 ## 📄 License
 

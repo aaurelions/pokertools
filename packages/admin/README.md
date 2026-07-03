@@ -1,8 +1,25 @@
-# @pokertools/admin
+# 🃏 @pokertools/admin
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-≥24.0.0-339933?logo=node.js)](https://nodejs.org)
 [![npm](https://img.shields.io/badge/npm-≥10.0.0-CB3837?logo=npm)](https://www.npmjs.com/)
+
+## Table of Contents
+
+- [🏗️ Architecture](#️-architecture)
+- [🧩 Key Components](#-key-components)
+  - [1. Sweeper Service](#1-sweeper-service-sweeperservicets)
+  - [2. Withdrawal Bot](#2-withdrawal-bot-withdrawalbotts)
+  - [🔄 Recovery Scanner](#-recovery-scanner)
+  - [3. Blockchain Service](#3-blockchain-service-blockchainservicets)
+  - [4. Monitors](#4-monitors)
+- [📄 Smart Contracts](#-smart-contracts)
+- [🛠️ Setup & Configuration](#️-setup--configuration)
+- [🚀 Usage](#-usage)
+- [🔒 Security](#-security)
+- [🧪 Testing](#-testing)
+- [📦 License](#-license)
+- [🔗 Related Packages](#-related-packages)
 
 The **Admin Service** is the financial backbone of the PokerTools platform. It handles off-chain fund aggregation ("sweeping"), processes user withdrawals with admin approval via Telegram, and monitors blockchain health.
 
@@ -69,6 +86,27 @@ A Telegram bot that acts as a security gatekeeper for outgoing funds.
 - **Security Checks**: Verifies nonce/timestamp withdrawal signatures at both queue time and approval time, checks daily withdrawal limits, uses Redis `SET NX EX` to prevent double-approval, and employs a circuit breaker for RPC resilience.
 - **Broadcast Safety**: Hot-wallet sends use coordinated nonces via Redis with bounded retry/backoff and circuit-breaker protection so withdrawals and sweeps do not race each other during RPC instability.
 
+#### 🔄 Recovery Scanner
+
+The recovery scanner (`runRecoveryScan` in `WithdrawalBot.ts`) automatically detects and recovers withdrawals stuck in non-terminal states. It runs immediately on startup, then periodically (configurable via `RECOVERY_SCAN_INTERVAL_MS`, default 5 minutes).
+
+**Recovery State Machine:**
+
+| State                | Description                                                                    | Action                                                                                                                                                       |
+| -------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `AWAITING_BROADCAST` | Withdrawal queued but never picked up (e.g., bot restart, queue gap)           | Auto-refund after `STUCK_WITHDRAWAL_MAX_AGE_MS` (default 6 hours); funds returned to MAIN account, payment marked `CANCELLED` with `RECOVERY_REFUNDED` state |
+| `BROADCASTING`       | Transaction being submitted to mempool                                         | Monitored; if broadcast fails, transitions to `BROADCAST_FAILED`                                                                                             |
+| `BROADCAST_FAILED`   | RPC error during broadcast attempt                                             | Admin alerted via Telegram with withdrawal details; manual intervention required (refund or retry)                                                           |
+| `STUCK_IN_MEMPOOL`   | Transaction broadcast but not confirmed on chain (low gas, network congestion) | Scanner checks on-chain receipt each cycle; auto-confirms if mined, marks `FAILED` + refunds if reverted                                                     |
+| `RECOVERY_REFUNDED`  | Terminal state: funds refunded by recovery scanner (auto-refund or rejected)   | No further action                                                                                                                                            |
+
+**Configuration:**
+
+| Variable                      | Default              | Description                                                     |
+| ----------------------------- | -------------------- | --------------------------------------------------------------- |
+| `RECOVERY_SCAN_INTERVAL_MS`   | `300000` (5 min)     | Interval between recovery scans                                 |
+| `STUCK_WITHDRAWAL_MAX_AGE_MS` | `21600000` (6 hours) | Age at which `AWAITING_BROADCAST` withdrawals are auto-refunded |
+
 ### 3. Blockchain Service (`BlockchainService.ts`)
 
 Provides Viem wallet clients, HD-wallet derivation, hot-wallet nonce coordination via Redis, and explorer link generation. Used by all other services.
@@ -121,6 +159,7 @@ HOT_WALLET_DERIVATION_PATH="m/44'/60'/0'/0/0"  # default: m/44'/60'/0'/0/0
 BATCH_SWEEPER_ADDRESS_MAINNET="0x…"
 BATCH_SWEEPER_ADDRESS_POLYGON="0x…"
 BATCH_SWEEPER_ADDRESS_LOCAL="0x…"       # for local Anvil/E2E tests
+# SWEEPER_CONTRACT_MAP={"1":"0x…","137":"0x…"}  # JSON map overriding per-chain sweeper addresses
 
 # ── Telegram ─────────────────────────────────────────
 TELEGRAM_BOT_TOKEN="123456:ABC-…"       # required
@@ -142,6 +181,7 @@ WITHDRAWAL_SIGNATURE_MAX_AGE_MS=300000  # default: 5 minutes
 # ── Security ─────────────────────────────────────────
 JWT_SECRET="…"                          # required
 WALLET_ENCRYPTION_SECRET="…"            # required; MUST differ from JWT_SECRET
+PBKDF2_ITERATIONS=600000               # default: 600_000; key derivation iterations (crypto.ts)
 
 # ── Velocity / Risk Limits ───────────────────────────
 MAX_SINGLE_WITHDRAWAL_USD=5000          # default: 5000
@@ -187,23 +227,25 @@ npm start
 
 ### Scripts
 
-| Script                    | Description                                     |
-| ------------------------- | ----------------------------------------------- |
-| `npm run dev`             | Watch-mode TypeScript via tsx                   |
-| `npm run build`           | TypeScript compilation                          |
-| `npm start`               | Run compiled entrypoint                         |
-| `npm run contracts:build` | Compile Solidity with Foundry                   |
-| `npm run contracts:test`  | Run Foundry unit tests                          |
-| `npm test`                | Full E2E test (Anvil + game + sweep + withdraw) |
-| `npm run typecheck`       | TypeScript type checking (no emit)              |
-| `npm run lint`            | ESLint                                          |
+| Script                     | Description                                     |
+| -------------------------- | ----------------------------------------------- |
+| `npm run dev`              | Watch-mode TypeScript via tsx                   |
+| `npm run build`            | TypeScript compilation                          |
+| `npm start`                | Run compiled entrypoint                         |
+| `npm run contracts:build`  | Compile Solidity with Foundry                   |
+| `npm run contracts:test`   | Run Foundry unit tests                          |
+| `npm test`                 | Unit tests (blockchain-service, withdrawal-bot) |
+| `npm run test:e2e`         | Full E2E test (Anvil + game + sweep + withdraw) |
+| `npm run test:stand-alone` | E2E test with automatic infra setup/teardown    |
+| `npm run typecheck`        | TypeScript type checking (no emit)              |
+| `npm run lint`             | ESLint                                          |
 
-### Testing
+### Scripts (E2E)
 
 The E2E test suite spins up a local Anvil chain, deploys contracts, simulates user deposits, plays a complete game, sweeps funds, and processes a withdrawal.
 
 ```bash
-npm test
+npm run test:e2e
 ```
 
 For standalone testing (spins up its own Redis):
@@ -211,6 +253,16 @@ For standalone testing (spins up its own Redis):
 ```bash
 npm run test:stand-alone
 ```
+
+## 🧪 Testing
+
+| Script                     | Description                                          | When to use                      |
+| -------------------------- | ---------------------------------------------------- | -------------------------------- |
+| `npm test`                 | Unit tests for blockchain-service and withdrawal-bot | Fast feedback during development |
+| `npm run test:e2e`         | Full E2E test requiring Anvil and Redis              | Pre-commit / CI validation       |
+| `npm run test:stand-alone` | E2E test with `infra:up` / `infra:down` wrappers     | One-shot local validation        |
+
+The unit tests (`blockchain-service.test.ts`, `withdrawal-bot.test.ts`) use Vitest and run against a local SQLite database. The E2E test (`full-lifecycle.test.ts`) requires a running Anvil chain and Redis instance.
 
 ## 🔒 Security
 
@@ -244,6 +296,14 @@ const hash = await withRetry(() => client.writeContract(…), breaker);
 - The `MASTER_MNEMONIC` may also be loaded from a Docker secret file via `MASTER_MNEMONIC_FILE`.
 - The `BATCH_SWEEPER_ADDRESS_LOCAL` variable serves the chain ID `31337` (Anvil) and is only needed for E2E testing.
 
----
+## 🔗 Related Packages
 
-Made with ♥ for the Poker Community.
+| Package                         | Description                          |
+| ------------------------------- | ------------------------------------ |
+| [@pokertools/api](../api)       | REST/WebSocket API and Prisma schema |
+| [@pokertools/types](../types)   | Shared TypeScript type definitions   |
+| [@pokertools/engine](../engine) | Game state machine                   |
+
+## 📄 License
+
+MIT © A.Aurelius

@@ -10,6 +10,30 @@ This package provides the **single source of truth** for all type definitions us
 
 ---
 
+## 📋 Table of Contents
+
+- [📦 Installation](#-installation)
+- [🏗️ Architecture Overview](#%EF%B8%8F-architecture-overview)
+- [📚 Type Categories](#-type-categories)
+- [🎮 Game State Types](#-game-state-types)
+- [👤 Player Types](#-player-types)
+- [🎯 Action Types](#-action-types)
+- [💰 Pot Types](#-pot-types)
+- [⚙️ Configuration Types](#%EF%B8%8F-configuration-types)
+- [📜 Hand History Types](#-hand-history-types)
+- [🔌 WebSocket Protocol](#-websocket-protocol)
+- [❌ Error Codes](#-error-codes)
+- [✅ Zod Validation Schemas](#-zod-validation-schemas)
+- [🌐 API DTOs](#-api-dtos)
+- [🎴 Card Representation](#-card-representation)
+- [📖 Complete Example](#-complete-example)
+- [🔧 TypeScript Configuration](#-typescript-configuration)
+- [🧪 Testing](#-testing)
+- [📄 License](#-license)
+- [🔗 Related Packages](#-related-packages)
+
+---
+
 ## 📦 Installation
 
 ```bash
@@ -57,18 +81,18 @@ pnpm add @pokertools/types
 
 ## 📚 Type Categories
 
-| Category          | Description               | Files                             |
-| ----------------- | ------------------------- | --------------------------------- |
-| 🎮 **Game State** | Core game state types     | `GameState.ts`, `PublicState.ts`  |
-| 👤 **Player**     | Player model and status   | `Player.ts`                       |
-| 🎯 **Actions**    | All game actions          | `Action.ts`, `ActionWhitelist.ts` |
-| 💰 **Pot**        | Pot management            | `Pot.ts`                          |
-| ⚙️ **Config**     | Table configuration       | `Config.ts`                       |
-| 📜 **History**    | Hand history records      | `HandHistory.ts`                  |
-| 🔌 **WebSocket**  | Real-time protocol        | `WebSocketMessages.ts`            |
-| ❌ **Errors**     | Error codes and responses | `ErrorCodes.ts`                   |
-| ✅ **Schemas**    | Zod validation schemas    | `schemas.ts`                      |
-| 🌐 **API**        | REST API DTOs             | `api/*.ts`                        |
+| Category          | Description               | Files                              |
+| ----------------- | ------------------------- | ---------------------------------- |
+| 🎮 **Game State** | Core game state types     | `game-state.ts`, `public-state.ts` |
+| 👤 **Player**     | Player model and status   | `player.ts`                        |
+| 🎯 **Actions**    | All game actions          | `action.ts`, `action-whitelist.ts` |
+| 💰 **Pot**        | Pot management            | `pot.ts`                           |
+| ⚙️ **Config**     | Table configuration       | `config.ts`                        |
+| 📜 **History**    | Hand history records      | `hand-history.ts`                  |
+| 🔌 **WebSocket**  | Real-time protocol        | `web-socket-messages.ts`           |
+| ❌ **Errors**     | Error codes and responses | `error-codes.ts`                   |
+| ✅ **Schemas**    | Zod validation schemas    | `schemas.ts`                       |
+| 🌐 **API**        | REST API DTOs             | `api/*.ts`                         |
 
 ---
 
@@ -300,6 +324,24 @@ const enum ActionType {
   // Tournament
   NEXT_BLIND_LEVEL = "NEXT_BLIND_LEVEL",
 }
+```
+
+### BaseAction
+
+```typescript
+import { BaseAction, ActionType } from "@pokertools/types";
+
+// Base interface shared by all actions
+interface BaseAction {
+  readonly type: ActionType;
+  readonly timestamp?: number; // Optional timestamp
+}
+
+// All concrete actions extend BaseAction:
+// SitAction, StandAction, DealAction, FoldAction, CheckAction,
+// CallAction, BetAction, RaiseAction, ShowAction, MuckAction,
+// AddChipsAction, ReserveSeatAction, TimeoutAction,
+// TimeBankAction, UncalledBetReturnedAction, NextBlindLevelAction
 ```
 
 ### Action Interfaces
@@ -568,6 +610,8 @@ interface TableConfig {
   blindStructure?: readonly BlindLevel[]; // Tournament schedule
   timeBankSeconds?: number; // Default: 30
   timeBankDeductionSeconds?: number; // Default: 10
+  actionTimeoutSeconds?: number; // Base decision timeout before time bank
+  allowSpectators?: boolean; // Allow non-seated spectators
   randomProvider?: () => number; // Default: Math.random
   rakePercent?: number; // 0-100, cash games
   rakeCap?: number; // Max rake per pot
@@ -1010,9 +1054,8 @@ const configResult = TableConfigSchema.safeParse({
 // Custom refinements
 // - bigBlind must be > smallBlind
 // - maxPlayers must be 2-10
-// - maxBuyIn >= minBuyIn (if both provided)
 
-// Create table request
+// Create table request (also validates maxBuyIn >= minBuyIn if both provided)
 const createResult = CreateTableSchema.safeParse({
   name: "High Stakes",
   mode: "CASH",
@@ -1057,17 +1100,60 @@ const gameActionResult = GameActionRequestSchema.safeParse({
 });
 ```
 
+### Tournament Schemas
+
+```typescript
+import {
+  TournamentPayoutSchema,
+  CreateTournamentSchema,
+  RegisterTournamentRequestSchema,
+  CreateTournamentRequest,
+  RegisterTournamentRequest,
+} from "@pokertools/types";
+
+// Tournament payout percentages (must sum to 100)
+const payouts = TournamentPayoutSchema.safeParse([65, 25, 10]);
+
+// Create tournament
+const createResult = CreateTournamentSchema.safeParse({
+  name: "Sunday Main Event",
+  buyIn: 1000,
+  fee: 100,
+  startingStack: 10000,
+  smallBlind: 25,
+  bigBlind: 50,
+  maxPlayers: 100,
+  tableMaxPlayers: 10,
+  balancingTolerance: 2,
+  startsAt: "2026-07-10T18:00:00Z",
+  blindStructure: [
+    { smallBlind: 25, bigBlind: 50, ante: 0 },
+    { smallBlind: 50, bigBlind: 100, ante: 10 },
+  ],
+  payoutPercentages: [40, 30, 20, 10],
+});
+
+// Register for a tournament
+const registerResult = RegisterTournamentRequestSchema.safeParse({
+  seat: 0,
+  idempotencyKey: "unique-key-789",
+});
+```
+
 ### Validation Rules Summary
 
-| Schema                    | Key Validations                                  |
-| ------------------------- | ------------------------------------------------ |
-| `SitActionSchema`         | seat: 0-9, stack: positive int, name: 1-50 chars |
-| `ReserveSeatActionSchema` | seat: 0-9, expiryTimestamp: positive int         |
-| `BetActionSchema`         | amount: positive int                             |
-| `RaiseActionSchema`       | amount: positive int                             |
-| `TableConfigSchema`       | bigBlind > smallBlind, maxPlayers: 2-10          |
-| `CreateTableSchema`       | mode: CASH\|TOURNAMENT, maxBuyIn >= minBuyIn     |
-| `BuyInRequestSchema`      | amount: positive int, idempotencyKey: required   |
+| Schema                            | Key Validations                                            |
+| --------------------------------- | ---------------------------------------------------------- |
+| `SitActionSchema`                 | seat: 0-9, stack: positive int, name: 1-50 chars           |
+| `ReserveSeatActionSchema`         | seat: 0-9, expiryTimestamp: positive int                   |
+| `BetActionSchema`                 | amount: positive int                                       |
+| `RaiseActionSchema`               | amount: positive int                                       |
+| `TableConfigSchema`               | bigBlind > smallBlind, maxPlayers: 2-10                    |
+| `CreateTableSchema`               | mode: CASH\|TOURNAMENT, maxBuyIn >= minBuyIn               |
+| `TournamentPayoutSchema`          | array of positive numbers, sum must equal 100              |
+| `CreateTournamentSchema`          | bigBlind > smallBlind, blind structure strictly increasing |
+| `RegisterTournamentRequestSchema` | seat >= 0, idempotencyKey required                         |
+| `BuyInRequestSchema`              | amount: positive int, idempotencyKey: required             |
 
 ---
 
@@ -1119,7 +1205,95 @@ interface GetTablesResponse {
 import { GameMode, TableStatus } from "@pokertools/types";
 
 type GameMode = "CASH" | "TOURNAMENT";
-type TableStatus = "WAITING" | "ACTIVE" | "FINISHED";
+type TableStatus = "WAITING" | "ACTIVE" | "PAUSED" | "CLOSED";
+```
+
+### Tournament Types
+
+```typescript
+import {
+  TournamentStatus,
+  TournamentEntryStatus,
+  TournamentEntryDto,
+  TournamentTableInfo,
+  TournamentListItem,
+  TournamentDetails,
+  StartTournamentResponse,
+  ReconcileTournamentResponse,
+  TournamentPayoutDto,
+  SettleTournamentResponse,
+} from "@pokertools/types";
+
+type TournamentStatus = "REGISTRATION" | "RUNNING" | "FINISHED" | "CANCELLED";
+type TournamentEntryStatus = "REGISTERED" | "ACTIVE" | "ELIMINATED" | "PAID";
+
+interface TournamentEntryDto {
+  id: string;
+  userId: string;
+  username?: string;
+  seat: number;
+  status: TournamentEntryStatus;
+  placement?: number | null;
+  prize: number;
+  currentTableId?: string | null;
+  currentSeat?: number | null;
+}
+
+interface TournamentTableInfo {
+  id: string;
+  status: string;
+  playerCount: number;
+}
+
+interface TournamentListItem {
+  id: string;
+  name: string;
+  status: TournamentStatus;
+  tableId: string;
+  buyIn: number;
+  fee: number;
+  startingStack: number;
+  maxPlayers: number;
+  tableMaxPlayers: number;
+  balancingTolerance: number;
+  registeredPlayers: number;
+  prizePool: number;
+  startsAt?: string | null;
+}
+
+interface TournamentDetails extends TournamentListItem {
+  blindStructure: Array<{ smallBlind: number; bigBlind: number; ante: number }>;
+  payoutPercentages: number[];
+  entries: TournamentEntryDto[];
+  tables: TournamentTableInfo[];
+  startedAt?: string | null;
+  finishedAt?: string | null;
+}
+
+interface StartTournamentResponse {
+  success: boolean;
+  tableIds: string[];
+  distribution: number[];
+}
+
+interface ReconcileTournamentResponse {
+  success: boolean;
+  tables: TournamentTableInfo[];
+  entries: TournamentEntryDto[];
+}
+
+interface TournamentPayoutDto {
+  userId: string;
+  placement: number;
+  amount: number;
+}
+
+interface SettleTournamentResponse {
+  success: boolean;
+  winnerUserId?: string;
+  prize?: number;
+  payouts?: TournamentPayoutDto[];
+}
 ```
 
 ---
@@ -1257,9 +1431,20 @@ For optimal type checking, use these compiler options:
 
 ---
 
-## 📄 License
+## 🧪 Testing
 
-MIT © A.Aurelius
+Run the full test suite from the monorepo root:
+
+```bash
+npm test -w @pokertools/types
+```
+
+The test suite consists of **150 tests** across 2 test suites covering:
+
+- **Zod Schema Validation** (`schemas.test.ts`) — validates all action schemas, config schemas, API request schemas, and tournament schemas including `maxBuyIn >= minBuyIn`, blind structure ordering, and payout percentage summation refinements.
+- **Schema Coverage** (`schema-coverage.test.ts`) — ensures every exported type interface has a corresponding Zod schema for runtime validation.
+
+All tests use **real input data** — no mocks or placeholders.
 
 ---
 
@@ -1270,3 +1455,7 @@ MIT © A.Aurelius
 | [@pokertools/engine](../engine)       | Game state machine |
 | [@pokertools/evaluator](../evaluator) | Hand evaluation    |
 | [@pokertools/api](../api)             | REST/WebSocket API |
+
+## 📄 License
+
+MIT © A.Aurelius

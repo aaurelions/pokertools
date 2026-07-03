@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.16] - 2026-07-03
+
+### Changed
+
+- Removed dead code (4 unused helper functions, ~170 lines) from the E2E Docker test file.
+- Downgraded admin sweeper per-wallet balance logging from info to debug level.
+- Corrected SDK README package descriptions (Fastify, not Express; lookup-table evaluator, not WASM).
+- Updated SECURITY.md engine RNG documentation to reflect the secure-by-default getSecureRandom() implementation.
+- Bumped dependencies: @types/node to 26.1.0, tsx to 4.22.5, viem to 2.54.2.
+
+### Documentation
+
+- Added Table of Contents to 7 READMEs that were missing one.
+- Added Testing, Configuration, and Error Handling sections to several package READMEs.
+- Corrected 13 factual inaccuracies across package READMEs (type definitions, test counts, version references).
+- Added missing env var documentation to API and Admin README configuration tables.
+
 ## [1.0.15] - 2026-06-30
 
 ### Fixed
@@ -500,6 +517,7 @@ Given a version number MAJOR.MINOR.PATCH:
 - [NPM: @pokertools/evaluator](https://www.npmjs.com/package/@pokertools/evaluator)
 - [NPM: @pokertools/types](https://www.npmjs.com/package/@pokertools/types)
 
+[1.0.16]: https://github.com/aaurelions/pokertools/compare/v1.0.15...v1.0.16
 [1.0.15]: https://github.com/aaurelions/pokertools/compare/v1.0.14...v1.0.15
 [1.0.11]: https://github.com/aaurelions/pokertools/compare/v1.0.10...v1.0.11
 [1.0.14]: https://github.com/aaurelions/pokertools/compare/v1.0.13...v1.0.14

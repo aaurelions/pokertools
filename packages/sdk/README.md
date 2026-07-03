@@ -1,9 +1,30 @@
-# @pokertools/sdk
+# 🃏 @pokertools/sdk
 
 [![npm version](https://img.shields.io/npm/v/@pokertools/sdk)](https://www.npmjs.com/package/@pokertools/sdk)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 The official TypeScript SDK for the **PokerTools** platform. Build real-time Texas Hold'em applications with ease, featuring robust state management, WebSocket integration, and React hooks.
+
+## Table of Contents
+
+- [✨ Features](#-features)
+- [📦 Installation](#-installation)
+- [🚀 Quick Start (React)](#-quick-start-react)
+- [🏗️ Architecture](#️-architecture)
+- [🔑 Authentication (SIWE)](#-authentication-siwe)
+- [📡 Real-time Events](#-real-time-events)
+- [🛠️ Configuration](#️-configuration)
+- [🔴 Error Handling](#-error-handling)
+- [🛠️ API Reference](#️-api-reference)
+  - [React Hooks](#react-hooks)
+  - [PokerClient (REST API)](#pokerclient-rest-api)
+  - [PokerSocket (WebSocket)](#pokersocket-websocket)
+  - [Auth Helpers (SIWE)](#auth-helpers-siwe)
+  - [Utilities](#utilities)
+  - [Main Exports](#main-exports)
+- [🧪 Testing](#-testing)
+- [📦 Related Packages](#-related-packages)
+- [📄 License](#-license)
 
 ## ✨ Features
 
@@ -278,6 +299,89 @@ socket.leave("table-1");
 socket.disconnect();
 ```
 
+## 🛠️ Configuration
+
+All configuration flows through two main interfaces: `PokerSDKConfig` (for the REST client and SDK initialization) and the `PokerSocket` constructor options (for WebSocket-specific settings).
+
+### PokerSDKConfig
+
+Used by `new PokerClient(config)`, `new PokerSocket(config)`, and `<PokerProvider config={...}>`.
+
+| Option      | Type               | Default                                 | Description                                             |
+| ----------- | ------------------ | --------------------------------------- | ------------------------------------------------------- |
+| `baseUrl`   | `string`           | — **(required)**                        | API base URL (e.g., `"https://api.poker.example.com"`). |
+| `wsUrl`     | `string`           | baseUrl with `ws://`                    | WebSocket server URL.                                   |
+| `token`     | `string`           | `undefined`                             | JWT token for authentication.                           |
+| `timeout`   | `number`           | `30000`                                 | Request timeout in milliseconds.                        |
+| `retry`     | `RetryConfig`      | `{ count: 3, delay: 1000, backoff: 2 }` | Retry configuration.                                    |
+| `fetch`     | `typeof fetch`     | `globalThis.fetch`                      | Custom fetch implementation (e.g., for React Native).   |
+| `WebSocket` | `typeof WebSocket` | `globalThis.WebSocket`                  | Custom WebSocket implementation.                        |
+| `debug`     | `boolean`          | `false`                                 | Enable request/response debug logging.                  |
+
+### PokerSocket Constructor Options
+
+When constructing a `PokerSocket` directly (non-React):
+
+| Option              | Type               | Default                | Description                           |
+| ------------------- | ------------------ | ---------------------- | ------------------------------------- |
+| `url`               | `string`           | — **(required)**       | WebSocket server URL.                 |
+| `token`             | `string`           | — **(required)**       | JWT for subprotocol authentication.   |
+| `heartbeatInterval` | `number`           | `25000`                | Application-level ping interval (ms). |
+| `reconnectAttempts` | `number`           | `10`                   | Max reconnection attempts.            |
+| `reconnectDelay`    | `number`           | `1000`                 | Base reconnection delay (ms).         |
+| `maxReconnectDelay` | `number`           | `30000`                | Max reconnection delay (ms).          |
+| `WebSocket`         | `typeof WebSocket` | `globalThis.WebSocket` | Custom WebSocket implementation.      |
+| `debug`             | `boolean`          | `false`                | Enable debug logging.                 |
+
+Static factory: `PokerSocket.fromConfig(config: PokerSDKConfig)` creates a socket from a full SDK config object.
+
+## 🔴 Error Handling
+
+### PokerSDKError
+
+All SDK errors are thrown as `PokerSDKError` instances, which extend the standard `Error` class with additional metadata:
+
+```typescript
+import { PokerSDKError } from "@pokertools/sdk";
+
+try {
+  await client.buyIn("table-1", { amount: 500, seat: 3 });
+} catch (error) {
+  if (error instanceof PokerSDKError) {
+    console.log("Code:", error.code); // e.g., "NOT_MODIFIED", "VALIDATION_ERROR"
+    console.log("Status:", error.statusCode); // e.g., 304, 400, 429, 500
+    console.log("Details:", error.details); // Server-provided error details
+  }
+}
+```
+
+Common error codes:
+
+- `NOT_MODIFIED` (304) — State unchanged; returned by `getTableState()` when the version matches the `since` parameter.
+- `TIMEOUT` — Request exceeded the configured timeout.
+- `REQUEST_FAILED` — Network failure or max retries exhausted.
+
+### Retry Behavior
+
+`PokerClient` automatically retries failed requests using exponential backoff:
+
+1. **Retries**: Up to `3` attempts by default (configurable via `retry.count`).
+2. **Backoff**: Each retry waits `delay × backoff^attempt` ms (default: `1000ms × 2^n`).
+3. **Retryable errors**: 5xx server errors, network failures, and rate-limited (429) responses.
+4. **Non-retryable errors**: 4xx client errors (except 429) and aborted requests are not retried.
+
+### Debug Logging
+
+Set `debug: true` on `PokerSDKConfig` to enable verbose console output:
+
+```
+[PokerSDK] GET https://api.example.com/tables
+[PokerSDK] Response 200 (45ms)
+[PokerSDK] Retry 2/3 in 2000ms
+```
+
+This is useful during development for tracing request lifecycle and retry behavior.
+
 ## 🛠️ API Reference
 
 ### React Hooks
@@ -315,13 +419,13 @@ Returns the `PokerSocket` instance (or `null` if not connected).
 
 Returns:
 
-| Field       | Type                   | Description                                                       |
-| ----------- | ---------------------- | ----------------------------------------------------------------- |
-| `profile`   | `UserProfile \| null`  | Full profile including `username`, `address`, `role`, `balances`. |
-| `balances`  | `UserBalances \| null` | `{ main: number, inPlay: number }` in cents.                      |
-| `isLoading` | `boolean`              | Initial fetch in progress.                                        |
-| `error`     | `Error \| null`        | Fetch error if any.                                               |
-| `refresh()` | `() => Promise<void>`  | Re-fetch profile from API.                                        |
+| Field       | Type                   | Description                                                             |
+| ----------- | ---------------------- | ----------------------------------------------------------------------- |
+| `profile`   | `UserProfile \| null`  | Full profile including `username`, `address`, `role`, `balances`.       |
+| `balances`  | `UserBalances \| null` | `{ main: number; inPlay: number; pendingWithdrawal: number }` in cents. |
+| `isLoading` | `boolean`              | Initial fetch in progress.                                              |
+| `error`     | `Error \| null`        | Fetch error if any.                                                     |
+| `refresh()` | `() => Promise<void>`  | Re-fetch profile from API.                                              |
 
 #### `useTable(tableId, options?)`
 
@@ -589,4 +693,41 @@ Exported from `@pokertools/sdk` (25+ helpers for formatting, state inspection, a
 
 ---
 
-Made with ♥ for the Poker Community.
+## 🧪 Testing
+
+The SDK ships with a comprehensive test suite using [Vitest](https://vitest.dev/). Run all tests from the repository root:
+
+```bash
+npm test -w @pokertools/sdk
+```
+
+Or run them directly from the package directory:
+
+```bash
+cd packages/sdk && npx vitest run
+```
+
+The test suite comprises **7 test suites** covering:
+
+| Suite                       | Description                                          |
+| --------------------------- | ---------------------------------------------------- |
+| `auth.test.ts`              | SIWE helpers: message creation, parsing, expiry.     |
+| `client.test.ts`            | REST client: request lifecycle, retry, error paths.  |
+| `socket.test.ts`            | WebSocket client: connect, events, reconnect logic.  |
+| `react.test.tsx`            | React hooks: provider, state management, user data.  |
+| `edge-cases.test.ts`        | Boundary conditions and error-handling scenarios.    |
+| `types-regressions.test.ts` | Type-level regression safety for exported types.     |
+| `utils.test.ts`             | Formatting helpers, state inspection, display utils. |
+
+## 🔗 Related Packages
+
+| Package                               | Description                                  |
+| ------------------------------------- | -------------------------------------------- |
+| [@pokertools/types](../types)         | Shared TypeScript types and type guards.     |
+| [@pokertools/api](../api)             | REST/WebSocket API (Fastify)                 |
+| [@pokertools/engine](../engine)       | Core game engine and state machine.          |
+| [@pokertools/evaluator](../evaluator) | High-performance lookup-table hand evaluator |
+
+## 📄 License
+
+MIT © A.Aurelius

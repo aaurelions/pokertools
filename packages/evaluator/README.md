@@ -10,6 +10,25 @@ A blazing-fast poker hand evaluator using **perfect hash tables** and **lookup t
 
 ---
 
+## Table of Contents
+
+- [⚡ Performance](#-performance)
+- [📦 Installation](#-installation)
+- [🚀 Quick Start](#-quick-start)
+- [📖 API Reference](#-api-reference)
+- [🎯 Score System](#-score-system)
+- [🔧 Advanced Usage](#-advanced-usage)
+- [🧪 Testing](#-testing)
+- [⚙️ Configuration](#-configuration)
+- [🏗️ Architecture](#-architecture)
+- [⚠️ Important Notes](#-important-notes)
+- [📊 Combinatorics Verification](#-combinatorics-verification)
+- [🔗 Related Packages](#-related-packages)
+- [📄 License](#-license)
+- [🙏 Credits](#-credits)
+
+---
+
 ## ⚡ Performance
 
 ```
@@ -54,6 +73,7 @@ import {
   rank,
   rankBoard,
   rankDescription,
+  stringifyCardCode,
   HandRank,
 } from "@pokertools/evaluator";
 
@@ -409,6 +429,54 @@ console.log(rankDescription(handRank)); // "Straight" (A-K-Q-J-T)
 
 ---
 
+## 🧪 Testing
+
+The evaluator comes with a comprehensive test suite covering multiple dimensions of correctness.
+
+```bash
+# Run all tests for the evaluator package
+npm test -w @pokertools/evaluator
+```
+
+### Test Categories
+
+| Category           | File                             | Coverage                                                                                 |
+| ------------------ | -------------------------------- | ---------------------------------------------------------------------------------------- |
+| Basic correctness  | `tests/evaluator.test.ts`        | 5-card, 6-card, and 7-card hands across all 9 hand ranks                                 |
+| Edge cases         | `tests/edge-cases.test.ts`       | Steel wheel, tied hands, best-5-from-7 selection, score direction                        |
+| Input validation   | `tests/input-validation.test.ts` | Invalid card strings, wrong argument counts, boundary inputs                             |
+| Frequency analysis | `tests/frequency.test.ts`        | Combinatorial verification of all 2,598,960 5-card hands and all 20,358,520 6-card hands |
+
+### Frequency Tests
+
+The frequency tests verify that the evaluator produces mathematically correct hand-rank distributions over every possible combination:
+
+| Cards | Combinations | Run Time | Always Runs |
+| ----- | ------------ | -------- | ----------- |
+| 5     | 2,598,960    | ~200ms   | Yes         |
+| 6     | 20,358,520   | ~2s      | Yes         |
+| 7     | 133,784,560  | ~15s     | No (gated)  |
+
+The 7-card frequency test is gated behind an environment variable because it iterates over 134 million combinations. See [Configuration](#-configuration) for details on enabling it.
+
+---
+
+## ⚙️ Configuration
+
+The evaluator is a **pure function library** with no runtime configuration. There are no environment variables, config files, or constructor options to set — every exported function operates deterministically based solely on its inputs.
+
+### Heavy Tests
+
+When modifying the core evaluation logic, you can enable the full 7-card combinatorial frequency test to verify correctness against all 133,784,560 possible 7-card hands:
+
+```bash
+ENABLE_HEAVY_TESTS=true npm test -w @pokertools/evaluator
+```
+
+This flag is only relevant in development and has no effect on the built library.
+
+---
+
 ## 🏗️ Architecture
 
 ```
@@ -580,22 +648,6 @@ All hand frequencies match mathematically proven distributions.
 
 ---
 
-## 🔗 Related Packages
-
-| Package                         | Description            |
-| ------------------------------- | ---------------------- |
-| [@pokertools/types](../types)   | Type definitions       |
-| [@pokertools/engine](../engine) | Game state machine     |
-| [@pokertools/bench](../bench)   | Performance benchmarks |
-
----
-
-## 📄 License
-
-MIT © A.Aurelius
-
----
-
 ## 🙏 Credits
 
 Algorithm based on the perfect hash technique pioneered by:
@@ -605,3 +657,15 @@ Algorithm based on the perfect hash technique pioneered by:
 - Senzee's 5-card evaluator
 
 Optimized for TypeScript with lookup table compression and static buffer reuse.
+
+## 🔗 Related Packages
+
+| Package                         | Description            |
+| ------------------------------- | ---------------------- |
+| [@pokertools/types](../types)   | Type definitions       |
+| [@pokertools/engine](../engine) | Game state machine     |
+| [@pokertools/bench](../bench)   | Performance benchmarks |
+
+## 📄 License
+
+MIT © A.Aurelius

@@ -1,5 +1,15 @@
 # PokerTools Production Deployment
 
+## Table of Contents
+
+- [Architecture](#architecture)
+- [Quick Start](#quick-start)
+- [Services](#services)
+- [Backup & Restore](#backup--restore)
+- [Restore Integrity Test](#restore-integrity-test)
+- [Security Notes](#security-notes)
+- [Volumes](#volumes)
+
 ## Architecture
 
 ```
@@ -20,15 +30,17 @@ Internet ──► Caddy (:80/443) ──► API (:3000) ──► PostgreSQL (:
             Backup Service ────► PostgreSQL (:5432)
 ```
 
-- **Caddy**: Reverse proxy with automatic TLS (Let's Encrypt), HSTS, and security headers. The _only_ service with public port exposure (80/443).
+- **Caddy**: Reverse proxy with automatic TLS (Let's Encrypt), HSTS, CSP, and security headers; zstd/gzip compression; WebSocket passthrough for real-time game connections; JSON access logging; health-checked upstream proxy to the API. The _only_ service with public port exposure (80/443).
 - **API**: Fastify REST + WebSocket server. Internal network only.
 - **Worker**: Separate process running BullMQ job consumers (deposit monitor, hand settlement, etc.).
 - **Admin**: Fund sweeper, withdrawal approval bot (Telegram), gas monitor, and transaction monitor. Internal network only.
-- **PostgreSQL 17**: Primary relational database with persistent named volume.
+- **PostgreSQL 18**: Primary relational database with persistent named volume.
 - **Redis 8**: Caching, pub/sub, and BullMQ backing store with AOF persistence (`appendfsync everysec`).
 - **Backup**: Scheduled `pg_dump` service with configurable interval and retention.
 
 ## Quick Start
+
+> The production compose file (`docker-compose.prod.yml`) lives in the repository **root**, not inside `deploy/`. All `docker compose` commands below should be run from the project root.
 
 ### 1. Configure environment
 
@@ -156,5 +168,18 @@ Add a cron job on the Docker host:
 - **API not publicly exposed.** Only Caddy binds to host ports. The API, worker, Postgres, and Redis communicate over an internal Docker bridge network.
 - **HSTS enforced.** 2-year `max-age` with `includeSubDomains` and `preload`.
 - **Caddy auto-renews TLS.** Let's Encrypt certificates renew automatically 30 days before expiry.
+- **CADDY_ACME_EMAIL** (`.env.production`): Email address Caddy uses when registering with Let's Encrypt. Used for expiry notifications and account recovery. Optional but strongly recommended; leave unset to use Let's Encrypt's default (zero-staging) contact.
 - **Production secret guard.** The Docker entrypoint refuses to start if any secret matches a known dev/test default.
 - **Read-only rootfs.** API, worker, and admin containers run with `read_only: true` and minimal capabilities.
+
+## 🔗 Related Packages
+
+| Package                                | Description                       |
+| -------------------------------------- | --------------------------------- |
+| [@pokertools/api](../packages/api)     | REST/WebSocket API                |
+| [@pokertools/admin](../packages/admin) | Blockchain administration service |
+| [@pokertools/e2e](../packages/e2e)     | End-to-end integration tests      |
+
+## 📄 License
+
+MIT © A.Aurelius

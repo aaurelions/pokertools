@@ -206,41 +206,113 @@ npm run workers
 
 ### Environment Variables
 
-| Variable                   | Type     | Default                  | Description                                                                             |
-| -------------------------- | -------- | ------------------------ | --------------------------------------------------------------------------------------- |
-| `NODE_ENV`                 | `string` | `development`            | Environment mode (`development`, `production`, `test`)                                  |
-| `PORT`                     | `number` | `3000`                   | HTTP server port                                                                        |
-| `HOST`                     | `string` | `0.0.0.0`                | Bind address                                                                            |
-| `DATABASE_URL`             | `string` | **required**             | Prisma database URL (`file:` for SQLite, `postgresql://` for PostgreSQL)                |
-| `REDIS_URL`                | `string` | `redis://localhost:6379` | Redis connection                                                                        |
-| `JWT_SECRET`               | `string` | **required**             | JWT signing key                                                                         |
-| `COOKIE_SECRET`            | `string` | **required**             | Cookie signing key                                                                      |
-| `WALLET_ENCRYPTION_SECRET` | `string` | **required**             | Separate key for encrypted wallet material                                              |
-| `CORS_ORIGIN`              | `string` | `""`                     | CORS origin; must be set in production (empty = deny cross-origin). Dev/test allow all. |
-| `LOG_LEVEL`                | `string` | `info`                   | Pino log level (`debug`, `info`, `warn`, `error`)                                       |
-| `RPC_RETRY_COUNT`          | `number` | `3`                      | Blockchain RPC retries                                                                  |
-| `RPC_RETRY_DELAY`          | `number` | `1000`                   | Retry delay (ms)                                                                        |
-| `RPC_TIMEOUT`              | `number` | `10000`                  | RPC timeout (ms)                                                                        |
+#### Core Server
+
+| Variable      | Type     | Default       | Description                                                                             |
+| ------------- | -------- | ------------- | --------------------------------------------------------------------------------------- |
+| `NODE_ENV`    | `string` | `development` | Environment mode (`development`, `production`, `test`)                                  |
+| `PORT`        | `number` | `3000`        | HTTP server port                                                                        |
+| `HOST`        | `string` | `0.0.0.0`     | Bind address                                                                            |
+| `LOG_LEVEL`   | `string` | `info`        | Pino log level (`debug`, `info`, `warn`, `error`)                                       |
+| `CORS_ORIGIN` | `string` | `""`          | CORS origin; must be set in production (empty = deny cross-origin). Dev/test allow all. |
+
+#### Database & Redis
+
+| Variable       | Type     | Default                  | Description                                                              |
+| -------------- | -------- | ------------------------ | ------------------------------------------------------------------------ |
+| `DATABASE_URL` | `string` | **required**             | Prisma database URL (`file:` for SQLite, `postgresql://` for PostgreSQL) |
+| `REDIS_URL`    | `string` | `redis://localhost:6379` | Redis connection                                                         |
+
+#### Security & Authentication
+
+| Variable                         | Type     | Default      | Description                                                                              |
+| -------------------------------- | -------- | ------------ | ---------------------------------------------------------------------------------------- |
+| `JWT_SECRET`                     | `string` | **required** | JWT signing key (rejects known dev defaults in production)                               |
+| `COOKIE_SECRET`                  | `string` | **required** | Cookie signing key (rejects known dev defaults in production)                            |
+| `WALLET_ENCRYPTION_SECRET`       | `string` | **required** | Separate key for encrypted wallet material (rejects known dev defaults in production)    |
+| `WALLET_XPRIV_ENCRYPTION_SECRET` | `string` | `""`         | Separate secret for private wallet material (API should not have this set in production) |
+| `ALLOWED_SIWE_CHAIN_IDS`         | `string` | `"1,31337"`  | Comma-separated EIP-155 chain IDs accepted for SIWE login                                |
+| `SESSION_TTL_SECONDS`            | `number` | `604800`     | JWT session TTL in seconds (default 7 days)                                              |
+| `NONCE_TTL_SECONDS`              | `number` | `300`        | TTL of SIWE auth nonces in seconds                                                       |
+| `PBKDF2_ITERATIONS`              | `number` | `600000`     | Number of PBKDF2 iterations for key derivation                                           |
+
+#### Rate Limiting
+
+| Variable                    | Type     | Default | Description                             |
+| --------------------------- | -------- | ------- | --------------------------------------- |
+| `RATE_LIMIT_MAX`            | `number` | `100`   | Global rate limit (requests per minute) |
+| `AUTH_NONCE_RATE_LIMIT_MAX` | `number` | `5`     | Rate limit for `POST /auth/nonce`       |
+| `AUTH_LOGIN_RATE_LIMIT_MAX` | `number` | `10`    | Rate limit for `POST /auth/login`       |
+
+#### Game & Table
+
+| Variable                  | Type     | Default | Description                                         |
+| ------------------------- | -------- | ------- | --------------------------------------------------- |
+| `DEFAULT_CURRENCY`        | `string` | `USDC`  | Default currency for game accounts                  |
+| `TABLE_REDIS_TTL_SECONDS` | `number` | `86400` | Redis table state TTL in seconds (default 24 hours) |
+| `TABLE_LOCK_TTL_MS`       | `number` | `10000` | Redlock TTL for table operations (ms)               |
+| `TABLE_LOCK_TTL_MS_TEST`  | `number` | `15000` | Redlock TTL for table operations in test mode (ms)  |
+| `ACTION_TIMEOUT_SECONDS`  | `number` | `30`    | Player action timeout in seconds                    |
+| `AUTO_DEAL_DELAY_MS`      | `number` | `5000`  | Delay before auto-dealing the next hand (ms)        |
+| `TABLE_LISTING_PAGE_SIZE` | `number` | `50`    | Default page size for table listing                 |
+
+#### Financial & Risk Controls
+
+| Variable                      | Type     | Default   | Description                                                  |
+| ----------------------------- | -------- | --------- | ------------------------------------------------------------ |
+| `MAX_WITHDRAWAL_AMOUNT_CENTS` | `number` | `1000000` | Maximum withdrawal amount in cents (default $10,000)         |
+| `WITHDRAWAL_MESSAGE_TTL_MS`   | `number` | `300000`  | Max age of a signed withdrawal message in ms (default 5 min) |
+| `RISK_SCORE_THRESHOLD`        | `number` | `70`      | Maximum combined risk score before denial                    |
+| `RISK_WITHDRAW_USER_LIMIT`    | `number` | `5`       | Per-user withdrawal rate limit                               |
+| `RISK_BUY_IN_USER_LIMIT`      | `number` | `12`      | Per-user buy-in rate limit                                   |
+| `RISK_ACTION_USER_LIMIT`      | `number` | `60`      | Per-user gameplay action rate limit                          |
+| `RISK_WITHDRAW_IP_LIMIT`      | `number` | `20`      | Per-IP withdrawal rate limit                                 |
+| `RISK_BUY_IN_IP_LIMIT`        | `number` | `40`      | Per-IP buy-in rate limit                                     |
+| `RISK_ACTION_IP_LIMIT`        | `number` | `200`     | Per-IP gameplay action rate limit                            |
+| `IDEMPOTENCY_TTL_SECONDS`     | `number` | `3600`    | TTL for idempotency records in seconds                       |
+
+#### Tournament
+
+| Variable                            | Type     | Default  | Description                                                       |
+| ----------------------------------- | -------- | -------- | ----------------------------------------------------------------- |
+| `TOURNAMENT_BLIND_INTERVAL_MS`      | `number` | `900000` | Interval between automatic blind level advances (ms, default 15m) |
+| `TOURNAMENT_BLIND_SCAN_INTERVAL_MS` | `number` | `15000`  | Tournament blind worker scan interval (ms, default 15s)           |
+| `TOURNAMENT_LOCK_TTL_MS`            | `number` | `30000`  | Redlock TTL for tournament operations (ms)                        |
+| `TOURNAMENT_LISTING_PAGE_SIZE`      | `number` | `100`    | Default page size for tournament listing                          |
+| `MAX_TOURNAMENT_TABLES`             | `number` | `10`     | Maximum tables allowed in a multi-table tournament                |
+| `RECONCILIATION_INTERVAL_MS`        | `number` | `300000` | Tournament reconciliation interval (ms, default 5 min)            |
+
+#### Blockchain & Deposits
+
+| Variable                         | Type     | Default | Description                                           |
+| -------------------------------- | -------- | ------- | ----------------------------------------------------- |
+| `RPC_RETRY_COUNT`                | `number` | `3`     | Blockchain RPC retries                                |
+| `RPC_RETRY_DELAY`                | `number` | `1000`  | Retry delay (ms)                                      |
+| `RPC_TIMEOUT`                    | `number` | `10000` | RPC timeout (ms)                                      |
+| `DEPOSIT_MONITOR_INTERVAL_MS`    | `number` | `15000` | Deposit scan interval (ms)                            |
+| `INITIAL_SCAN_LOOKBACK_BLOCKS`   | `number` | `100`   | Blocks to look back on first deposit scan             |
+| `DEPOSIT_SCAN_CONCURRENCY`       | `number` | `5`     | Deposit monitor worker concurrency                    |
+| `DEPOSIT_SCAN_MAX_RPCS`          | `number` | `10`    | Max RPC calls per second for deposit monitor          |
+| `DEPOSIT_SCAN_LIMIT_DURATION_MS` | `number` | `1000`  | Duration window for deposit monitor rate limiter (ms) |
+
+#### Observability & Metrics
+
+| Variable             | Type     | Default   | Description                                                                                                                       |
+| -------------------- | -------- | --------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `METRICS_TOKEN`      | `string` | `""`      | Bearer token required for `/metrics` in production. If unset in production, `/metrics` is disabled.                               |
+| `ENABLE_TEST_ROUTES` | `string` | `"false"` | Explicit opt-in for test-only balance/state mutation routes (`"true"` / `"false"`). Must never be enabled outside isolated tests. |
+
+#### WebSocket
+
+| Variable                      | Type     | Default | Description                                   |
+| ----------------------------- | -------- | ------- | --------------------------------------------- |
+| `WS_MAX_CONNECTIONS_PER_USER` | `number` | `4`     | Max concurrent WebSocket connections per user |
+| `WS_MAX_PRE_AUTH_QUEUE`       | `number` | `8`     | Max buffered pre-auth WebSocket messages      |
+| `WS_HEARTBEAT_INTERVAL_MS`    | `number` | `30000` | WebSocket heartbeat ping interval (ms)        |
 
 ### Validation
 
-Configuration is validated at startup using `envalid`:
-
-```typescript
-import { cleanEnv, str, num } from "envalid";
-
-export const config = cleanEnv(process.env, {
-  NODE_ENV: str({ choices: ["development", "production", "test"] }),
-  PORT: num({ default: 3000 }),
-  DATABASE_URL: str(),
-  REDIS_URL: str({ default: "redis://localhost:6379" }),
-  JWT_SECRET: str(),
-  COOKIE_SECRET: str(),
-  WALLET_ENCRYPTION_SECRET: str(),
-  CORS_ORIGIN: str({ default: "" }),
-  LOG_LEVEL: str({ default: "info", choices: ["debug", "info", "warn", "error"] }),
-});
-```
+Configuration is validated at startup using `envalid` with production security gates that reject well-known dev secrets. See `src/config.ts` for the full validation schema.
 
 ---
 
@@ -779,8 +851,14 @@ Returns `503` when overall status is `"down"`, `200` when `"degraded"` or `"ok"`
 
 Prometheus-format metrics endpoint for scraping by monitoring systems.
 
+**Authentication in production:** The `/metrics` endpoint requires a `Bearer` token matching the `METRICS_TOKEN` environment variable when `NODE_ENV=production`. If `METRICS_TOKEN` is not set in production, the endpoint returns `404`. In development and test modes, no authentication is required.
+
 ```bash
+# Development / test (no auth required)
 curl http://localhost:3000/metrics
+
+# Production (bearer auth required)
+curl -H "Authorization: Bearer your-metrics-token" http://localhost:3000/metrics
 ```
 
 Exposes counters: `pokertools_http_requests_total`, `pokertools_game_actions_total`, `pokertools_risk_denials_total`, `pokertools_idempotency_hits_total`, `pokertools_audit_log_failures_total`, plus process uptime gauge.
@@ -1669,7 +1747,7 @@ export async function initTestContext(
 ### Test Coverage
 
 ```
- Test Files  23 passed (23)
+ Test Files  30 passed (30)
       Tests  100+ passed
    Duration  30-45s
 
@@ -1753,12 +1831,6 @@ To run the API with PostgreSQL instead of SQLite, set `DATABASE_URL` to a Postgr
 
 ---
 
-## 📜 License
-
-MIT © [A.Aurelius](https://github.com/aaurelions)
-
----
-
 ## 🔗 Related Packages
 
 | Package                               | Description                   |
@@ -1766,3 +1838,7 @@ MIT © [A.Aurelius](https://github.com/aaurelions)
 | [@pokertools/types](../types)         | Shared TypeScript definitions |
 | [@pokertools/engine](../engine)       | Core game logic               |
 | [@pokertools/evaluator](../evaluator) | Hand evaluation               |
+
+## 📄 License
+
+MIT © A.Aurelius

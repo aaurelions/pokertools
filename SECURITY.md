@@ -61,32 +61,43 @@ The server verifies the JWT, checks session validity, and passes a `userId` into
 
 ### Engine RNG
 
-The engine's default `randomProvider` falls back to `Math.random()`, which is **not** cryptographically secure. In any production deployment you must provide a cryptographically secure random function.
+The engine defaults to a **cryptographically secure** random number generator powered by Node.js `crypto.randomBytes`. It uses a fail-closed design: if no secure RNG source is available (e.g., in a non-Node.js runtime without a polyfill), it **throws an error** rather than falling back to an insecure alternative.
+
+**`Math.random()` is never used as a default.** The only way `Math.random()` could be used is if a user explicitly passes it as a custom `randomProvider` — which is a documented security anti-pattern.
 
 ```typescript
-import { randomBytes } from "crypto";
 import { PokerEngine } from "@pokertools/engine";
 
-// Cryptographically secure RNG
-const secureRng = () => {
-  const buffer = randomBytes(4);
-  return buffer.readUInt32BE(0) / 0x100000000;
-};
-
+// ✅ Secure by default — uses crypto.randomBytes internally
 const engine = new PokerEngine({
   smallBlind: 10,
   bigBlind: 20,
-  randomProvider: secureRng,
+  // No randomProvider needed — the default is cryptographically secure
 });
 ```
 
-### Why Math.random() is Dangerous
+### Custom randomProvider (Testing / Determinism)
 
-`Math.random()` uses a predictable pseudo-random algorithm:
+For testing, simulations, or deterministic replay, you can inject a custom `randomProvider`. The default secure RNG is only used when `randomProvider` is omitted.
 
-1. **State is guessable** — Given enough observations, attackers can predict future cards.
-2. **Seed extraction** — Browser implementations leak seed via timing attacks.
-3. **Not cryptographically secure** — Designed for animations, not security.
+```typescript
+import { PokerEngine } from "@pokertools/engine";
+
+// For deterministic testing, supply a seeded RNG:
+const engine = new PokerEngine({
+  smallBlind: 10,
+  bigBlind: 20,
+  randomProvider: mySeededRng, // () => number
+});
+```
+
+### Why the default is secure
+
+`crypto.randomBytes` uses the operating system's cryptographically secure entropy source (`/dev/urandom` on Linux/macOS, `BCryptGenRandom` on Windows). This means:
+
+1. **Unguessable output** — Observing previous shuffles reveals nothing about future shuffles.
+2. **No seed extraction** — Unlike PRNGs like `Math.random()`, the system entropy pool cannot be reconstructed from output.
+3. **Fail-closed** — If `crypto.randomBytes` is unavailable (e.g., restricted runtime), the engine throws a descriptive error rather than silently downgrading to an insecure generator.
 
 ---
 
@@ -277,5 +288,5 @@ This security policy is part of the PokerTools project and follows the same MIT 
 
 ---
 
-**Last Updated**: 2026-06-29
+**Last Updated**: 2026-07-03
 **Version**: 1.0.15

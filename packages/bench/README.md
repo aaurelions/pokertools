@@ -1,10 +1,48 @@
-# 🏎️ @pokertools/bench
+# 🃏 @pokertools/bench
 
 > **Performance benchmarks for poker hand evaluators**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A benchmarking tool that compares `@pokertools/evaluator` against other popular poker hand evaluators to validate performance claims.
+
+---
+
+## 📑 Table of Contents
+
+- [📊 Benchmark Results](#-benchmark-results)
+- [📦 Installation](#-installation)
+- [🚀 Running the Benchmark](#-running-the-benchmark)
+- [🔧 How It Works](#-how-it-works)
+- [📦 Dependencies](#-dependencies)
+- [🏗️ Architecture](#-architecture)
+- [🔬 Methodology](#-methodology)
+- [📈 Interpreting Results](#-interpreting-results)
+- [🧪 Testing](#-testing)
+- [📈 API, Worker, and Socket Load/Soak Benchmarks](#-api-worker-and-socket-loadsoak-benchmarks)
+- [🔗 Related Packages](#-related-packages)
+- [📄 License](#-license)
+
+---
+
+## 📦 Installation
+
+The bench package is not published — it runs from source within the monorepo.
+
+### From Monorepo Root
+
+```bash
+npm run bench
+```
+
+### From the Package Directory
+
+```bash
+cd packages/bench
+npx ts-node index.ts
+```
+
+> **Note:** `ts-node` is provided by the monorepo root `devDependencies`. The package uses `"type": "commonjs"` (CJS) and is not published — it runs from source via `ts-node`.
 
 ---
 
@@ -51,12 +89,11 @@ npm run bench
 
 ### Available Scripts
 
-| Script           | Command                                                         | Description                                                                          |
-| ---------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `bench`          | `ts-node index.ts`                                              | Standard evaluator comparison benchmark (1,000 hands).                               |
-| `bench:detailed` | `ts-node index.ts --detailed`                                   | Same as `bench`; the `--detailed` flag is accepted but not parsed.                   |
-| `bench:load`     | `ts-node load.ts`                                               | Short load test against a live API stack (health, queues, optional sockets/actions). |
-| `bench:soak`     | `BENCH_DURATION_MS=300000 BENCH_CONCURRENCY=32 ts-node load.ts` | Extended soak test (5 min, 32 concurrent workers).                                   |
+| Script       | Command                                                         | Description                                                                          |
+| ------------ | --------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `bench`      | `ts-node index.ts`                                              | Standard evaluator comparison benchmark (1,000 hands).                               |
+| `bench:load` | `ts-node load.ts`                                               | Short load test against a live API stack (health, queues, optional sockets/actions). |
+| `bench:soak` | `BENCH_DURATION_MS=300000 BENCH_CONCURRENCY=32 ts-node load.ts` | Extended soak test (5 min, 32 concurrent workers).                                   |
 
 ### Load/Soak Environment Variables
 
@@ -112,7 +149,7 @@ pokersolver (Str)         |          70,980 hands/sec | ±0.70%
 {
   "@pokertools/evaluator": "1.0.15",
   "benchmark": "^2.1.4",
-  "bullmq": "^5.79.1",
+  "bullmq": "^5.79.2",
   "ws": "^8.21.0",
   "phe": "^0.6.0",
   "poker-evaluator": "^2.1.1",
@@ -228,12 +265,16 @@ The benchmark includes a warm-up phase to ensure:
 
 ---
 
-## 🔗 Related Packages
+## 🧪 Testing
 
-| Package                               | Description                     |
-| ------------------------------------- | ------------------------------- |
-| [@pokertools/evaluator](../evaluator) | The evaluator being benchmarked |
-| [@pokertools/engine](../engine)       | Uses the evaluator for showdown |
+The bench package has no test suite — it **is** the testing and benchmarking infrastructure for the monorepo. To verify it works correctly:
+
+```bash
+npm run bench -w @pokertools/bench
+npm run bench:load -w @pokertools/bench
+```
+
+A passing run will output evaluator throughput statistics (hands/sec with margin of error) and load-test CSV results for CI ingestion.
 
 ---
 
@@ -262,6 +303,13 @@ npm run bench:soak -w @pokertools/bench
 Results are emitted as CSV (`name,count,ok,failed,p50_ms,p95_ms,max_ms`) for CI ingestion.
 
 ---
+
+## 🔗 Related Packages
+
+| Package                               | Description                     |
+| ------------------------------------- | ------------------------------- |
+| [@pokertools/evaluator](../evaluator) | The evaluator being benchmarked |
+| [@pokertools/engine](../engine)       | Uses the evaluator for showdown |
 
 ## 📄 License
 

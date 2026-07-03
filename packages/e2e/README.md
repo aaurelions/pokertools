@@ -1,6 +1,25 @@
-# @pokertools/e2e — Docker End-to-End Tests
+# 🃏 @pokertools/e2e
 
-Docker-based integration tests that exercise the full PokerTools API + blockchain stack.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js](https://img.shields.io/badge/Node.js-≥24.0.0-339933?logo=node.js)](https://nodejs.org)
+[![npm version](https://img.shields.io/npm/v/@pokertools/e2e)](https://www.npmjs.com/package/@pokertools/e2e)
+
+## Table of Contents
+
+- [Overview](#-overview)
+- [Prerequisites](#prerequisites)
+- [Quick Start](#quick-start)
+- [What the Tests Cover](#what-the-tests-cover)
+- [Architecture](#architecture)
+- [Manual Usage](#manual-usage)
+- [Test Secrets](#test-secrets)
+- [Environment Variables](#environment-variables)
+- [Related Packages](#-related-packages)
+- [License](#-license)
+
+## 🎯 Overview
+
+Docker-based end-to-end integration tests that exercise the full PokerTools stack: API, SDK, WebSocket real-time engine, and blockchain deposit/withdrawal lifecycle. The test suite spins up a local Anvil chain, deploys ERC-20 and BatchSweeper contracts, builds and runs the full Docker Compose stack (API + Redis + Worker), seeds the SQLite database, then runs a comprehensive suite covering authentication, deposits, game logic, tournaments, and withdrawals — all against real infrastructure with no mocks.
 
 ## Prerequisites
 
@@ -28,14 +47,15 @@ This will:
 
 ## What the Tests Cover
 
-| Area                | Tests                                                                                                                                                                                                      |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Health & Docs**   | `GET /health`, `GET /docs`, `GET /finance/chains`                                                                                                                                                          |
-| **Authentication**  | `POST /auth/nonce`, `POST /auth/login` (SIWE), `POST /auth/logout`                                                                                                                                         |
-| **User**            | `GET /user/me`, `GET /user/history`                                                                                                                                                                        |
-| **Deposits**        | `POST /finance/deposit/start`, `GET /finance/deposit/address`, `GET /finance/deposits`, real on-chain USDC transfer + deposit monitor                                                                      |
-| **Table Lifecycle** | `POST /tables`, `GET /tables`, `GET /tables/:id`, three-player buy-ins, SDK-backed WebSocket sync, real `actionTo` gameplay, winnings verification, `POST /tables/:id/add-chips`, `POST /tables/:id/stand` |
-| **Withdrawals**     | `POST /user/withdraw` (signed message), `GET /user/withdrawals`, DB outbox verification, on-chain transfer simulation                                                                                      |
+| Area                | Tests                                                                                                                                                                                                                                                                                  |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Health & Docs**   | `GET /health`, `GET /docs`, `GET /finance/chains`                                                                                                                                                                                                                                      |
+| **Authentication**  | `POST /auth/nonce`, `POST /auth/login` (SIWE flow for 3 players), `POST /auth/logout`                                                                                                                                                                                                  |
+| **User**            | `GET /user/me`, `GET /user/history`                                                                                                                                                                                                                                                    |
+| **Deposits**        | `POST /finance/deposit/start`, `GET /finance/deposit/address`, `GET /finance/deposits`, real on-chain USDC transfer (mint → transfer → anvil mine → deposit monitor poll → credit verification)                                                                                        |
+| **Tournaments**     | 30-player multi-table tournament: creation, registration, start with 8/8/7/7 table distribution, director reconciliation, elimination tracking, multi-step table merging, settlement with prize verification, and full ledger conservation check (260+ lines of test logic)            |
+| **Table Lifecycle** | `POST /tables`, `GET /tables`, `GET /tables/:id`, three-player buy-ins, SDK-backed WebSocket sync (join, snapshot, stateUpdate via DEAL action), real `actionTo` deterministic gameplay (fold loop), stack change verification, `POST /tables/:id/add-chips`, `POST /tables/:id/stand` |
+| **Withdrawals**     | `POST /user/withdraw` (signed message), `GET /user/withdrawals`, DB outbox verification (PaymentTransaction row), simulated admin approval via on-chain USDC transfer to destination address, and final PaymentTransaction status confirmation                                         |
 
 ## Architecture
 
@@ -80,6 +100,7 @@ All secrets used in this E2E test are deterministic, local-only values never use
 - **JWT Secret:** `e2e-jwt-secret-not-for-production`
 - **Cookie Secret:** `e2e-cookie-secret-not-for-production`
 - **Wallet Encryption Secret:** `e2e-wallet-encryption-secret-for-tests-only`
+- **Wallet Xpriv Encryption Secret:** `e2e-wallet-xpriv-encryption-secret-for-tests-only`
 - **Mnemonic:** `test test test test test test test test test test test junk` (standard Anvil test mnemonic)
 
 ## Environment Variables
@@ -90,3 +111,15 @@ All secrets used in this E2E test are deterministic, local-only values never use
 | `POKERTOOLS_API_BASE`    | `http://localhost:3000` (test process) | API base URL for HTTP requests.                     |
 | `POKERTOOLS_TOKEN`       | —                                      | JWT for authenticated scenarios (optional).         |
 | `POKERTOOLS_TABLE_ID`    | —                                      | Table ID for live gameplay scenarios (optional).    |
+
+## 🔗 Related Packages
+
+| Package                       | Description                       |
+| ----------------------------- | --------------------------------- |
+| [@pokertools/api](../api)     | REST/WebSocket API                |
+| [@pokertools/sdk](../sdk)     | TypeScript SDK with React hooks   |
+| [@pokertools/admin](../admin) | Blockchain administration service |
+
+## 📄 License
+
+MIT © A.Aurelius

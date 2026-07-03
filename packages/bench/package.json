@@ -9,7 +9,6 @@
   "private": true,
   "scripts": {
     "bench": "ts-node index.ts",
-    "bench:detailed": "ts-node index.ts --detailed",
     "bench:load": "ts-node load.ts",
     "bench:soak": "BENCH_DURATION_MS=300000 BENCH_CONCURRENCY=32 ts-node load.ts"
   },

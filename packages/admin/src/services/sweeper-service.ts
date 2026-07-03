@@ -132,8 +132,8 @@ export class SweeperService {
       const candidates: Candidate[] = [];
 
       for (const wallet of allWallets) {
-        this.logger.info(`Checking wallet ${wallet.id}:`);
-        this.logger.info(`  Stored address: ${wallet.address}`);
+        this.logger.debug(`Checking wallet ${wallet.id}:`);
+        this.logger.debug(`  Stored address: ${wallet.address}`);
 
         // Check balance of stored (on-chain) address
         const balance = await publicClient.readContract({
@@ -143,7 +143,7 @@ export class SweeperService {
           args: [wallet.address as `0x${string}`],
         });
 
-        this.logger.info(`  Balance: ${formatUnits(balance, token.decimals)} ${token.symbol}`);
+        this.logger.debug(`  Balance: ${formatUnits(balance, token.decimals)} ${token.symbol}`);
 
         const minSweep = parseUnits(config.MIN_SWEEP_VALUE_RAW_UNITS.toString(), token.decimals);
 
