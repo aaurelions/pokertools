@@ -47,9 +47,21 @@ beforeAll(async () => {
 });
 
 // Suppress console output during tests (only show on failures)
-beforeEach(() => {
+beforeEach(async () => {
   console.log = () => {};
   console.info = () => {};
+
+  // Clear risk/velocity tracking keys from Redis between tests
+  // to prevent cross-test rate limiting contamination.
+  // Risk keys follow the pattern risk:* and use zset scoring.
+  try {
+    const keys = await testRedis.keys("risk:*");
+    if (keys.length > 0) {
+      await testRedis.del(...keys);
+    }
+  } catch {
+    // Silently ignore if Redis isn't available at this point
+  }
 });
 
 afterEach(() => {

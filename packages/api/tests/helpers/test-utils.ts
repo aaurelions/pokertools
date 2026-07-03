@@ -199,35 +199,52 @@ export async function createTable(
 }
 
 /**
- * Buy in to a table
+ * Buy in to a table (retries on rate limiting / velocity controls)
  */
 export async function buyIn(
   app: FastifyInstance,
   token: string,
   tableId: string,
   amount: number,
-  seat: number
+  seat: number,
+  maxRetries = 3
 ): Promise<void> {
-  const response = await app.inject({
-    method: "POST",
-    url: `/tables/${tableId}/buy-in`,
-    headers: {
-      authorization: `Bearer ${token}`,
-    },
-    payload: {
-      amount: amount.toString(),
-      seat,
-      idempotencyKey: crypto.randomUUID(),
-    },
-  });
+  let lastError: Error | undefined;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const response = await app.inject({
+      method: "POST",
+      url: `/tables/${tableId}/buy-in`,
+      headers: {
+        authorization: `Bearer ${token}`,
+      },
+      payload: {
+        amount: amount.toString(),
+        seat,
+        idempotencyKey: crypto.randomUUID(),
+      },
+    });
 
-  if (response.statusCode !== 200) {
+    if (response.statusCode === 200) return;
+
+    if (response.statusCode === 429) {
+      // Rate limited — wait with exponential backoff then retry
+      const body = JSON.parse(response.body);
+      const isRisk = body.code === "RISK_DENIED";
+      const delay = isRisk ? 2000 + attempt * 1000 : 1000 + attempt * 500;
+      lastError = new Error(
+        `Rate limited (${isRisk ? "risk" : "rate"}): ${response.body} — retrying in ${delay}ms`
+      );
+      await new Promise((r) => setTimeout(r, delay));
+      continue;
+    }
+
     throw new Error(`Failed to buy in: ${response.body}`);
   }
+  throw lastError || new Error("Buy-in failed after retries");
 }
 
 /**
- * Execute a game action
+ * Execute a game action (retries on rate limiting)
  */
 export async function executeAction(
   app: FastifyInstance,
@@ -237,22 +254,32 @@ export async function executeAction(
     type: string;
     amount?: number;
     [key: string]: any;
-  }
+  },
+  maxRetries = 3
 ): Promise<any> {
-  const response = await app.inject({
-    method: "POST",
-    url: `/tables/${tableId}/action`,
-    headers: {
-      authorization: `Bearer ${token}`,
-    },
-    payload: action,
-  });
+  let lastError: Error | undefined;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const response = await app.inject({
+      method: "POST",
+      url: `/tables/${tableId}/action`,
+      headers: {
+        authorization: `Bearer ${token}`,
+      },
+      payload: action,
+    });
 
-  if (response.statusCode !== 200) {
+    if (response.statusCode === 200) return JSON.parse(response.body);
+
+    if (response.statusCode === 429) {
+      const delay = 1000 + attempt * 500;
+      lastError = new Error(`Rate limited on action: ${response.body} — retrying in ${delay}ms`);
+      await new Promise((r) => setTimeout(r, delay));
+      continue;
+    }
+
     throw new Error(`Failed to execute action: ${response.body}`);
   }
-
-  return JSON.parse(response.body);
+  throw lastError || new Error("Execute action failed after retries");
 }
 
 /**
