@@ -3,6 +3,8 @@ import { config } from "dotenv";
 import { dirname, resolve } from "path";
 import { mkdirSync } from "fs";
 import { Redis } from "ioredis";
+import { createId } from "@paralleldrive/cuid2";
+import { createPrismaClient } from "../src/utils/prisma-client.js";
 
 // Load test environment
 config({ path: resolve(__dirname, "../.env.test"), quiet: true });
@@ -24,6 +26,70 @@ if (process.env.DATABASE_URL?.startsWith("file:")) {
 
 let testRedis: Redis;
 
+/**
+ * Ensure the system HOUSE user and its ledger accounts exist in the test
+ * database. Tournament registration/settlement depend on these accounts for
+ * double-entry escrow accounting. This replaces the production `npm run seed`
+ * step in the self-contained test environment.
+ */
+async function ensureHouseUser(): Promise<void> {
+  const prisma = createPrismaClient();
+  try {
+    let houseUser = await prisma.user.findUnique({
+      where: { username: "HOUSE" },
+    });
+
+    if (!houseUser) {
+      houseUser = await prisma.user.create({
+        data: {
+          id: createId(),
+          username: "HOUSE",
+          address: "0x0000000000000000000000000000000000000000",
+          role: "ADMIN",
+        },
+      });
+    }
+
+    await prisma.account.upsert({
+      where: {
+        userId_currency_type: {
+          userId: houseUser.id,
+          currency: "USDC",
+          type: "MAIN",
+        },
+      },
+      create: {
+        userId: houseUser.id,
+        currency: "USDC",
+        type: "MAIN",
+        balance: 0,
+      },
+      update: {},
+    });
+
+    for (const type of ["HOUSE_RESERVE", "TOURNAMENT_ESCROW"] as const) {
+      await prisma.account.upsert({
+        where: {
+          userId_currency_type: {
+            userId: houseUser.id,
+            currency: "USDC",
+            type,
+          },
+        },
+        create: {
+          userId: houseUser.id,
+          currency: "USDC",
+          type,
+          balance: 0,
+        },
+        update: {},
+      });
+    }
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
 // Suppress harmless "Connection is closed" errors from BullMQ's ioredis
 // that fire as unhandled rejections during worker/queue cleanup.
 function suppressClosedError(reason: unknown) {
@@ -44,6 +110,10 @@ beforeAll(async () => {
   // Flush test Redis database before tests to ensure clean state
   // DO NOT flush in afterAll to avoid race conditions between test files
   await testRedis.flushdb();
+
+  // Seed the HOUSE user and system accounts. Tournament registration and
+  // settlement routes require these for double-entry escrow bookkeeping.
+  await ensureHouseUser();
 });
 
 // Suppress console output during tests (only show on failures)
