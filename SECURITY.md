@@ -148,7 +148,7 @@ await app.register(rateLimit, {
 });
 ```
 
-The global rate limiter covers all routes. Rate limiting is disabled in `NODE_ENV=test`. Configure more granular limits via additional `@fastify/rate-limit` registrations on specific route prefixes for gameplay-intensive endpoints.
+The global rate limiter covers all routes. Rate limiting is disabled in `NODE_ENV=test`. Runtime velocity/risk thresholds are operator-configurable through the documented `RISK_*` environment variables; these controls are operational abuse limits, not KYC/AML/KYT or identity-screening gates.
 
 ### 6. Redlock Distributed Locking
 
@@ -161,7 +161,7 @@ The API uses [`redlock`](https://www.npmjs.com/package/redlock) (v5 beta) to ser
 5. Publish `STATE_UPDATE` via Redis Pub/Sub.
 6. Release the lock.
 
-This prevents race conditions when multiple API instances share the same Redis cluster.
+This prevents race conditions when multiple API instances share the same Redis cluster. Retry, jitter, drift, and extension thresholds are configured through the documented `REDLOCK_*` environment variables.
 
 ---
 
@@ -289,4 +289,4 @@ This security policy is part of the PokerTools project and follows the same MIT 
 ---
 
 **Last Updated**: 2026-07-03
-**Version**: 1.0.15
+**Version**: 1.0.16

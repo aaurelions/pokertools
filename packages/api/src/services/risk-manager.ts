@@ -23,7 +23,7 @@ export class RiskManager {
     amountCents?: number;
   }): Promise<{ score: number }> {
     const now = Date.now();
-    const windowMs = 60_000;
+    const windowMs = config.RISK_SCORING_WINDOW_MS;
     const key = `risk:${input.endpoint}:${input.userId}`;
     const ipKey = `risk:${input.endpoint}:ip:${input.request.ip}`;
 
@@ -32,11 +32,14 @@ export class RiskManager {
       this.hit(ipKey, now, windowMs),
     ]);
 
+    const amount = input.amountCents ?? 0;
     let score = 0;
-    if (userCount > 20) score += 40;
-    if (ipCount > 80) score += 25;
-    if ((input.amountCents ?? 0) >= 100_000) score += 20;
-    if ((input.amountCents ?? 0) >= 500_000) score += 30;
+    if (userCount > config.RISK_USER_COUNT_THRESHOLD) score += config.RISK_USER_COUNT_SCORE;
+    if (ipCount > config.RISK_IP_COUNT_THRESHOLD) score += config.RISK_IP_COUNT_SCORE;
+    if (amount >= config.RISK_MEDIUM_AMOUNT_CENTS_THRESHOLD)
+      score += config.RISK_MEDIUM_AMOUNT_CENTS_SCORE;
+    if (amount >= config.RISK_HIGH_AMOUNT_CENTS_THRESHOLD)
+      score += config.RISK_HIGH_AMOUNT_CENTS_SCORE;
 
     const blocked =
       userCount > this.userLimit(input.endpoint) ||

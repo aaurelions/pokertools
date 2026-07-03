@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Bumped all workspace package versions and internal `@pokertools/*` dependency ranges to `1.0.16`.
+- Made API velocity/risk scoring thresholds and Redlock retry/jitter settings environment-configurable.
+- Renamed the root production environment template from `.env.production.example` to `.env.example` and expanded package env examples.
+- Normalized package README version badges, package versions, and implementation-backed documentation.
 - Removed dead code (4 unused helper functions, ~170 lines) from the E2E Docker test file.
 - Downgraded admin sweeper per-wallet balance logging from info to debug level.
 - Corrected SDK README package descriptions (Fastify, not Express; lookup-table evaluator, not WASM).
@@ -17,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- Updated deployment docs to copy `.env.example` into `.env.production`.
+- Quoted shell-sensitive wallet derivation paths in env examples.
+- Corrected SECURITY.md and CONTRIBUTING.md for the current release process and security posture.
 - Added Table of Contents to 7 READMEs that were missing one.
 - Added Testing, Configuration, and Error Handling sections to several package READMEs.
 - Corrected 13 factual inaccuracies across package READMEs (type definitions, test counts, version references).

@@ -42,6 +42,12 @@ cp packages/api/.env.example packages/api/.env
 cp packages/admin/.env.example packages/admin/.env
 ```
 
+For production-style Docker deployment, copy the root template and keep the filled file out of git:
+
+```bash
+cp .env.example .env.production
+```
+
 ## Project Structure
 
 This is a monorepo with multiple packages:

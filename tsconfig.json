@@ -8,6 +8,7 @@
     { "path": "./packages/evaluator" },
     { "path": "./packages/engine" },
     { "path": "./packages/api" },
-    { "path": "./packages/sdk" }
+    { "path": "./packages/sdk" },
+    { "path": "./packages/admin" }
   ]
 }

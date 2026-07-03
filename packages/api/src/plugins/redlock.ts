@@ -1,17 +1,17 @@
 import fp from "fastify-plugin";
 import Redlock from "redlock";
 import type { FastifyPluginAsync } from "fastify";
+import { config } from "../config.js";
 
 const redlockPlugin: FastifyPluginAsync = async (fastify) => {
-  // Configure Redlock for single-instance (dev/test) or multi-instance (prod)
-  const isTestEnv = process.env.NODE_ENV === "test";
+  const isTestEnv = config.NODE_ENV === "test";
 
   const redlock = new Redlock([fastify.redis], {
-    driftFactor: 0.01,
-    retryCount: isTestEnv ? 5000 : 50,
-    retryDelay: isTestEnv ? 2 : 100,
-    retryJitter: isTestEnv ? 2 : 100,
-    automaticExtensionThreshold: 500,
+    driftFactor: config.REDLOCK_DRIFT_FACTOR,
+    retryCount: isTestEnv ? config.REDLOCK_RETRY_COUNT_TEST : config.REDLOCK_RETRY_COUNT,
+    retryDelay: isTestEnv ? config.REDLOCK_RETRY_DELAY_MS_TEST : config.REDLOCK_RETRY_DELAY_MS,
+    retryJitter: isTestEnv ? config.REDLOCK_RETRY_JITTER_MS_TEST : config.REDLOCK_RETRY_JITTER_MS,
+    automaticExtensionThreshold: config.REDLOCK_AUTOMATIC_EXTENSION_THRESHOLD_MS,
   });
 
   redlock.on("error", (error) => {

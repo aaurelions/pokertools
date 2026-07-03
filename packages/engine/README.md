@@ -4,8 +4,8 @@
 
 [![npm version](https://img.shields.io/npm/v/@pokertools/engine.svg)](https://www.npmjs.com/package/@pokertools/engine)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/tests-349%20passed-brightgreen.svg)]()
+[![TypeScript](https://img.shields.io/badge/TypeScript-6.0+-blue.svg)](https://www.typescriptlang.org/)
+[![Tests](https://img.shields.io/badge/tests-362%20passed-brightgreen.svg)]()
 
 A **production-ready** poker game engine featuring immutable state management, chip conservation auditing, side pot calculation, rake handling, tournament support, and comprehensive rule enforcement.
 
@@ -696,7 +696,7 @@ const restored = restoreFromSnapshot(JSON.parse(json));
 
 ## 🧪 Testing
 
-The engine includes 349 tests across 38 suites:
+The engine includes 362 tests across 38 suites:
 
 | Category       | Files | Description                  |
 | -------------- | ----- | ---------------------------- |

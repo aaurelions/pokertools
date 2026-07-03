@@ -181,11 +181,23 @@ WITHDRAWAL_SIGNATURE_MAX_AGE_MS=300000  # default: 5 minutes
 # ── Security ─────────────────────────────────────────
 JWT_SECRET="…"                          # required
 WALLET_ENCRYPTION_SECRET="…"            # required; MUST differ from JWT_SECRET
+WALLET_XPRIV_ENCRYPTION_SECRET="…"      # required in production; separate from WALLET_ENCRYPTION_SECRET
 PBKDF2_ITERATIONS=600000               # default: 600_000; key derivation iterations (crypto.ts)
 
 # ── Velocity / Risk Limits ───────────────────────────
 MAX_SINGLE_WITHDRAWAL_USD=5000          # default: 5000
 MAX_DAILY_WITHDRAWAL_USD=50000          # default: 50000
+
+# ── Polling / Scan Intervals ─────────────────────────
+SWEEP_INTERVAL_MS=600000               # default: 600_000 (10 min); sweep scan interval
+GAS_MONITOR_INTERVAL_MS=1800000        # default: 1_800_000 (30 min); gas check interval
+TRANSACTION_MONITOR_INTERVAL_MS=60000  # default: 60_000 (1 min); stuck-tx scan interval
+WITHDRAWAL_POLL_INTERVAL_MS=3000       # default: 3_000; withdrawal DB poll interval
+RECOVERY_SCAN_INTERVAL_MS=300000       # default: 300_000 (5 min); recovery scan interval
+STUCK_WITHDRAWAL_MAX_AGE_MS=21600000   # default: 21_600_000 (6 hours); auto-refund age
+
+# ── Other ────────────────────────────────────────────
+DEFAULT_CURRENCY=USDC                   # default: USDC
 ```
 
 > The admin service shares the Prisma schema and generated client with `@pokertools/api`. It reads blockchain metadata (RPC URLs, contract addresses, confirmation requirements) from the `Blockchain` / `Token` database tables — these are **not** configured via environment variables.

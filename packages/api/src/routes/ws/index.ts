@@ -65,18 +65,24 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
     const token =
       request.cookies.token || tokenFromProtocolHeader(request.headers["sec-websocket-protocol"]);
 
+    // -----------------------------------------------------------------------
+    // Register a bounded queue before async auth so clients that send JOIN as
+    // soon as the socket opens do not lose their first message, while malformed
+    // clients cannot grow memory without limit during JWT/session validation.
+    // -----------------------------------------------------------------------
     const queuedMessages: Buffer[] = [];
     let messageHandler: ((data: Buffer) => Promise<void>) | null = null;
     socket.on("message", (data: Buffer) => {
       if (messageHandler) {
         void messageHandler(data);
-      } else {
-        if (queuedMessages.length >= config.WS_MAX_PRE_AUTH_QUEUE) {
-          socket.close(1008, "Pre-authentication message limit exceeded");
-          return;
-        }
-        queuedMessages.push(data);
+        return;
       }
+
+      if (queuedMessages.length >= config.WS_MAX_PRE_AUTH_QUEUE) {
+        socket.close(1008, "Pre-authentication message limit exceeded");
+        return;
+      }
+      queuedMessages.push(data);
     });
 
     let userId: string;
@@ -87,7 +93,6 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
       );
       userId = decoded.userId;
 
-      // Check session not revoked
       const session = await fastify.prisma.session.findUnique({
         where: { jti: decoded.jti },
       });
@@ -99,6 +104,7 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
       return;
     }
 
+    // Enforce per-user concurrent connection limit
     let connectionAccepted = false;
     const connCount = await fastify.redis.hincrby("ws:connections", userId, 1);
     if (connCount > config.WS_MAX_CONNECTIONS_PER_USER) {

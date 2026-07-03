@@ -4,7 +4,7 @@
 
 [![npm version](https://img.shields.io/npm/v/@pokertools/types.svg)](https://www.npmjs.com/package/@pokertools/types)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-6.0+-blue.svg)](https://www.typescriptlang.org/)
 
 This package provides the **single source of truth** for all type definitions used across the PokerTools monorepo. It includes TypeScript interfaces, enums, and Zod validation schemas that ensure type safety from the game engine to the API to the client SDK.
 
@@ -612,7 +612,7 @@ interface TableConfig {
   timeBankDeductionSeconds?: number; // Default: 10
   actionTimeoutSeconds?: number; // Base decision timeout before time bank
   allowSpectators?: boolean; // Allow non-seated spectators
-  randomProvider?: () => number; // Default: Math.random
+  randomProvider?: () => number; // Default: secure RNG (Node.js crypto / Web Crypto; never Math.random)
   rakePercent?: number; // 0-100, cash games
   rakeCap?: number; // Max rake per pot
   noFlopNoDrop?: boolean; // No rake if ends preflop, default: true

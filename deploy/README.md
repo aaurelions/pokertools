@@ -45,7 +45,7 @@ Internet ──► Caddy (:80/443) ──► API (:3000) ──► PostgreSQL (:
 ### 1. Configure environment
 
 ```bash
-cp .env.production.example .env.production
+cp .env.example .env.production
 # Edit .env.production — generate secrets with:
 #   openssl rand -base64 32
 # The admin service requires MASTER_MNEMONIC, TELEGRAM_BOT_TOKEN,

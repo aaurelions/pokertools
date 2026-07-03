@@ -68,6 +68,44 @@ export const config = cleanEnv(process.env, {
   RISK_BUY_IN_IP_LIMIT: num({ default: 40 }),
   RISK_ACTION_IP_LIMIT: num({ default: 200 }),
 
+  // RiskManager scoring parameters
+  RISK_SCORING_WINDOW_MS: num({
+    default: 60_000,
+    desc: "Sliding window duration for risk velocity scoring (ms)",
+  }),
+  RISK_USER_COUNT_THRESHOLD: num({
+    default: 20,
+    desc: "Actions-per-user threshold that triggers a score increment",
+  }),
+  RISK_USER_COUNT_SCORE: num({
+    default: 40,
+    desc: "Score added when user action count exceeds RISK_USER_COUNT_THRESHOLD",
+  }),
+  RISK_IP_COUNT_THRESHOLD: num({
+    default: 80,
+    desc: "Actions-per-IP threshold that triggers a score increment",
+  }),
+  RISK_IP_COUNT_SCORE: num({
+    default: 25,
+    desc: "Score added when IP action count exceeds RISK_IP_COUNT_THRESHOLD",
+  }),
+  RISK_MEDIUM_AMOUNT_CENTS_THRESHOLD: num({
+    default: 100_000,
+    desc: "Amount-cents threshold that triggers a medium-risk score increment",
+  }),
+  RISK_MEDIUM_AMOUNT_CENTS_SCORE: num({
+    default: 20,
+    desc: "Score added when amount exceeds RISK_MEDIUM_AMOUNT_CENTS_THRESHOLD",
+  }),
+  RISK_HIGH_AMOUNT_CENTS_THRESHOLD: num({
+    default: 500_000,
+    desc: "Amount-cents threshold that triggers a high-risk score increment",
+  }),
+  RISK_HIGH_AMOUNT_CENTS_SCORE: num({
+    default: 30,
+    desc: "Score added when amount exceeds RISK_HIGH_AMOUNT_CENTS_THRESHOLD",
+  }),
+
   // RPC configuration for blockchain clients
   RPC_RETRY_COUNT: num({ default: 3, desc: "Number of retries for RPC calls" }),
   RPC_RETRY_DELAY: num({ default: 1000, desc: "Delay between retries in milliseconds" }),
@@ -116,9 +154,26 @@ export const config = cleanEnv(process.env, {
   }),
   SETTLE_HAND_LOCK_TTL_MS: num({ default: 5000, desc: "Redis lock TTL for settle-hand worker" }),
   NEXT_HAND_LOCK_TTL_MS: num({ default: 3000, desc: "Redlock TTL for next-hand worker" }),
-  REDLOCK_RETRY_COUNT: num({ default: 3, desc: "Redlock retry attempts" }),
-  REDLOCK_RETRY_DELAY_MS: num({ default: 100, desc: "Redlock retry delay in ms" }),
+  REDLOCK_RETRY_COUNT: num({ default: 50, desc: "Redlock retry attempts (production)" }),
+  REDLOCK_RETRY_COUNT_TEST: num({ default: 5000, desc: "Redlock retry attempts (test)" }),
+  REDLOCK_RETRY_DELAY_MS: num({ default: 100, desc: "Redlock retry delay in ms (production)" }),
+  REDLOCK_RETRY_DELAY_MS_TEST: num({
+    default: 2,
+    desc: "Redlock retry delay in ms (test low-latency)",
+  }),
+  REDLOCK_RETRY_JITTER_MS: num({
+    default: 100,
+    desc: "Redlock retry jitter in ms (production)",
+  }),
+  REDLOCK_RETRY_JITTER_MS_TEST: num({
+    default: 2,
+    desc: "Redlock retry jitter in ms (test low-latency)",
+  }),
   REDLOCK_DRIFT_FACTOR: num({ default: 0.01, desc: "Redlock drift factor" }),
+  REDLOCK_AUTOMATIC_EXTENSION_THRESHOLD_MS: num({
+    default: 500,
+    desc: "Redlock automatic extension threshold in ms",
+  }),
   RECONCILIATION_WINDOW_HOURS: num({
     default: 24,
     desc: "Reconciliation lookback window in hours",
@@ -150,7 +205,10 @@ export const config = cleanEnv(process.env, {
     default: 4,
     desc: "Max concurrent WebSocket connections per user",
   }),
-  WS_MAX_PRE_AUTH_QUEUE: num({ default: 8, desc: "Max buffered pre-auth WebSocket messages" }),
+  WS_MAX_PRE_AUTH_QUEUE: num({
+    default: 32,
+    desc: "Max WebSocket messages buffered while JWT/session authentication completes",
+  }),
   WS_HEARTBEAT_INTERVAL_MS: num({
     default: 30000,
     desc: "WebSocket heartbeat ping interval in ms",

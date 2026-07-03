@@ -4,7 +4,7 @@
 
 [![npm version](https://img.shields.io/npm/v/@pokertools/evaluator.svg)](https://www.npmjs.com/package/@pokertools/evaluator)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-6.0+-blue.svg)](https://www.typescriptlang.org/)
 
 A blazing-fast poker hand evaluator using **perfect hash tables** and **lookup tables** for O(1) hand evaluation. Designed for Monte Carlo simulations and real-time poker applications.
 

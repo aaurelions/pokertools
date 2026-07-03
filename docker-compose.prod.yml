@@ -21,7 +21,7 @@
 # communicate over an internal Docker bridge network.
 #
 # Usage:
-#   cp .env.production.example .env.production   # then fill in secrets
+#   cp .env.example .env.production   # then fill in secrets
 #   docker compose -f docker-compose.prod.yml up -d --build
 #   docker compose -f docker-compose.prod.yml down -v
 # =============================================================================

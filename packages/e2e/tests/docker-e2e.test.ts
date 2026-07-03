@@ -811,8 +811,8 @@ describe("Docker E2E Integration", () => {
     // ── 4i. Ensure single winner and settle ──────────────────────────────
     // Bust all but one player across all tables
     let winningUserId = "";
-    const activeTableIdsForSettlement = activeTables.map((t) => t.id);
-    for (const tid of activeTableIdsForSettlement) {
+    const tableIdsForSettlement = tables4.filter((t) => t.status !== "CLOSED").map((t) => t.id);
+    for (const tid of tableIdsForSettlement) {
       const snap = await getRawTableState(tid, player1.token);
       if (!snap?.players) continue;
 
@@ -839,6 +839,11 @@ describe("Docker E2E Integration", () => {
       undefined,
       player1.token
     );
+    if (settleRes.status !== 200) {
+      console.log(
+        `[E2E] Tournament settle failed: ${settleRes.status} ${JSON.stringify(settleRes.data)}`
+      );
+    }
     expect(settleRes.status).toBe(200);
     const settleBody = settleRes.data as { success: boolean; winnerUserId: string; prize: number };
     expect(settleBody.success).toBe(true);

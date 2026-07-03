@@ -11,14 +11,14 @@ The repository is organized into workspaces managed by NPM.
 
 | Package                                           | Description                                                                                                          | Version  |
 | :------------------------------------------------ | :------------------------------------------------------------------------------------------------------------------- | :------- |
-| **[@pokertools/engine](./packages/engine)**       | The immutable core logic for Texas Hold'em state management.                                                         | `1.0.15` |
-| **[@pokertools/evaluator](./packages/evaluator)** | High-performance hand evaluation and win frequency calculation.                                                      | `1.0.15` |
-| **[@pokertools/api](./packages/api)**             | Scalable REST & WebSocket API built with Fastify, Redis, BullMQ, and Prisma (SQLite default, PostgreSQL supported).  | `1.0.15` |
-| **[@pokertools/sdk](./packages/sdk)**             | TypeScript SDK with REST helpers, WebSocket state sync, auth utilities, and optional React 19 hooks.                 | `1.0.15` |
-| **[@pokertools/admin](./packages/admin)**         | Private blockchain administration service for sweeps, withdrawal processing, gas monitoring, and Telegram approvals. | `1.0.15` |
-| **[@pokertools/types](./packages/types)**         | Shared TypeScript domain types, API DTOs, WebSocket messages, Zod schemas, and action whitelists.                    | `1.0.15` |
-| **[@pokertools/bench](./packages/bench)**         | Performance benchmarking suite for evaluator, API, workers, sockets, and game actions.                               | `1.0.15` |
-| **[@pokertools/e2e](./packages/e2e)**             | Docker-based end-to-end integration tests exercising the full API, SDK, WebSocket, and blockchain stack.             | `1.0.15` |
+| **[@pokertools/engine](./packages/engine)**       | The immutable core logic for Texas Hold'em state management.                                                         | `1.0.16` |
+| **[@pokertools/evaluator](./packages/evaluator)** | High-performance hand evaluation and win frequency calculation.                                                      | `1.0.16` |
+| **[@pokertools/api](./packages/api)**             | Scalable REST & WebSocket API built with Fastify, Redis, BullMQ, and Prisma (SQLite default, PostgreSQL supported).  | `1.0.16` |
+| **[@pokertools/sdk](./packages/sdk)**             | TypeScript SDK with REST helpers, WebSocket state sync, auth utilities, and optional React 19 hooks.                 | `1.0.16` |
+| **[@pokertools/admin](./packages/admin)**         | Private blockchain administration service for sweeps, withdrawal processing, gas monitoring, and Telegram approvals. | `1.0.16` |
+| **[@pokertools/types](./packages/types)**         | Shared TypeScript domain types, API DTOs, WebSocket messages, Zod schemas, and action whitelists.                    | `1.0.16` |
+| **[@pokertools/bench](./packages/bench)**         | Performance benchmarking suite for evaluator, API, workers, sockets, and game actions.                               | `1.0.16` |
+| **[@pokertools/e2e](./packages/e2e)**             | Docker-based end-to-end integration tests exercising the full API, SDK, WebSocket, and blockchain stack.             | `1.0.16` |
 
 ## ✨ Key Features
 
@@ -74,7 +74,7 @@ To use the pre-built image from GitHub Container Registry:
 docker pull ghcr.io/aaurelions/pokertools
 ```
 
-GHCR images are published automatically on each [GitHub release](https://github.com/aaurelions/pokertools/releases), tagged as `latest`, `1`, `1.0`, `1.0.15`, and a full commit SHA for every release-triggered build. See [`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml) for details.
+GHCR images are published automatically on each [GitHub release](https://github.com/aaurelions/pokertools/releases), tagged as `latest`, `1`, `1.0`, `1.0.16`, and a full commit SHA for every release-triggered build. See [`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml) for details.
 
 ### Development Workflow
 
@@ -138,11 +138,12 @@ cp packages/admin/.env.example packages/admin/.env
 
 ### Endpoints
 
-| Endpoint        | Description                                                                       |
-| :-------------- | :-------------------------------------------------------------------------------- |
-| `GET  /health`  | Dependency health check for API, DB, Redis, and queues                            |
-| `GET  /metrics` | Prometheus-compatible operational metrics (requires `METRICS_TOKEN` bearer token) |
-| `GET  /docs`    | Swagger UI (Fastify `@fastify/swagger-ui`)                                        |
+| Endpoint               | Description                                                                       |
+| :--------------------- | :-------------------------------------------------------------------------------- |
+| `GET  /health`         | Dependency health check for API, DB, Redis, and queues                            |
+| `GET  /metrics`        | Prometheus-compatible operational metrics (requires `METRICS_TOKEN` bearer token) |
+| `GET  /docs`           | Swagger UI (Fastify `@fastify/swagger-ui`)                                        |
+| `GET  /finance/chains` | List supported blockchains and tokens (unauthenticated)                           |
 
 The API also exposes authenticated SIWE auth routes, user/profile routes, table/gameplay routes, finance routes, player notes, and `/ws/play` for real-time table state. See [`packages/api/README.md`](./packages/api/README.md) for the current route and WebSocket message reference.
 

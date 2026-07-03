@@ -191,7 +191,7 @@ npm run workers
 **Server Output:**
 
 ```
-🃏 @pokertools/api v1.0.15
+🃏 @pokertools/api v1.0.16
 -------------------------
 🌍 Server: http://0.0.0.0:3000
 📚 Docs:   http://0.0.0.0:3000/docs
@@ -304,11 +304,11 @@ npm run workers
 
 #### WebSocket
 
-| Variable                      | Type     | Default | Description                                   |
-| ----------------------------- | -------- | ------- | --------------------------------------------- |
-| `WS_MAX_CONNECTIONS_PER_USER` | `number` | `4`     | Max concurrent WebSocket connections per user |
-| `WS_MAX_PRE_AUTH_QUEUE`       | `number` | `8`     | Max buffered pre-auth WebSocket messages      |
-| `WS_HEARTBEAT_INTERVAL_MS`    | `number` | `30000` | WebSocket heartbeat ping interval (ms)        |
+| Variable                      | Type     | Default | Description                                          |
+| ----------------------------- | -------- | ------- | ---------------------------------------------------- |
+| `WS_MAX_CONNECTIONS_PER_USER` | `number` | `4`     | Max concurrent WebSocket connections per user        |
+| `WS_MAX_PRE_AUTH_QUEUE`       | `number` | `32`    | Max messages buffered while WebSocket auth completes |
+| `WS_HEARTBEAT_INTERVAL_MS`    | `number` | `30000` | WebSocket heartbeat ping interval (ms)               |
 
 ### Validation
 

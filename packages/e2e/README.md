@@ -2,7 +2,6 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-≥24.0.0-339933?logo=node.js)](https://nodejs.org)
-[![npm version](https://img.shields.io/npm/v/@pokertools/e2e)](https://www.npmjs.com/package/@pokertools/e2e)
 
 ## Table of Contents
 
