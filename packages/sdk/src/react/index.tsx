@@ -5,7 +5,15 @@
  * WebSocket connections, and authentication.
  */
 
-import { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  useMemo,
+  createContext,
+  useContext,
+} from "react";
 import type { ReactNode } from "react";
 import type { PublicState, TournamentDetails, TournamentListItem } from "@pokertools/types";
 import { PokerClient } from "../client";
@@ -93,11 +101,22 @@ export function PokerProvider({ config, children, autoConnect = true }: PokerPro
     if (connectPromiseRef.current) return connectPromiseRef.current;
     const socket = ensureSocket();
     setConnectionState("connecting");
-    connectPromiseRef.current = socket.connect().finally(() => {
-      connectPromiseRef.current = null;
+    const pending = socket.connect().finally(() => {
+      if (connectPromiseRef.current === pending) connectPromiseRef.current = null;
     });
-    await connectPromiseRef.current;
+    connectPromiseRef.current = pending;
+    await pending;
   }, [ensureSocket]);
+
+  // A socket authenticates once at construction. Replacing the token must
+  // replace the socket too, including its cached private table state.
+  useEffect(() => {
+    return () => {
+      socketRef.current?.disconnect();
+      socketRef.current = null;
+      connectPromiseRef.current = null;
+    };
+  }, [config.token]);
 
   // Auto-connect when a token is present, without recreating sockets for inline
   // config object identity changes.
@@ -109,15 +128,6 @@ export function PokerProvider({ config, children, autoConnect = true }: PokerPro
       socketRef.current = null;
     }
   }, [config.token, autoConnect, connect]);
-
-  useEffect(() => {
-    return () => {
-      if (socketRef.current) {
-        socketRef.current.disconnect();
-        socketRef.current = null;
-      }
-    };
-  }, []);
 
   const disconnect = useCallback(() => {
     if (socketRef.current) {
@@ -298,7 +308,10 @@ export function useTable(tableId: string, options: UseTableOptions = {}): UseTab
   // Action helper
   const action = useCallback(
     async (type: string, amount?: number) => {
-      const newState = await client.action(tableId, { type: type as Parameters<typeof client.action>[1]["type"], amount });
+      const newState = await client.action(tableId, {
+        type: type as Parameters<typeof client.action>[1]["type"],
+        amount,
+      });
       setState(newState);
       versionRef.current = newState.version;
     },

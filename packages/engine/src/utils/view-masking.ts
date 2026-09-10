@@ -32,6 +32,7 @@ export function createPublicView(
   return {
     ...state,
     deck: [], // Always hide deck
+    previousStates: [], // Undo snapshots contain unmasked hands and deck order.
     players: maskedPlayers,
     currentBets,
     viewingPlayerId: playerId,

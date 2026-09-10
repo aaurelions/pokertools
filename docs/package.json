@@ -1,0 +1,27 @@
+{
+  "name": "pokertools-docs",
+  "version": "1.0.17",
+  "private": true,
+  "type": "module",
+  "description": "VitePress documentation site for the PokerTools monorepo",
+  "scripts": {
+    "docs:dev": "vitepress dev --host 0.0.0.0",
+    "docs:build": "vitepress build",
+    "docs:preview": "vitepress preview --host 0.0.0.0"
+  },
+  "dependencies": {
+    "markdown-it": "^14.1.0",
+    "markdown-it-mathjax3": "^4.3.2",
+    "vitepress": "2.0.0-alpha.20"
+  },
+  "devDependencies": {
+    "vue": "^3.5.41"
+  },
+  "allowScripts": {
+    "fsevents@2.3.3": true
+  },
+  "engines": {
+    "node": ">=20.19.0",
+    "npm": ">=10.0.0"
+  }
+}

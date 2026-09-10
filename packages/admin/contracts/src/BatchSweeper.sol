@@ -10,7 +10,7 @@ import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 /**
  * @title BatchSweeper
  * @notice Batches EIP-2612 Permit signatures and TransferFrom calls to save gas.
- * @dev Funds are always sent to msg.sender to prevent redirection.
+ * @dev Only the owner may redeem permits; proceeds go to the owner.
  */
 contract BatchSweeper is Ownable {
     using SafeERC20 for IERC20;
@@ -39,7 +39,7 @@ contract BatchSweeper is Ownable {
         uint8[] calldata v,
         bytes32[] calldata r,
         bytes32[] calldata s
-    ) external {
+    ) external onlyOwner {
         uint256 length = owners.length;
 
         if (

@@ -44,6 +44,11 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
       ...player,
       stack: newStack,
       pendingAddOn: 0,
+      hand: null,
+      shownCards: null,
+      status: PlayerStatus.FOLDED,
+      betThisStreet: 0,
+      totalInvestedThisHand: 0,
     };
   });
 
@@ -210,6 +215,7 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
     }
   }
 
+  let anteTotal = 0;
   // Antes: tournament — all players with chips (incl. sitting-out); cash — active only.
   if (state.ante > 0) {
     const playersToAnteFrom = isTournament
@@ -221,14 +227,14 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
       const anteAmount = Math.min(player.stack, state.ante);
 
       if (anteAmount > 0) {
-        const currentBet = currentBets.get(seat) ?? 0;
-        currentBets.set(seat, currentBet + anteAmount);
+        // Antes are dead money, never part of the live preflop wager.
+        anteTotal += anteAmount;
 
         const newStack = player.stack - anteAmount;
         newPlayers[seat] = {
           ...player,
           stack: newStack,
-          betThisStreet: player.betThisStreet + anteAmount,
+          betThisStreet: player.betThisStreet,
           totalInvestedThisHand: player.totalInvestedThisHand + anteAmount,
           status:
             newStack === 0
@@ -241,7 +247,17 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
     }
   }
 
-  const pots: Pot[] = [];
+  const pots: Pot[] =
+    anteTotal > 0
+      ? [
+          {
+            amount: anteTotal,
+            eligibleSeats: playersToReceive,
+            type: "MAIN",
+            capPerPlayer: state.ante,
+          },
+        ]
+      : [];
   const activePlayers = playersToReceive.filter((seat) => {
     const player = newPlayers[seat]!;
     return player.status === PlayerStatus.ACTIVE;
@@ -263,12 +279,15 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
     currentBets,
     initialChips:
       newPlayers.reduce((sum, player) => sum + (player ? player.stack : 0), 0) +
-      Array.from(currentBets.values()).reduce((sum, amount) => sum + amount, 0),
-    minRaise: state.bigBlind,
+      Array.from(currentBets.values()).reduce((sum, amount) => sum + amount, 0) +
+      anteTotal,
+    minRaise: Math.max(...currentBets.values(), state.bigBlind) + state.bigBlind,
     lastRaiseAmount: state.bigBlind,
     lastAggressorSeat: null,
     activePlayers,
     winners: null,
+    timeBanks: newTimeBanks,
+    timeBankActiveSeat: null,
     rakeThisHand: 0,
     actionHistory: [],
     timestamp: action.timestamp!,

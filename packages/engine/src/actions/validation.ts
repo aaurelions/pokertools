@@ -13,6 +13,7 @@ import {
 } from "@pokertools/types";
 import { IllegalActionError } from "../errors/illegal-action-error";
 import { ErrorCodes } from "@pokertools/types";
+import { validateChipAmount } from "../utils/validation";
 import { getPlayerById } from "../utils/positioning";
 
 /**
@@ -20,6 +21,14 @@ import { getPlayerById } from "../utils/positioning";
  * Throws IllegalActionError if action is invalid
  */
 export function validateAction(state: GameState, action: Action): void {
+  if (
+    action.type === ActionType.BET ||
+    action.type === ActionType.RAISE ||
+    action.type === ActionType.ADD_CHIPS
+  ) {
+    validateChipAmount(action.amount, `${action.type} amount`);
+  }
+  if (action.type === ActionType.SIT) validateChipAmount(action.stack, "Sit stack");
   switch (action.type) {
     case ActionType.FOLD:
     case ActionType.CHECK:
@@ -157,20 +166,7 @@ function validateBettingAction(state: GameState, action: Action): void {
       break;
 
     case ActionType.RAISE:
-      // If the current player is still marked as the last aggressor, it means
-      // intermediate actions (like calls or incomplete all-in raises) did NOT
-      // reopen the betting. Therefore, they cannot re-raise their own bet.
-      if (state.lastAggressorSeat === seat) {
-        throw new IllegalActionError(
-          ErrorCodes.CANNOT_RERAISE,
-          "Betting has not been re-opened to you (incomplete raise or no action)",
-          {
-            playerId: action.playerId,
-            seat,
-            lastAggressor: state.lastAggressorSeat,
-          }
-        );
-      }
+      validateRaiseRights(state, seat, playerBet, currentBet);
 
       if (currentBet === 0) {
         throw new IllegalActionError(
@@ -224,13 +220,9 @@ function validateBetAsRaise(
   const amount = action.amount;
   if (typeof amount !== "number") return;
 
-  if (state.lastAggressorSeat === seat) {
-    throw new IllegalActionError(
-      ErrorCodes.CANNOT_RERAISE,
-      "Betting has not been re-opened to you (incomplete raise or no action)",
-      { playerId: action.playerId, seat, lastAggressor: state.lastAggressorSeat }
-    );
-  }
+  // BET matching the wager is normalized to CALL by the reducer.
+  if (amount === currentBet && currentBet > playerBet) return;
+  validateRaiseRights(state, seat, playerBet, currentBet);
 
   const isAllIn = amount >= playerBet + playerStack;
   if (amount <= currentBet && !isAllIn) {
@@ -246,6 +238,30 @@ function validateBetAsRaise(
       ErrorCodes.RAISE_TOO_SMALL,
       `Raise to ${amount} is below minimum ${state.minRaise}`,
       { amount, currentBet, minRaise: state.minRaise }
+    );
+  }
+}
+
+/** Reopening is relative to each player's last voluntary action (TDA rule 47). */
+function validateRaiseRights(
+  state: GameState,
+  seat: number,
+  playerBet: number,
+  currentBet: number
+): void {
+  const hasActed = state.actionHistory.some(
+    (record) =>
+      record.street === state.street &&
+      record.seat === seat &&
+      [ActionType.CHECK, ActionType.CALL, ActionType.BET, ActionType.RAISE].includes(
+        record.action.type
+      )
+  );
+  if (hasActed && currentBet - playerBet < state.lastRaiseAmount) {
+    throw new IllegalActionError(
+      ErrorCodes.CANNOT_RERAISE,
+      "Betting has not been re-opened to you (incomplete raise or no action)",
+      { seat, currentBet, playerBet, lastRaiseAmount: state.lastRaiseAmount }
     );
   }
 }
@@ -277,7 +293,7 @@ function validateDealAction(state: GameState): void {
 }
 
 function validateSitAction(state: GameState, action: SitAction): void {
-  if (action.seat < 0 || action.seat >= state.maxPlayers) {
+  if (!Number.isInteger(action.seat) || action.seat < 0 || action.seat >= state.maxPlayers) {
     throw new IllegalActionError(
       ErrorCodes.INVALID_SEAT,
       `Seat ${action.seat} is invalid (max: ${state.maxPlayers - 1})`,
@@ -356,7 +372,7 @@ function validateAddChipsAction(state: GameState, action: AddChipsAction): void 
 }
 
 function validateReserveSeatAction(state: GameState, action: ReserveSeatAction): void {
-  if (action.seat < 0 || action.seat >= state.maxPlayers) {
+  if (!Number.isInteger(action.seat) || action.seat < 0 || action.seat >= state.maxPlayers) {
     throw new IllegalActionError(
       ErrorCodes.INVALID_SEAT,
       `Seat ${action.seat} is invalid (max: ${state.maxPlayers - 1})`,

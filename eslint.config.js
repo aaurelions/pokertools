@@ -20,6 +20,7 @@ module.exports = tseslint.config(
       "packages/api/vitest.config.ts",
       "packages/api/tests/**",
       "packages/api/src/workers/**",
+      "docs/**",
     ],
   },
 

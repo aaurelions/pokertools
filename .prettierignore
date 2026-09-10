@@ -1,6 +1,7 @@
 node_modules/
 dist/
 coverage/
+docs/.vitepress/cache/**
 *.min.js
 *.lock
 package-lock.json

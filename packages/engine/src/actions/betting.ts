@@ -53,7 +53,7 @@ export function handleFold(state: GameState, action: FoldAction): GameState {
   };
 
   const playersWithLiveHands = currentState.players.filter(
-    (p) => p && p.status !== PlayerStatus.FOLDED
+    (p) => p && (p.status === PlayerStatus.ACTIVE || p.status === PlayerStatus.ALL_IN)
   );
 
   if (playersWithLiveHands.length === 1 && playersWithLiveHands[0]) {
@@ -192,8 +192,8 @@ export function handleBet(state: GameState, action: BetAction): GameState {
     ...state,
     players: newPlayers,
     currentBets: newCurrentBets,
-    minRaise: betAmount + betAmount,
-    lastRaiseAmount: betAmount,
+    minRaise: betAmount + Math.max(betAmount, state.bigBlind),
+    lastRaiseAmount: Math.max(betAmount, state.bigBlind),
     lastAggressorSeat: seat,
     actionHistory: [...state.actionHistory, actionRecord],
     timestamp: action.timestamp!,
@@ -249,8 +249,9 @@ export function handleRaise(state: GameState, action: RaiseAction): GameState {
   // Incomplete-raise rule: does this raise reopen the betting?
   const reopensBetting = raiseIncrement >= state.lastRaiseAmount;
 
-  // Incomplete all-in raises do not change the next minimum full raise.
-  const newMinRaise = reopensBetting ? raiseAmount + raiseIncrement : state.minRaise;
+  // A short all-in preserves the raise increment, not the total raise-to amount.
+  const newMinRaise =
+    Math.max(currentBet, raiseAmount) + (reopensBetting ? raiseIncrement : state.lastRaiseAmount);
 
   const newState: GameState = {
     ...state,
@@ -383,6 +384,7 @@ function awardPotToLastPlayer(state: GameState, winningSeat: number): GameState 
       newPlayers[winningSeat] = {
         ...player,
         stack: player.stack + uncalledAmount,
+        totalInvestedThisHand: player.totalInvestedThisHand - uncalledAmount,
       };
 
       newActionHistory.push({
@@ -419,7 +421,7 @@ function awardPotToLastPlayer(state: GameState, winningSeat: number): GameState 
         stack: player.stack + winnings,
       };
 
-      const actualWinnings = winnings - calledPortion;
+      const actualWinnings = winnings;
 
       if (actualWinnings > 0) {
         const existingIndex = winners.findIndex((w) => w.seat === winningSeat);

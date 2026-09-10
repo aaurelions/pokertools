@@ -513,13 +513,21 @@ export class PokerClient {
       headers.Authorization = `Bearer ${this.token}`;
     }
 
+    // Only replay reads or writes protected by the API's idempotency key.
+    const canRetry =
+      method === "GET" ||
+      (typeof body === "object" &&
+        body !== null &&
+        "idempotencyKey" in body &&
+        typeof body.idempotencyKey === "string" &&
+        body.idempotencyKey.length > 0);
+    const retryCount = canRetry ? this.retry.count : 0;
     let lastError: Error | null = null;
 
-    for (let attempt = 0; attempt <= this.retry.count; attempt++) {
+    for (let attempt = 0; attempt <= retryCount; attempt++) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), this.timeout);
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
         if (this.debug) {
           console.log(`[PokerSDK] ${method} ${path}`, body);
         }
@@ -530,8 +538,6 @@ export class PokerClient {
           body: body ? JSON.stringify(body) : undefined,
           signal: controller.signal,
         });
-
-        clearTimeout(timeoutId);
 
         // Handle 304 Not Modified
         if (response.status === 304) {
@@ -554,6 +560,7 @@ export class PokerClient {
           );
         }
 
+        if (response.status === 204 || response.status === 205) return undefined as T;
         const data = (await response.json()) as T;
 
         if (this.debug) {
@@ -562,7 +569,9 @@ export class PokerClient {
 
         return data;
       } catch (error) {
+        clearTimeout(timeoutId);
         lastError = error as Error;
+        if (error instanceof PokerSDKError && error.statusCode === 304) throw error;
 
         // Don't retry client errors (4xx) except rate limiting
         if (error instanceof PokerSDKError) {
@@ -577,20 +586,22 @@ export class PokerClient {
         }
 
         // Don't retry on abort
-        if (error instanceof Error && error.name === "AbortError") {
+        if (controller.signal.aborted || (error instanceof Error && error.name === "AbortError")) {
           throw new PokerSDKError("Request timeout", "TIMEOUT", undefined, {
             timeout: this.timeout,
           });
         }
 
         // Retry with backoff
-        if (attempt < this.retry.count) {
+        if (attempt < retryCount) {
           const delay = this.retry.delay * Math.pow(this.retry.backoff, attempt);
           if (this.debug) {
             console.log(`[PokerSDK] Retry ${attempt + 1}/${this.retry.count} in ${delay}ms`);
           }
           await this.sleep(delay);
         }
+      } finally {
+        clearTimeout(timeoutId);
       }
     }
 

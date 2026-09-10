@@ -10,7 +10,6 @@ import {
   type GameState,
   type Snapshot as EngineSnapshot,
 } from "@pokertools/engine";
-import crypto from "node:crypto";
 import { config as appConfig } from "../config.js";
 import { NotFoundError } from "../utils/errors.js";
 import { defaultBlindStructure } from "../utils/tournaments.js";
@@ -52,13 +51,13 @@ export class GameManager {
     tableId: string,
     action: Action,
     userId: string,
-    options: { skipLock?: boolean; skipIdentity?: boolean } = {}
+    options: { skipLock?: boolean; skipIdentity?: boolean; expectedVersion?: number } = {}
   ): Promise<PublicState> {
     const lockTTL =
       appConfig.NODE_ENV === "test"
         ? appConfig.TABLE_LOCK_TTL_MS_TEST
         : appConfig.TABLE_LOCK_TTL_MS;
-    const lock = options.skipLock
+    let lock = options.skipLock
       ? null
       : await this.redlock.acquire([`lock:table:${tableId}`], lockTTL);
 
@@ -70,6 +69,10 @@ export class GameManager {
       const previousSnapshot = await this.loadSnapshot(tableId);
       const initialVersion = previousSnapshot._version || 0;
       const engine = PokerEngine.restore(previousSnapshot);
+      // Scheduled actions must check their version while holding the table lock.
+      if (options.expectedVersion !== undefined && options.expectedVersion !== initialVersion) {
+        return engine.view(userId, initialVersion);
+      }
 
       // Identity validation (API responsibility)
       if (
@@ -87,7 +90,7 @@ export class GameManager {
       // Check if we need to extend lock before expensive operations
       if (Date.now() - lockStartTime > lockExtendThreshold) {
         try {
-          await lock?.extend(lockTTL);
+          if (lock) lock = await lock.extend(lockTTL);
         } catch (err) {
           // Lock extension failed - another process may have taken over
           throw new Error("Lock expired during operation - operation aborted", { cause: err });
@@ -164,7 +167,9 @@ export class GameManager {
 
       // Handle side effects
       if (engine.state.winners) {
-        await this.handleHandCompletion(tableId, engine, previousSnapshot);
+        if (!previousSnapshot.winners || previousSnapshot.handId !== engine.state.handId) {
+          await this.handleHandCompletion(tableId, engine);
+        }
       } else {
         await this.scheduleTimeout(tableId, engine.state, currentVersion);
       }
@@ -314,46 +319,39 @@ export class GameManager {
   /**
    * Handle hand completion (financial settlement + history)
    */
-  private async handleHandCompletion(
-    tableId: string,
-    engine: PokerEngine,
-    previousSnapshot: Snapshot
-  ): Promise<void> {
-    const handId = crypto.randomUUID();
+  private async handleHandCompletion(tableId: string, engine: PokerEngine): Promise<void> {
+    // Stable across retries and post-showdown SHOW/MUCK actions, scoped to the table.
+    const handId = `${tableId}_${engine.state.handId}`;
 
-    const playerNetChanges: Record<string, string> = {};
-
-    for (const player of engine.state.players) {
-      if (!player) continue;
-
-      const previousPlayer = previousSnapshot.players.find((p) => p?.id === player.id);
-      const stackBefore = previousPlayer ? previousPlayer.stack : 0;
-      const stackAfter = player.stack;
-      const netChange = stackAfter - stackBefore;
-
-      if (netChange !== 0) {
-        playerNetChanges[player.id] = netChange.toString();
+    // Tournament chips are paid through tournament escrow, never cash IN_PLAY accounts.
+    if (!engine.state.config.blindStructure) {
+      const playerNetChanges: Record<string, string> = {};
+      for (const player of engine.state.players) {
+        if (!player) continue;
+        const awarded = (engine.state.winners ?? [])
+          .filter((winner) => winner.seat === player.seat)
+          .reduce((sum, winner) => sum + winner.amount, 0);
+        // Settle the entire hand, not just the stack movement of the final action.
+        const netChange = awarded - player.totalInvestedThisHand;
+        if (netChange !== 0) playerNetChanges[player.id] = netChange.toString();
       }
+      await this.enqueue(
+        "settle-hand",
+        { tableId, handId, playerNetChanges, rakeTotal: engine.state.rakeThisHand.toString() },
+        { jobId: `settle_${handId}`, attempts: 10, backoff: { type: "exponential", delay: 500 } }
+      );
     }
 
-    // Schedule settlement (Engine calculated rake already)
+    // Archive hand history
     await this.enqueue(
-      "settle-hand",
+      "archive-hand",
       {
         tableId,
         handId,
-        playerNetChanges,
-        rakeTotal: engine.state.rakeThisHand.toString(),
+        snapshot: engine.snapshot,
       },
-      { jobId: `settle_${handId}`, attempts: 10, backoff: { type: "exponential", delay: 500 } }
+      { jobId: `archive_${handId}` }
     );
-
-    // Archive hand history
-    await this.enqueue("archive-hand", {
-      tableId,
-      handId,
-      snapshot: engine.snapshot,
-    });
 
     // Auto-deal next hand if enough players
     const activePlayers = engine.state.players.filter((p) => p && p.stack > 0).length;

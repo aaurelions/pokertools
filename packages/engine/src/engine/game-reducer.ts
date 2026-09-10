@@ -116,18 +116,33 @@ export function gameReducer(state: GameState, action: Action): GameState {
       break;
   }
 
-  // Recalculate pots, then progress street.
-  if (shouldProgressStreet(newState)) {
-    newState = recalculatePots(newState);
-    newState = progressStreet(newState);
+  if (
+    [
+      ActionType.FOLD,
+      ActionType.CHECK,
+      ActionType.CALL,
+      ActionType.BET,
+      ActionType.RAISE,
+      ActionType.TIMEOUT,
+    ].includes(action.type)
+  ) {
+    newState = { ...newState, timeBankActiveSeat: null };
   }
 
-  if (shouldShowdown(newState)) {
-    newState = determineWinners(newState);
-  }
-
-  if (newState.actionTo !== null && newState.players[newState.actionTo]?.isSittingOut) {
-    newState = { ...newState, actionTo: null };
+  // Finish betting rounds, including automatic check/folds for sitting-out live hands.
+  while (true) {
+    if (shouldProgressStreet(newState)) {
+      newState = recalculatePots(newState);
+      newState = progressStreet(newState);
+    }
+    if (shouldShowdown(newState)) newState = determineWinners(newState);
+    const nextPlayer = newState.actionTo === null ? null : newState.players[newState.actionTo];
+    if (!nextPlayer?.isSittingOut) break;
+    newState = handleTimeout(newState, {
+      type: ActionType.TIMEOUT,
+      playerId: nextPlayer.id,
+      timestamp: newState.timestamp,
+    });
   }
 
   // Integrity check; can be disabled via config (not recommended for production).

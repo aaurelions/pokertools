@@ -7,46 +7,9 @@ import { NO_FLUSH_7 } from "../tables/no-flush-7";
 import { hashQuinary } from "./hash";
 
 /**
- * Static buffers to prevent garbage collection overhead during hot loop evaluations.
- *
- * @internal
- * @warning NOT THREAD-SAFE / NOT RE-ENTRANT
- *
- * These static arrays are reused across all evaluate() calls within the same
- * JavaScript context to eliminate GC pressure during Monte Carlo simulations.
- *
- * **Thread Safety Implications:**
- * - Safe for standard Node.js/Browser single-threaded execution
- * - Safe for async/await code (each await yields control)
- * - NOT safe if called recursively (don't call evaluate() from within evaluate())
- * - NOT safe with SharedArrayBuffer or true multi-threaded contexts
- * - NOT safe if multiple evaluate() calls are interleaved in the same tick
- *
- * **Performance Trade-off:**
- * Using static buffers provides ~12% speed improvement (17M vs 15M hands/sec)
- * by avoiding array allocations in the hot path. The non-reentrancy is acceptable
- * because poker hand evaluation is a synchronous, non-recursive operation.
- *
- * @example
- * // ✅ SAFE: Sequential evaluation
- * const score1 = evaluate(hand1);
- * const score2 = evaluate(hand2);
- *
- * @example
- * // ✅ SAFE: Async is OK (yields between calls)
- * for (const hand of hands) {
- *   const score = evaluate(hand);
- *   await saveToDatabase(score);
- * }
- *
- * @example
- * // ❌ UNSAFE: Recursive call
- * function badIdea(cards) {
- *   if (cards.length > 7) {
- *     return evaluate(cards.slice(0, 7)); // Corrupts static buffers!
- *   }
- *   return evaluate(cards);
- * }
+ * Scratch buffers reused by synchronous evaluations to avoid hot-path allocations.
+ * Calls must not be re-entered through custom array getters/proxies. Normal arrays,
+ * sequential calls and separate worker isolates do not share an active evaluation.
  */
 const suitBinary = [0, 0, 0, 0];
 const quinary = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];

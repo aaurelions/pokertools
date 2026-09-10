@@ -293,9 +293,42 @@ export class PokerEngine {
       });
     }
 
+    const chipFields = {
+      smallBlind: config.smallBlind,
+      bigBlind: config.bigBlind,
+      ante: config.ante ?? 0,
+      initialStack: config.initialStack ?? 0,
+      rakeCap: config.rakeCap ?? 0,
+    };
+    for (const [name, value] of Object.entries(chipFields)) {
+      if (!Number.isSafeInteger(value) || value < 0) {
+        throw new ConfigError(`${name} must be a non-negative safe integer`, { [name]: value });
+      }
+    }
+    if (
+      config.rakePercent !== undefined &&
+      (!Number.isFinite(config.rakePercent) || config.rakePercent < 0 || config.rakePercent > 100)
+    ) {
+      throw new ConfigError("Rake percentage must be between 0 and 100");
+    }
+    if (config.blindStructure) {
+      for (const level of config.blindStructure) {
+        if (
+          !Number.isSafeInteger(level.smallBlind) ||
+          level.smallBlind <= 0 ||
+          !Number.isSafeInteger(level.bigBlind) ||
+          level.bigBlind <= level.smallBlind ||
+          !Number.isSafeInteger(level.ante) ||
+          level.ante < 0
+        ) {
+          throw new ConfigError("Invalid blind structure level");
+        }
+      }
+    }
+
     const maxPlayers = config.maxPlayers ?? DEFAULT_MAX_PLAYERS;
 
-    if (maxPlayers < 2 || maxPlayers > 10) {
+    if (!Number.isInteger(maxPlayers) || maxPlayers < 2 || maxPlayers > 10) {
       throw new ConfigError("Max players must be between 2 and 10", {
         maxPlayers,
       });
@@ -339,7 +372,7 @@ export class PokerEngine {
       timeBankActiveSeat: null,
       actionHistory: [],
       previousStates: [],
-      timestamp: Date.now(),
+      timestamp: this.timeProvider(),
       handId: "initial",
     };
   }

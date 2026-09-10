@@ -26,6 +26,13 @@ const worker = new Worker(
   async (job) => {
     const { tableId, handId, playerNetChanges, rakeTotal } = job.data;
     const rakeAmount = BigInt(rakeTotal);
+    const netTotal = Object.values(playerNetChanges as Record<string, string>).reduce(
+      (sum, change) => sum + BigInt(change),
+      0n
+    );
+    if (rakeAmount < 0n || netTotal + rakeAmount !== 0n) {
+      throw new Error(`Unbalanced settlement for hand ${handId}`);
+    }
 
     const lockKey = `lock:table:${tableId}`;
     let lock;

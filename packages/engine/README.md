@@ -5,7 +5,7 @@
 [![npm version](https://img.shields.io/npm/v/@pokertools/engine.svg)](https://www.npmjs.com/package/@pokertools/engine)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-6.0+-blue.svg)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/tests-362%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-362%20passed-brightgreen.svg)](<>)
 
 A **production-ready** poker game engine featuring immutable state management, chip conservation auditing, side pot calculation, rake handling, tournament support, and comprehensive rule enforcement.
 

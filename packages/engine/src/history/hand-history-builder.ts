@@ -27,7 +27,7 @@ export function buildHandHistory(
   const streets = buildStreetHistory(finalState);
   const winners = buildWinnerHistory(finalState);
 
-  const totalPot = winners.reduce((sum, w) => sum + w.amount, 0);
+  const totalPot = winners.reduce((sum, w) => sum + w.amount, 0) + finalState.rakeThisHand;
 
   return {
     handId: finalState.handId,
@@ -57,8 +57,11 @@ function buildPlayerHistory(state: GameState): HandHistoryPlayer[] {
   for (const player of state.players) {
     if (!player) continue;
 
-    // Calculate starting stack (current + invested)
-    const startingStack = player.stack + player.totalInvestedThisHand;
+    // Ending stacks already include awards; returned uncalled bets are not investments.
+    const awarded = (state.winners ?? [])
+      .filter((winner) => winner.seat === player.seat)
+      .reduce((sum, winner) => sum + winner.amount, 0);
+    const startingStack = player.stack + player.totalInvestedThisHand - awarded;
 
     // Only include cards if they are fully visible (no masked/null cards)
     const hasMaskedCards = player.hand?.some((c) => c === null);

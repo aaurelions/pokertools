@@ -20,8 +20,11 @@ const worker = new Worker(
     const engine = PokerEngine.restore(snapshot);
     const historyData = engine.history({ format: "json" });
 
-    await prisma.handHistory.create({
-      data: {
+    await prisma.handHistory.upsert({
+      where: { id: handId },
+      update: {},
+      create: {
+        id: handId,
         tableId,
         data: historyData,
         timestamp: new Date(),

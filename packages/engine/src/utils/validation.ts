@@ -23,10 +23,10 @@ export function validateChipAmount(amount: number, context: string): void {
     );
   }
 
-  if (!Number.isInteger(amount)) {
+  if (!Number.isSafeInteger(amount)) {
     throw new IllegalActionError(
       ErrorCodes.INVALID_AMOUNT,
-      `${context}: ${amount} must be an integer (fractional chips not allowed)`,
+      `${context}: ${amount} must be a safe integer (fractional chips not allowed)`,
       { amount, context }
     );
   }

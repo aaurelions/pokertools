@@ -130,6 +130,25 @@ describe("React SDK hooks", () => {
     expect(() => render(<Broken />)).toThrow("usePoker must be used within a PokerProvider");
   });
 
+  it("replaces the authenticated socket when the token changes", async () => {
+    const { rerender } = render(
+      <PokerProvider config={{ baseUrl: "http://api.test", token: "token-1" }}>
+        <div />
+      </PokerProvider>
+    );
+    await waitFor(() => expect(mocks.connectMock).toHaveBeenCalledTimes(1));
+    rerender(
+      <PokerProvider config={{ baseUrl: "http://api.test", token: "token-2" }}>
+        <div />
+      </PokerProvider>
+    );
+    await waitFor(() => expect(mocks.connectMock).toHaveBeenCalledTimes(2));
+    expect(mocks.disconnectMock).toHaveBeenCalledTimes(1);
+    expect(mocks.MockPokerSocket.fromConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({ token: "token-2" })
+    );
+  });
+
   it("auto-connects once and does not reconnect for inline config object identity changes", async () => {
     function Status() {
       const { state } = useConnection();

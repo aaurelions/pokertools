@@ -61,38 +61,30 @@ const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
 
 (async () => {
   try {
-    // Schedule deposit monitor as a repeatable job
+    // BullMQ 6: repeatable jobs are Job Schedulers. Upsert is idempotent, so
+    // restarting the workers re-creates or updates the same schedulers.
     const depositQueue = new Queue("deposit-monitor", { connection: redis as any });
-    await depositQueue.add(
-      "deposit-monitor",
-      {},
-      {
-        repeat: { every: config.DEPOSIT_MONITOR_INTERVAL_MS },
-        jobId: "deposit-monitor-singleton",
-      }
+    await depositQueue.upsertJobScheduler(
+      "deposit-monitor-singleton",
+      { every: config.DEPOSIT_MONITOR_INTERVAL_MS },
+      { name: "deposit-monitor", data: {} }
     );
     logger.info(`Deposit monitor scheduled: every ${config.DEPOSIT_MONITOR_INTERVAL_MS}ms`);
 
     // Schedule tournament blinds as a repeatable job
     const blindsQueue = new Queue("tournament-blinds", { connection: redis as any });
-    await blindsQueue.add(
-      "tournament-blinds",
-      {},
-      {
-        repeat: { every: config.TOURNAMENT_BLIND_SCAN_INTERVAL_MS },
-        jobId: "tournament-blinds-singleton",
-      }
+    await blindsQueue.upsertJobScheduler(
+      "tournament-blinds-singleton",
+      { every: config.TOURNAMENT_BLIND_SCAN_INTERVAL_MS },
+      { name: "tournament-blinds", data: {} }
     );
     logger.info(`Tournament blinds scheduler: every ${config.TOURNAMENT_BLIND_SCAN_INTERVAL_MS}ms`);
 
     const reconciliationQueue = new Queue("reconciliation", { connection: redis as any });
-    await reconciliationQueue.add(
-      "reconciliation",
-      {},
-      {
-        repeat: { every: config.RECONCILIATION_INTERVAL_MS },
-        jobId: "reconciliation-singleton",
-      }
+    await reconciliationQueue.upsertJobScheduler(
+      "reconciliation-singleton",
+      { every: config.RECONCILIATION_INTERVAL_MS },
+      { name: "reconciliation", data: {} }
     );
     logger.info(`Reconciliation scheduler: every ${config.RECONCILIATION_INTERVAL_MS}ms`);
   } catch (error) {

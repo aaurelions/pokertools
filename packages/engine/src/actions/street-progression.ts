@@ -31,6 +31,9 @@ export function progressStreet(state: GameState): GameState {
     pots: state.pots,
     currentBets: new Map(),
     lastAggressorSeat: null,
+    minRaise: state.bigBlind,
+    lastRaiseAmount: state.bigBlind,
+    timeBankActiveSeat: null,
     // Street progression is not a user action, keep last timestamp.
   };
 
@@ -136,6 +139,9 @@ function handleAutoRunout(state: GameState): GameState {
       deck,
       currentBets: new Map(),
       lastAggressorSeat: null,
+      minRaise: state.bigBlind,
+      lastRaiseAmount: state.bigBlind,
+      timeBankActiveSeat: null,
     };
 
     currentStreet = nextStreet;

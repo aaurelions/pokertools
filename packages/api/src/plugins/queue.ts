@@ -14,9 +14,8 @@ const jobQueueNames = [
 export type JobQueueName = (typeof jobQueueNames)[number];
 export type JobQueues = Record<JobQueueName, Queue>;
 
-const queuePlugin: FastifyPluginAsync = async (fastify) => {
-  const connection = fastify.redis as unknown as ConnectionOptions;
-  const jobQueues = Object.fromEntries(
+export function createJobQueues(connection: ConnectionOptions): JobQueues {
+  return Object.fromEntries(
     jobQueueNames.map((name) => [
       name,
       new Queue(name, {
@@ -30,6 +29,10 @@ const queuePlugin: FastifyPluginAsync = async (fastify) => {
       }),
     ])
   ) as JobQueues;
+}
+
+const queuePlugin: FastifyPluginAsync = async (fastify) => {
+  const jobQueues = createJobQueues(fastify.redis);
 
   fastify.decorate("queue", jobQueues["settle-hand"]);
   fastify.decorate("jobQueues", jobQueues);

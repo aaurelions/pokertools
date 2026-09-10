@@ -114,6 +114,32 @@ contract BatchSweeperTest is Test {
         assertEq(usdc.balanceOf(address(sweeper)), 0, "Sweeper should have 0 balance");
     }
 
+    function testCannotStealSweepWithCopiedPermit() public {
+        address[] memory owners = new address[](1);
+        uint256[] memory amounts = new uint256[](1);
+        uint256[] memory deadlines = new uint256[](1);
+        uint8[] memory v = new uint8[](1);
+        bytes32[] memory r = new bytes32[](1);
+        bytes32[] memory s = new bytes32[](1);
+        owners[0] = user1;
+        amounts[0] = 100e6;
+        deadlines[0] = block.timestamp + 1 hours;
+        (v[0], r[0], s[0]) = _getPermitSignature(
+            user1Key, address(sweeper), amounts[0], 0, deadlines[0]
+        );
+
+        address attacker = address(0xBAD);
+        vm.prank(attacker);
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", attacker));
+        sweeper.batchSweep(address(usdc), owners, amounts, deadlines, v, r, s);
+        assertEq(usdc.balanceOf(user1), 100e6);
+        assertEq(usdc.balanceOf(attacker), 0);
+
+        vm.prank(hotWallet);
+        sweeper.batchSweep(address(usdc), owners, amounts, deadlines, v, r, s);
+        assertEq(usdc.balanceOf(hotWallet), 100e6);
+    }
+
     function testBatchSweepArrayLengthMismatch() public {
         address[] memory owners = new address[](2);
         uint256[] memory amounts = new uint256[](3); // Mismatch

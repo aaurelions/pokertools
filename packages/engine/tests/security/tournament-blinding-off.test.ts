@@ -89,7 +89,8 @@ describe("Tournament Security: Blinding Off Exploit Prevention", () => {
     // P0 should have posted ante even though sitting out
     const p0 = engine.state.players[0]!;
     expect(p0.stack).toBe(stackBeforeDeal - 10); // Lost ante
-    expect(p0.betThisStreet).toBe(10);
+    expect(p0.betThisStreet).toBe(0); // Antes do not count toward the live wager
+    expect(p0.totalInvestedThisHand).toBe(10);
     expect(p0.status).toBe(PlayerStatus.FOLDED); // Auto-folded after posting
   });
 

@@ -37,25 +37,24 @@ describe("Min-Raise After Incomplete Raise (TDA/WSOP Rules)", () => {
     });
 
     // Check state after P1's incomplete raise.
-    // The all-in changes the call amount to 120, but does not change the next
-    // legal full-raise threshold, which remains the previous minimum raise to 190.
-    expect(engine.state.minRaise).toBe(190);
+    // The raise increment stays 90, added to the new call amount of 120.
+    expect(engine.state.minRaise).toBe(210);
     expect(engine.state.lastRaiseAmount).toBe(90); // Unchanged (incomplete raise)
     expect(engine.state.lastAggressorSeat).toBe(0); // Unchanged (incomplete raise)
 
-    // P2 must raise to at least 190: a full raise over the last complete raise.
+    // P2 must raise to at least 210 (120 + 90).
     const p2 = engine.state.players[2]!;
 
-    // This should be valid (190 meets the unchanged full-raise threshold)
+    // This should be valid (210 meets the full-raise threshold)
     expect(() => {
       engine.act({
         type: ActionType.RAISE,
         playerId: p2.id,
-        amount: 190,
+        amount: 210,
       });
     }).not.toThrow();
 
-    expect(engine.state.currentBets.get(2)).toBe(190);
+    expect(engine.state.currentBets.get(2)).toBe(210);
   });
 
   test("standard raise correctly updates min-raise", () => {
@@ -99,7 +98,7 @@ describe("Min-Raise After Incomplete Raise (TDA/WSOP Rules)", () => {
     expect(engine.state.lastAggressorSeat).toBe(1);
   });
 
-  test("scenario: P1 bets 100, P2 all-in 120, P3 must raise to 220 minimum", () => {
+  test("scenario: P1 bets 100, P2 all-in 120, P3 must raise to 210 minimum", () => {
     const engine = new PokerEngine({
       smallBlind: 5,
       bigBlind: 10,
@@ -145,8 +144,8 @@ describe("Min-Raise After Incomplete Raise (TDA/WSOP Rules)", () => {
     });
 
     // Action is now on P2 (BB) - they haven't acted yet
-    // Min raise should remain 190; the short all-in did not establish a new raise size.
-    expect(engine.state.minRaise).toBe(190);
+    // Preserve the 90 increment over the new wager of 120.
+    expect(engine.state.minRaise).toBe(210);
 
     // P2 tries to raise to 180 (should fail - below the previous full-raise threshold)
     const p2 = engine.state.players[2]!;
@@ -158,13 +157,13 @@ describe("Min-Raise After Incomplete Raise (TDA/WSOP Rules)", () => {
       });
     }).toThrow(); // Should throw RAISE_TOO_SMALL
 
-    // P2 raises to 190 (should succeed - meets min)
+    // P2 raises to 210 (should succeed - meets min)
     engine.act({
       type: ActionType.RAISE,
       playerId: p2.id,
-      amount: 190,
+      amount: 210,
     });
 
-    expect(engine.state.currentBets.get(2)).toBe(190);
+    expect(engine.state.currentBets.get(2)).toBe(210);
   });
 });

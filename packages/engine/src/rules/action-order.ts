@@ -34,7 +34,7 @@ function getNextToActNormal(state: GameState): number | null {
     const player = state.players[seat];
 
     // Skip if: no player, folded, all-in, busted, or sitting out
-    if (player?.status !== PlayerStatus.ACTIVE || player.stack === 0 || player.isSittingOut) {
+    if (player?.status !== PlayerStatus.ACTIVE || player.stack === 0) {
       seat = getNextSeat(seat, state.maxPlayers);
       continue;
     }
@@ -89,7 +89,7 @@ function getNextToActHeadsUp(state: GameState): number | null {
   for (const seat of actionOrder) {
     const player = state.players[seat];
 
-    if (player?.status !== PlayerStatus.ACTIVE || player.stack === 0 || player.isSittingOut) {
+    if (player?.status !== PlayerStatus.ACTIVE || player.stack === 0) {
       continue;
     }
 
@@ -149,7 +149,7 @@ function getNextActionableSeat(startSeat: number, state: GameState): number | nu
   while (seat !== endSeat) {
     const player = state.players[seat];
 
-    if (player?.status === PlayerStatus.ACTIVE && player.stack > 0 && !player.isSittingOut) {
+    if (player?.status === PlayerStatus.ACTIVE && player.stack > 0) {
       return seat;
     }
 
@@ -188,7 +188,7 @@ export function isActionComplete(state: GameState): boolean {
     if (!player) continue;
 
     // Count active players who can still act
-    if (player.status === PlayerStatus.ACTIVE && player.stack > 0 && !player.isSittingOut) {
+    if (player.status === PlayerStatus.ACTIVE && player.stack > 0) {
       activeCount++;
 
       const playerBet = state.currentBets.get(seat) ?? 0;

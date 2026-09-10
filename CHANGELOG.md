@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.17] - 2026-09-10
+
+### Added
+
+- VitePress documentation site under `docs/` (VitePress `2.0.0-alpha.20`): package guides for all eight workspaces, architecture and formatting references, deployment guide, and a GitHub Pages deploy workflow (`docs.yml`) with latest action versions.
+- Engine regression suite (`packages/engine/tests/unit/review-regressions.test.ts`) covering private-history leakage, preflop raise minimums, prior-caller reopening, cumulative all-ins, ante accounting, timeout settlement, time-bank expiry, invalid numeric inputs, and hand-history accounting.
+- API integration regressions for broadcast refunds (`broadcast-refund-regressions.test.ts`) and stale scheduled actions (`scheduled-action-regressions.test.ts`).
+- SDK client reliability tests (`client-reliability.test.ts`): lost-body responses, no-retry mutation policy, 204/205 handling, and token-rotation socket replacement.
+- `refundBroadcastWithdrawal` — single transactional refund path shared by the transaction monitor and withdrawal bot; claims `PROCESSING → FAILED` once and reverses recorded reserve entries exactly.
+- `createJobQueues` export in the API queue plugin so workers reuse the same BullMQ connection setup.
+- Settlement worker balance assertion: rejects any batch whose player changes plus rake do not sum to zero.
+- Hardened `BatchSweeper` authorization: `batchSweep` is now `onlyOwner` with a regression test proving copied permits cannot redirect funds.
+
+### Changed
+
+- **Poker rules** (TDA 43/47): incomplete all-ins preserve the last full raise _increment_ while the minimum raise-to total moves with the new wager; reopening is evaluated per player who has already acted; cumulative short all-ins reopen betting; a short opening bet never lowers the increment below the big blind; `BET` matching the wager is a documented `CALL` alias.
+- Antes are collected as **dead money** into their own pot and never inflate the live preflop wager or the minimum raise.
+- Timeout actions route through normal fold/check settlement (a timeout fold can award the last live hand); sitting-out live hands are auto-checked/folded when action reaches them; time-bank activation expires on the next betting action.
+- Fold awards and uncalled returns now settle gross amounts consistently with showdown awards; returned uncalled bets reduce `totalInvestedThisHand`.
+- Hand-history accounting: starting stacks subtract awards, and `totalPot` includes rake.
+- Public engine views strip undo-history snapshots in addition to deck and hole cards.
+- Validation hardening: NaN, fractional, negative, and unsafe chip amounts rejected through `act`/`optimisticAct`/`validate`; stricter seat and config checks; engine initialization uses the injected clock.
+- API settlement now covers the **entire hand** (awards − investments) instead of the final action's stack delta, uses stable table-scoped hand IDs, skips cash settlement for tournament escrow, and guards against duplicate settlement after SHOW/MUCK.
+- Timeout and auto-deal workers now run through `GameManager.processAction` (version check under the table lock; lock contention fails jobs for BullMQ retry instead of dropping them).
+- Extended table locks retain the replacement lock object; hand archives use stable job IDs and database upserts.
+- Broadcast completion credits the `HOUSE_RESERVE` account to match its ledger entry.
+- Receipt monitoring scans withdrawals only, guards confirmation transitions with conditional updates, and survives per-scan failures.
+- SDK HTTP reliability: automatic retries limited to reads and idempotency-keyed writes; 304 returns immediately; 204/205 accepted; request deadlines stay active while reading bodies; React token replacement swaps the authenticated socket.
+- Evaluator scratch-buffer documentation corrected (sequential calls and separate worker isolates are safe).
+- Dependencies updated to latest: vitest 5, bullmq 6, ioredis 6, better-sqlite3 13, prisma 7.10, fastify 5.12, zod 4.6, viem 2.56, eslint 10.10, typescript-eslint 8.70, jest 30.5, react 19.3, and more. TypeScript stays on 6.0.x (typescript-eslint peer range `<6.1.0`) and Prisma stays on stable 7.10 (npm `latest` tag points to an RC).
+- GitHub Actions updated to latest verified versions: `actions/setup-node@v7` (CI, publish), `actions/upload-pages-artifact@v5` (docs).
+
+### Fixed
+
+- `better-sqlite3` native bindings not building on fresh installs: `allowScripts` restored for the nested `12.11.1` copy pinned by `@prisma/adapter-better-sqlite3` and added for `13.0.3`.
+- Hand history no longer double-counts fold payouts against invested chips.
+- Cash settlements no longer drift from ledger truth for multi-action hands; duplicate `settle-hand` jobs are idempotent.
+- Reverted broadcasts are refunded exactly once and never consume another withdrawal's pending hold.
+
+### Security
+
+- `BatchSweeper.batchSweep` permit-replay theft (any caller, payout to `msg.sender`) fixed by restricting redemption to the contract owner.
+- Undo snapshot leakage in public engine views (unmasked hole cards / deck order) closed.
+- NPM install-script policy extended so allowed native dependencies remain reproducible across installs.
+
+### Tests
+
+- Engine: 381 passed (Jest)
+- Evaluator: 94 passed, 1 skipped (Jest)
+- Types: 150 passed (Jest)
+- SDK/React: 179 passed (Vitest)
+- API (incl. DB-backed settlement/refund regressions): 236 passed (Vitest)
+- Admin: 14 passed (Vitest)
+- Solidity contracts: 5 passed (Foundry)
+- Workspace build, type checking, lint, and formatting: passed
+
+### Documentation
+
+- Introduced the VitePress docs site (`/docs`) with package references, examples, tables, custom text formatting (`==mark==`, `^^underline^^`), math rendering, and an architecture review.
+- Added the engine architecture and correctness review (`docs/ENGINE_REVIEW.md`).
+- README now links the hosted docs and shows a docs build badge.
+
 ## [1.0.16] - 2026-07-03
 
 ### Changed
@@ -524,6 +586,7 @@ Given a version number MAJOR.MINOR.PATCH:
 - [NPM: @pokertools/evaluator](https://www.npmjs.com/package/@pokertools/evaluator)
 - [NPM: @pokertools/types](https://www.npmjs.com/package/@pokertools/types)
 
+[1.0.17]: https://github.com/aaurelions/pokertools/compare/v1.0.16...v1.0.17
 [1.0.16]: https://github.com/aaurelions/pokertools/compare/v1.0.15...v1.0.16
 [1.0.15]: https://github.com/aaurelions/pokertools/compare/v1.0.14...v1.0.15
 [1.0.11]: https://github.com/aaurelions/pokertools/compare/v1.0.10...v1.0.11

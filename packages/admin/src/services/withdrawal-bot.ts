@@ -1,3 +1,4 @@
+import { refundBroadcastWithdrawal } from "./refund-broadcast-withdrawal.js";
 import { Bot, InlineKeyboard, Context } from "grammy";
 import { PrismaClient } from "../../../api/generated/prisma/index.js";
 import type { Redis } from "ioredis";
@@ -194,8 +195,8 @@ export class WithdrawalBot {
 
           if (receipt.status === "success") {
             // Transaction confirmed! Update status
-            await this.prisma.paymentTransaction.update({
-              where: { id: withdrawal.id },
+            await this.prisma.paymentTransaction.updateMany({
+              where: { id: withdrawal.id, status: "PROCESSING" },
               data: {
                 status: "CONFIRMED",
                 recoveryState: null,
@@ -374,68 +375,7 @@ export class WithdrawalBot {
     reason: string
   ) {
     try {
-      await this.prisma.$transaction(async (tx) => {
-        // Return funds from PENDING_WITHDRAWAL to MAIN
-        const pendingAccount = await tx.account.findUnique({
-          where: {
-            userId_currency_type: {
-              userId: withdrawal.userId,
-              currency: config.DEFAULT_CURRENCY,
-              type: "PENDING_WITHDRAWAL",
-            },
-          },
-        });
-
-        if (pendingAccount && pendingAccount.balance >= withdrawal.amountCredit) {
-          await tx.account.update({
-            where: { id: pendingAccount.id },
-            data: { balance: { decrement: withdrawal.amountCredit } },
-          });
-        }
-
-        const mainAccount = await tx.account.findUniqueOrThrow({
-          where: {
-            userId_currency_type: {
-              userId: withdrawal.userId,
-              currency: config.DEFAULT_CURRENCY,
-              type: "MAIN",
-            },
-          },
-        });
-
-        await tx.account.update({
-          where: { id: mainAccount.id },
-          data: { balance: { increment: withdrawal.amountCredit } },
-        });
-
-        await tx.ledgerEntry.createMany({
-          data: [
-            {
-              accountId: pendingAccount?.id ?? mainAccount.id,
-              amount: -withdrawal.amountCredit,
-              type: "REFUND",
-              referenceId: withdrawal.id,
-              metadata: { reason: `${reason}: release pending withdrawal hold` },
-            },
-            {
-              accountId: mainAccount.id,
-              amount: withdrawal.amountCredit,
-              type: "REFUND",
-              referenceId: withdrawal.id,
-              metadata: { reason },
-            },
-          ],
-        });
-
-        await tx.paymentTransaction.update({
-          where: { id: withdrawal.id },
-          data: {
-            status: "FAILED",
-            recoveryState: "RECOVERY_REFUNDED",
-            confirmedAt: new Date(),
-          },
-        });
-      });
+      await refundBroadcastWithdrawal(this.prisma, withdrawal.id, config.DEFAULT_CURRENCY, reason);
     } catch (e) {
       this.logger.error(
         { withdrawalId: withdrawal.id, error: e },
@@ -686,6 +626,13 @@ Dest: <code>${meta.address}</code>
             ]
           : []),
       ];
+
+      if (houseReserveAccount) {
+        await dbTx.account.update({
+          where: { id: houseReserveAccount.id },
+          data: { balance: { increment: broadcastAmount } },
+        });
+      }
 
       await dbTx.ledgerEntry.createMany({ data: broadcastLedgerEntries });
 
