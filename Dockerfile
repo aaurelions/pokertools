@@ -28,10 +28,12 @@ COPY packages/api/prisma/ packages/api/prisma/
 
 # ---- Install all dependencies (workspaces linked via npm workspaces) ----
 # --ignore-scripts keeps the layer deterministic (no prepare/install scripts).
+# Native binaries are never compiled: better-sqlite3 13 ships N-API prebuilds
+# (linux x64/arm64, darwin, win32) inside the npm tarball, so no node-gyp
+# toolchain (Python/make/g++) is required in this image. The npm override in
+# the root package.json keeps a single better-sqlite3@13 copy, replacing the
+# nested 12.x that @prisma/adapter-better-sqlite3 used to pin.
 RUN npm ci --ignore-scripts
-
-# Rebuild native addons (better-sqlite3) that were skipped by --ignore-scripts.
-RUN npm rebuild better-sqlite3
 
 # ---- Copy source files for packages we build ----
 COPY packages/types/src packages/types/src

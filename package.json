@@ -87,6 +87,7 @@
   "overrides": {
     "@hono/node-server": "^1.19.13",
     "esbuild": "^0.28.1",
+    "better-sqlite3": "^13.0.3",
     "tsup": {
       "esbuild": "^0.28.1"
     },
@@ -102,7 +103,6 @@
     "msgpackr-extract@3.0.4": true,
     "prisma@7.10.0": true,
     "unrs-resolver@1.12.2": true,
-    "better-sqlite3@12.11.1": true,
     "better-sqlite3@13.0.3": true
   }
 }
