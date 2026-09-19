@@ -1,6 +1,6 @@
 {
   "name": "pokertools-monorepo",
-  "version": "1.0.18",
+  "version": "1.0.19",
   "private": true,
   "description": "Enterprise-grade Texas Hold'em poker engine and API monorepo",
   "author": "A.Aurelius",
@@ -65,7 +65,7 @@
     "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "^8.70.0",
     "@typescript-eslint/parser": "^8.70.0",
-    "@vitest/coverage-v8": "^5.0.0",
+    "@vitest/coverage-v8": "^5.0.1",
     "dotenv": "^17.4.2",
     "eslint": "^10.10.0",
     "fast-check": "^4.9.0",
@@ -80,9 +80,9 @@
     "tsx": "^4.23.13",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.70.0",
-    "vitest": "^5.0.0",
+    "vitest": "^5.0.1",
     "ws": "^8.21.3",
-    "zod": "^4.6.1"
+    "zod": "^4.6.5"
   },
   "overrides": {
     "@hono/node-server": "^1.19.13",
