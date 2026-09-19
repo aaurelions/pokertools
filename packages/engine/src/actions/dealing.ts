@@ -30,6 +30,11 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
   const newPlayers = state.players.map((player) => {
     if (!player) return null;
 
+    if (player.pendingStand) {
+      newTimeBanks.delete(player.seat);
+      return null;
+    }
+
     if (player.status === PlayerStatus.RESERVED) {
       if (player.reservationExpiry && action.timestamp! >= player.reservationExpiry) {
         newTimeBanks.delete(player.seat);
@@ -271,6 +276,7 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
     handNumber: state.handNumber + 1,
     handId: `hand-${action.timestamp!}-${Math.floor(handIdRng() * 1000000)}`,
     buttonSeat: newButtonSeat,
+    bigBlindSeat: blindPositions?.bigBlindSeat ?? null,
     deck: remainingDeck,
     board: [],
     street: Street.PREFLOP,
@@ -326,7 +332,18 @@ function moveHeadsUpButtonToOccupiedSeat(buttonSeat: number, state: GameState): 
   const occupiedSeats = state.players.filter((player) => player !== null && player.stack > 0);
   const buttonPlayer = state.players[buttonSeat];
 
-  if (occupiedSeats.length !== 2 || (buttonPlayer !== null && buttonPlayer.stack > 0)) {
+  if (occupiedSeats.length !== 2) {
+    return buttonSeat;
+  }
+
+  // When heads-up starts (and on every subsequent heads-up hand), the player
+  // who most recently posted the big blind becomes the button/small blind.
+  // This prevents either player from posting consecutive big blinds.
+  if (state.bigBlindSeat !== null && state.players[state.bigBlindSeat]?.stack) {
+    return state.bigBlindSeat;
+  }
+
+  if (buttonPlayer !== null && buttonPlayer.stack > 0) {
     return buttonSeat;
   }
 

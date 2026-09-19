@@ -51,7 +51,7 @@ console.log(engine.state.street); // "FLOP"
 | :----------------------------------- | :-------------------------------------------------------------------------------- |
 | `constructor(config, timeProvider?)` | Create a table; `timeProvider` defaults to `Date.now` and is injectable for tests |
 | `sit(seat, id, name, stack)`         | Seat a player (validates seat + chip amount)                                      |
-| `stand(id)`                          | Remove a player                                                                   |
+| `stand(id)`                          | Leave the table; committed chips remain through settlement                        |
 | `deal()`                             | Shuffle, deal, collect antes, post blinds                                         |
 | `act(action)`                        | Validate and apply an action; throws `IllegalActionError` on rule violations      |
 | `validate(action)`                   | Dry-run — returns `{ valid: true }` or `{ valid: false, error, code }`            |
@@ -122,11 +122,21 @@ console.log(engine.state.lastRaiseAmount); // 10
 | Situation                | Engine behavior                                               |
 | :----------------------- | :------------------------------------------------------------ |
 | First preflop raise      | Must reach `bigBlind × 2`                                     |
+| Short all-in big blind   | Full configured big blind remains the preflop bring-in        |
 | Full raise               | `minRaise = raiseTo + raiseIncrement`                         |
 | Short all-in             | Increment preserved, `minRaise` moves with the new wager      |
 | Player already acted     | Cannot re-raise unless betting reopened for **them** (TDA 47) |
 | Cumulative short all-ins | Can reopen the original aggressor                             |
 | `BET` matching wager     | Normalized to `CALL`                                          |
+
+When play becomes heads-up, the prior big blind becomes the button/small blind
+so neither player posts consecutive big blinds. Odd chips in split pots are
+awarded to the first tied winner left of the button. If betting completes with
+an all-in, every live hand is revealed.
+
+An active player who stands mid-hand is folded without changing an existing
+out-of-turn actor. Any committed chips remain represented until settlement,
+and an unresolved all-in player cannot stand.
 
 ## Timeouts & time bank
 

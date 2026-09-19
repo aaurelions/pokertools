@@ -35,12 +35,15 @@ Reviewed 2026-09-07. This is a component review with implemented corrections and
 ### Poker rules and state integrity
 
 - The initial preflop minimum raise is the wager plus a full big-blind increment.
+- A short all-in big blind does not lower the full preflop bring-in.
 - An incomplete all-in preserves the last full raise **increment**, while the minimum raise-to total moves with the new wager.
 - Reopening is checked for each player who has already acted, including prior callers. Multiple short all-ins can cumulatively reopen betting.
 - BET matching a pending wager is accepted as the documented CALL alias.
 - A short opening bet does not reduce the required full raise increment below the big blind.
 - Street transitions reset raise metadata and time-bank activation. An activation also expires when the player takes a betting action.
 - Antes are collected as dead money rather than added to live street wagers.
+- Heads-up transitions prevent consecutive big blinds; split-pot odd chips start left of the button.
+- Live hands are tabled when betting completes with an all-in.
 - New deals clear stale hands and investments for players who sit out, and preserve the updated reservation/time-bank map.
 - Timeout folds use normal fold settlement. A sitting-out live hand is automatically checked or folded when action reaches it, rather than silently retaining eligibility without matching a later bet.
 - Final-fold detection ignores waiting/reserved players who are not live participants.

@@ -432,8 +432,8 @@ describe("Poker Rules Specification - No-Limit Texas Hold'em", () => {
       // Everyone goes all-in
       // Action order: Dave(UTG), Alice(BTN), Bob(SB), Charlie(BB)
       engine.act({ type: ActionType.RAISE, playerId: "p4", amount: 1000, timestamp: Date.now() }); // Dave all-in
-      engine.act({ type: ActionType.RAISE, playerId: "p1", amount: 100, timestamp: Date.now() }); // Alice all-in (incomplete)
-      engine.act({ type: ActionType.RAISE, playerId: "p2", amount: 500, timestamp: Date.now() }); // Bob all-in (incomplete)
+      engine.act({ type: ActionType.CALL, playerId: "p1", timestamp: Date.now() }); // Alice calls all-in for less
+      engine.act({ type: ActionType.CALL, playerId: "p2", timestamp: Date.now() }); // Bob calls all-in for less
       engine.act({ type: ActionType.CALL, playerId: "p3", timestamp: Date.now() }); // Charlie calls 1000
 
       const state = engine.state;

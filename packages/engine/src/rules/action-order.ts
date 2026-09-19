@@ -2,6 +2,7 @@ import { GameState, Street, PlayerStatus } from "@pokertools/types";
 import { getNextSeat } from "../utils/positioning";
 import { isHeadsUp, getHeadsUpActionOrder } from "./heads-up";
 import { getBlindPositions } from "./blinds";
+import { getCurrentBet } from "./current-bet";
 
 /**
  * Determine the next player to act
@@ -164,21 +165,6 @@ function getNextActionableSeat(startSeat: number, state: GameState): number | nu
   }
 
   return null;
-}
-
-/**
- * Get current highest bet this street
- */
-function getCurrentBet(state: GameState): number {
-  let maxBet = 0;
-
-  for (const bet of state.currentBets.values()) {
-    if (bet > maxBet) {
-      maxBet = bet;
-    }
-  }
-
-  return maxBet;
 }
 
 /**

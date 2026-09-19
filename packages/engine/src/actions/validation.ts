@@ -15,6 +15,7 @@ import { IllegalActionError } from "../errors/illegal-action-error";
 import { ErrorCodes } from "@pokertools/types";
 import { validateChipAmount } from "../utils/validation";
 import { getPlayerById } from "../utils/positioning";
+import { getCurrentBet } from "../rules/current-bet";
 
 /**
  * Validate that an action is legal in the current game state
@@ -177,10 +178,13 @@ function validateBettingAction(state: GameState, action: Action): void {
       }
       if ("amount" in action) {
         // Check if player is going all-in (incomplete raise exception)
-        const isAllIn = action.amount >= playerBet + player.stack;
+        const maximumWager = playerBet + player.stack;
+        const effectiveAmount = Math.min(action.amount, maximumWager);
+        const isAllIn = action.amount >= maximumWager;
 
-        // Reject raises that don't exceed current bet (unless all-in)
-        if (action.amount <= currentBet && !isAllIn) {
+        // RAISE amounts are raise-to totals. An all-in wager that cannot
+        // exceed the current price is a short CALL, not a RAISE.
+        if (effectiveAmount <= currentBet) {
           throw new IllegalActionError(
             ErrorCodes.RAISE_TOO_SMALL,
             `Raise to ${action.amount} must be greater than current bet ${currentBet}`,
@@ -224,8 +228,10 @@ function validateBetAsRaise(
   if (amount === currentBet && currentBet > playerBet) return;
   validateRaiseRights(state, seat, playerBet, currentBet);
 
-  const isAllIn = amount >= playerBet + playerStack;
-  if (amount <= currentBet && !isAllIn) {
+  const maximumWager = playerBet + playerStack;
+  const effectiveAmount = Math.min(amount, maximumWager);
+  const isAllIn = amount >= maximumWager;
+  if (effectiveAmount <= currentBet) {
     throw new IllegalActionError(
       ErrorCodes.RAISE_TOO_SMALL,
       `Raise to ${amount} must be greater than current bet ${currentBet}`,
@@ -336,6 +342,19 @@ function validateStandAction(state: GameState, action: StandAction): void {
       { playerId: action.playerId }
     );
   }
+
+  if (
+    result.player.status === PlayerStatus.ALL_IN &&
+    state.handNumber > 0 &&
+    state.street !== Street.SHOWDOWN &&
+    state.winners === null
+  ) {
+    throw new IllegalActionError(
+      ErrorCodes.INVALID_ACTION,
+      `Player ${action.playerId} cannot stand while all-in before the hand is settled`,
+      { playerId: action.playerId }
+    );
+  }
 }
 
 function validateTimeAction(state: GameState, action: TimeoutAction | TimeBankAction): void {
@@ -387,17 +406,4 @@ function validateReserveSeatAction(state: GameState, action: ReserveSeatAction):
       { seat: action.seat }
     );
   }
-}
-
-/**
- * Get current highest bet this street
- */
-function getCurrentBet(state: GameState): number {
-  let maxBet = 0;
-  for (const bet of state.currentBets.values()) {
-    if (bet > maxBet) {
-      maxBet = bet;
-    }
-  }
-  return maxBet;
 }

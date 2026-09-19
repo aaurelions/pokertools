@@ -1,6 +1,6 @@
 {
   "name": "@pokertools/api",
-  "version": "1.0.19",
+  "version": "1.0.20",
   "description": "Production-ready REST/WebSocket API for PokerTools engine",
   "author": "A.Aurelius",
   "license": "MIT",
@@ -65,8 +65,8 @@
     "@fastify/websocket": "^11.3.1",
     "@noble/curves": "^2.4.0",
     "@paralleldrive/cuid2": "^3.3.0",
-    "@pokertools/engine": "1.0.19",
-    "@pokertools/types": "1.0.19",
+    "@pokertools/engine": "1.0.20",
+    "@pokertools/types": "1.0.20",
     "@prisma/adapter-better-sqlite3": "^7.10.0",
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",

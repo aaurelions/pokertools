@@ -1,6 +1,7 @@
 import { GameState, TimeoutAction, TimeBankAction, ActionType } from "@pokertools/types";
 import { getPlayerById } from "../utils/positioning";
 import { handleFold, handleCheck } from "./betting";
+import { getCurrentBet } from "../rules/current-bet";
 
 const DEFAULT_TIME_BANK_DEDUCTION_SECONDS = 10;
 
@@ -100,17 +101,4 @@ export function handleTimeBank(state: GameState, action: TimeBankAction): GameSt
     timestamp: action.timestamp!,
     // Keep actionTo the same (extends player's turn)
   };
-}
-
-/**
- * Get current highest bet
- */
-function getCurrentBet(state: GameState): number {
-  let maxBet = 0;
-  for (const bet of state.currentBets.values()) {
-    if (bet > maxBet) {
-      maxBet = bet;
-    }
-  }
-  return maxBet;
 }

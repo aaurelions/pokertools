@@ -9,6 +9,7 @@ export interface Snapshot {
   readonly maxPlayers: number;
   readonly handNumber: number;
   readonly buttonSeat: number | null;
+  readonly bigBlindSeat?: number | null;
   readonly deck: number[];
   readonly board: string[];
   readonly street: string;
@@ -65,6 +66,7 @@ export function createSnapshot(state: GameState): Snapshot {
     maxPlayers: state.maxPlayers,
     handNumber: state.handNumber,
     buttonSeat: state.buttonSeat,
+    bigBlindSeat: state.bigBlindSeat,
     deck: Array.from(state.deck),
     board: Array.from(state.board),
     street: state.street,
@@ -111,6 +113,7 @@ export function restoreFromSnapshot(snapshot: Snapshot): GameState {
 
   return {
     ...snapshot,
+    bigBlindSeat: snapshot.bigBlindSeat ?? null,
     currentBets,
     timeBanks,
     timeBankActiveSeat: snapshot.timeBankActiveSeat,

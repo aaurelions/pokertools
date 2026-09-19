@@ -15,6 +15,7 @@ import { getNextToAct } from "../rules/action-order";
 import { CriticalStateError } from "../errors/critical-state-error";
 import { calculateRake } from "../utils/rake";
 import { returnUncalledBet } from "../rules/side-pots";
+import { getCurrentBet } from "../rules/current-bet";
 
 /**
  * Handle FOLD action
@@ -270,19 +271,6 @@ export function handleRaise(state: GameState, action: RaiseAction): GameState {
     ...newState,
     actionTo: nextToAct,
   };
-}
-
-/**
- * Get current highest bet
- */
-function getCurrentBet(state: GameState): number {
-  let maxBet = 0;
-  for (const bet of state.currentBets.values()) {
-    if (bet > maxBet) {
-      maxBet = bet;
-    }
-  }
-  return maxBet;
 }
 
 /**

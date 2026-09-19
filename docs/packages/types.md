@@ -75,6 +75,7 @@ sockets: management and internal actions are never reachable by clients.
 | `actionTo`           | `number \| null`      | Seat to act                                            |
 | `activePlayers`      | `number[]`            | Seats still live                                       |
 | `winners`            | `Winner[] \| null`    | Showdown awards                                        |
+| `bigBlindSeat`       | `number \| null`      | Current or most recent big-blind seat                  |
 | `rakeThisHand`       | `number`              | Rake taken this hand                                   |
 | `actionHistory`      | `ActionRecord[]`      | Every action with pot/stack effects                    |
 | `previousStates`     | `GameState[]`         | Undo snapshots (stripped from public views)            |

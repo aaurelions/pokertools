@@ -6,9 +6,49 @@
 import * as fc from "fast-check";
 import { PokerEngine } from "../../src/engine/poker-engine";
 import { ActionType } from "@pokertools/types";
-import { getInitialChips } from "../../src/utils/invariants";
+import { calculateTotalChips, getInitialChips } from "../../src/utils/invariants";
 
 describe("Chip Conservation Properties", () => {
+  test("short all-in calls, a fold, and an uncalled return conserve chips", () => {
+    fc.assert(
+      fc.property(
+        fc.record({
+          shortStack: fc.integer({ min: 1, max: 99 }),
+          smallBlindStack: fc.integer({ min: 100, max: 2000 }),
+          bigBlindStack: fc.integer({ min: 101, max: 2000 }),
+        }),
+        ({ shortStack, smallBlindStack, bigBlindStack }) => {
+          const initialChips = shortStack + smallBlindStack + bigBlindStack;
+          const engine = new PokerEngine({ smallBlind: 50, bigBlind: 100, maxPlayers: 3 });
+          engine.sit(0, "short", "Short", shortStack);
+          engine.sit(1, "sb", "Small Blind", smallBlindStack);
+          engine.sit(2, "bb", "Big Blind", bigBlindStack);
+          engine.deal();
+
+          expect(calculateTotalChips(engine.state)).toBe(initialChips);
+
+          engine.act({ type: ActionType.CALL, playerId: "short" });
+          expect(engine.state.players[0]!.stack).toBe(0);
+          expect(engine.state.currentBets.get(0)).toBe(shortStack);
+          expect(calculateTotalChips(engine.state)).toBe(initialChips);
+
+          engine.act({ type: ActionType.FOLD, playerId: "sb" });
+          expect(calculateTotalChips(engine.state)).toBe(initialChips);
+
+          engine.act({ type: ActionType.CHECK, playerId: "bb" });
+          expect(engine.state.winners).not.toBeNull();
+          expect(engine.state.currentBets.size).toBe(0);
+          expect(engine.state.pots).toHaveLength(0);
+          expect(calculateTotalChips(engine.state)).toBe(initialChips);
+          expect(engine.state.players.reduce((sum, player) => sum + (player?.stack ?? 0), 0)).toBe(
+            initialChips
+          );
+        }
+      ),
+      { numRuns: 50 }
+    );
+  });
+
   test("chips are conserved through random valid actions", () => {
     fc.assert(
       fc.property(

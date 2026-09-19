@@ -134,7 +134,10 @@ describe("oversized blind regression", () => {
         }
         const seat = engine.state.actionTo!;
         const player = engine.state.players[seat]!;
-        const highestBet = Math.max(0, ...engine.state.currentBets.values());
+        const highestBet = Math.max(
+          engine.state.street === Street.PREFLOP ? engine.state.bigBlind : 0,
+          ...engine.state.currentBets.values()
+        );
         const playerBet = engine.state.currentBets.get(seat) ?? 0;
         const activePlayers = engine.state.players.filter(
           (candidate) => candidate?.status === "ACTIVE"

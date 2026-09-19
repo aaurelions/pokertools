@@ -54,7 +54,10 @@ export function determineWinners(state: GameState): GameState {
       const distA = getDistanceFromButton(a.seat, state.buttonSeat, state.maxPlayers);
       const distB = getDistanceFromButton(b.seat, state.buttonSeat, state.maxPlayers);
 
-      return distA - distB;
+      // Odd-chip order starts left of the button; the button is reached last.
+      const orderA = distA === 0 ? state.maxPlayers : distA;
+      const orderB = distB === 0 ? state.maxPlayers : distB;
+      return orderA - orderB;
     });
 
     // Distribute chips to all winners
@@ -85,12 +88,16 @@ export function determineWinners(state: GameState): GameState {
     }
   }
 
-  // Set shown cards for winners and losers
+  const hasAllInShowdown = newPlayers.some((player) => player?.status === PlayerStatus.ALL_IN);
+
+  // All live hands are tabled when betting ends with an all-in. Otherwise,
+  // winners show and losing hands remain mucked by default.
   for (let seat = 0; seat < newPlayers.length; seat++) {
     const player = newPlayers[seat];
     if (player && player.hand !== null) {
-      if (winnerSeats.has(seat)) {
-        // Winners must show all cards
+      const hasLiveHand =
+        player.status === PlayerStatus.ACTIVE || player.status === PlayerStatus.ALL_IN;
+      if (winnerSeats.has(seat) || (hasAllInShowdown && hasLiveHand)) {
         newPlayers[seat] = {
           ...player,
           shownCards: Array.from({ length: player.hand.length }, (_, i) => i),

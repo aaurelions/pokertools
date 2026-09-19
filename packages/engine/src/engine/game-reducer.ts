@@ -11,6 +11,7 @@ import { recalculatePots } from "../rules/side-pots";
 import { determineWinners, shouldShowdown } from "../rules/showdown";
 import { validateGameStateIntegrity } from "../utils/invariants";
 import { MAX_UNDO_HISTORY } from "../utils/constants";
+import { getCurrentBet } from "../rules/current-bet";
 
 /**
  * Pure game reducer: f(state, action) => newState
@@ -61,7 +62,7 @@ export function gameReducer(state: GameState, action: Action): GameState {
     // Auto-convert BET to RAISE/CALL when there's already a wager.
     // Note: action.amount is the TOTAL bet, not the increment.
     case ActionType.BET:
-      const currentBet = Math.max(...Array.from(state.currentBets.values()), 0);
+      const currentBet = getCurrentBet(state);
       if (currentBet > 0 && "amount" in action) {
         if (action.amount === currentBet) {
           const callAction: Action = {

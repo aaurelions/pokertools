@@ -352,6 +352,7 @@ export class PokerEngine {
       maxPlayers,
       handNumber: 0,
       buttonSeat: null,
+      bigBlindSeat: null,
       deck: [],
       board: [],
       street: Street.PREFLOP,

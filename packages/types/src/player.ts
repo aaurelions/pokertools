@@ -50,4 +50,6 @@ export interface Player {
   readonly sitInOption: SitInOption;
   /** Unix timestamp when seat reservation expires (null if not reserved). */
   readonly reservationExpiry: number | null;
+  /** Leave after committed chips have been settled at the end of the hand. */
+  readonly pendingStand: boolean;
 }

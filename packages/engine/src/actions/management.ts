@@ -34,6 +34,7 @@ export function handleSit(state: GameState, action: SitAction): GameState {
     pendingAddOn: 0,
     sitInOption: action.sitInOption ?? SitInOption.IMMEDIATE,
     reservationExpiry: null,
+    pendingStand: false,
   };
 
   const newPlayers = [...state.players];
@@ -63,27 +64,63 @@ export function handleStand(state: GameState, action: StandAction): GameState {
   let currentState = state;
   const { player, seat } = result;
 
-  // 1. BEST PRACTICE: If the player is in a live hand, they must FOLD first.
-  // This resolves the "ActionTo" pointer, potential winners, and pot eligibility
-  // using the standard game rules defined in handleFold.
-  const isLiveHand =
+  const handInProgress =
     currentState.handNumber > 0 &&
-    currentState.street !== "SHOWDOWN" && // Not needed if hand is over
-    (player.status === "ACTIVE" || player.status === "ALL_IN");
+    currentState.street !== "SHOWDOWN" &&
+    currentState.winners === null;
+  const hasCommittedChips = player.totalInvestedThisHand > 0;
 
-  if (isLiveHand) {
-    // Execute a "Virtual Fold" to gracefully exit the hand
+  if (handInProgress && (player.status === PlayerStatus.ACTIVE || hasCommittedChips)) {
+    const originalActionTo = currentState.actionTo;
+
+    // Active departures fold, but an out-of-turn departure must not advance
+    // action past the player who was already due to act.
+    if (player.status === PlayerStatus.ACTIVE) {
+      currentState = handleFold(currentState, {
+        type: ActionType.FOLD,
+        playerId: player.id,
+        timestamp: action.timestamp,
+      });
+      if (seat !== originalActionTo && currentState.winners === null) {
+        currentState = { ...currentState, actionTo: originalActionTo };
+      }
+    }
+
+    const leavingPlayer = currentState.players[seat]!;
+    const chipsLeavingTable = leavingPlayer.stack;
+    const currentBaseline = (currentState as GameState & { initialChips?: number }).initialChips;
+    const newTimeBanks = new Map(currentState.timeBanks);
+    newTimeBanks.delete(seat);
+
+    // Once the hand has settled, or when the departing player committed no
+    // chips, the seat can be removed immediately. Otherwise retain a zero-stack
+    // folded placeholder until its committed chips are awarded.
+    const mustRetainForSettlement =
+      currentState.winners === null && leavingPlayer.totalInvestedThisHand > 0;
+    const newPlayers = [...currentState.players];
+    newPlayers[seat] = mustRetainForSettlement
+      ? { ...leavingPlayer, stack: 0, pendingStand: true }
+      : null;
+
+    return {
+      ...currentState,
+      players: newPlayers,
+      activePlayers: currentState.activePlayers.filter((activeSeat) => activeSeat !== seat),
+      timeBanks: newTimeBanks,
+      initialChips:
+        typeof currentBaseline === "number" ? currentBaseline - chipsLeavingTable : undefined,
+      timestamp: action.timestamp!,
+    };
+  }
+
+  if (player.status === PlayerStatus.ACTIVE) {
     currentState = handleFold(currentState, {
       type: ActionType.FOLD,
       playerId: player.id,
       timestamp: action.timestamp,
     });
-
-    // NOTE: handleFold returns a new state where actionTo has already been
-    // advanced to the next player. The invariant check will now pass.
   }
 
-  // 2. Remove player from table (Standard Stand Logic)
   const chipsLeavingTable = currentState.players[seat]?.stack ?? 0;
   const currentBaseline = (currentState as GameState & { initialChips?: number }).initialChips;
   const newPlayers = [...currentState.players];
@@ -159,6 +196,7 @@ export function handleReserveSeat(state: GameState, action: ReserveSeatAction): 
     pendingAddOn: 0,
     sitInOption: SitInOption.IMMEDIATE,
     reservationExpiry: action.expiryTimestamp,
+    pendingStand: false,
   };
 
   const newPlayers = [...state.players];

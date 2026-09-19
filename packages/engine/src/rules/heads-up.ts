@@ -1,12 +1,14 @@
 import { GameState, Street, PlayerStatus } from "@pokertools/types";
 
 /**
- * Determine if the game is heads-up (exactly 2 seated players)
- * This checks seated players, not just active in current hand,
- * because heads-up rules apply to the table structure, not hand state
+ * Determine if the game is heads-up (exactly 2 funded seated players).
+ * Zero-stack seats are dead seats until the table owner removes or reloads
+ * them and must not prevent heads-up blind and action-order rules.
  */
 export function isHeadsUp(state: GameState): boolean {
-  const seatedPlayers = state.players.filter((p) => p !== null);
+  const seatedPlayers = state.players.filter(
+    (p) => p !== null && (p.stack > 0 || p.hand !== null || p.totalInvestedThisHand > 0)
+  );
   return seatedPlayers.length === 2;
 }
 

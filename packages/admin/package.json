@@ -1,6 +1,6 @@
 {
   "name": "@pokertools/admin",
-  "version": "1.0.19",
+  "version": "1.0.20",
   "description": "Fund aggregation (sweeper) and withdrawal processing service",
   "author": "A.Aurelius",
   "license": "MIT",
@@ -38,7 +38,7 @@
     "npm": ">=10.0.0"
   },
   "dependencies": {
-    "@pokertools/types": "1.0.19",
+    "@pokertools/types": "1.0.20",
     "@prisma/adapter-better-sqlite3": "^7.10.0",
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",

@@ -5,7 +5,7 @@
 [![npm version](https://img.shields.io/npm/v/@pokertools/engine.svg)](https://www.npmjs.com/package/@pokertools/engine)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-6.0+-blue.svg)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/tests-362%20passed-brightgreen.svg)](<>)
+[![Tests](https://img.shields.io/badge/tests-391%20passed-brightgreen.svg)](<>)
 
 A **production-ready** poker game engine featuring immutable state management, chip conservation auditing, side pot calculation, rake handling, tournament support, and comprehensive rule enforcement.
 
@@ -239,6 +239,16 @@ engine.act({ type: ActionType.MUCK, playerId: "user123" });
 engine.act({ type: ActionType.TIME_BANK, playerId: "user123" });
 ```
 
+`CALL` is amount-less. If the player has less than the outstanding call, it
+commits only their remaining stack and marks them all-in. `BET.amount` and
+`RAISE.amount` are total wager (bet-to/raise-to) amounts for the current street,
+not chip increments. A short all-in above the current wager may be a legal
+incomplete raise; an all-in that does not exceed the current wager must use
+`CALL` and does not reopen betting.
+
+A big blind posted all-in for less than the configured blind does not reduce
+the preflop bring-in: players with chips must still call the full big blind.
+
 ---
 
 #### State Access
@@ -255,6 +265,9 @@ console.log(state.board); // Community cards ["As", "Kd", "Qh"]
 console.log(state.pots); // Array of pot objects
 console.log(state.winners); // null or Winner[] after showdown
 ```
+
+`state.winners` uses seat identity. Each winner has `{ seat, amount, hand,
+handRank }`; resolve player metadata through `state.players[winner.seat]`.
 
 ##### `view(playerId?, version?)`
 
@@ -494,7 +507,14 @@ tournament.nextBlindLevel();
 
 - Sitting-out players must post blinds/antes
 - Dead button rule for empty seats
+- Heads-up transitions prevent consecutive big blinds
 - No rake
+
+Tournament elimination and table balancing are orchestration responsibilities.
+After a hand, remove a busted player with `stand(playerId)` before dealing the
+next hand. For defensive compatibility, a seated zero-stack player is treated
+as a dead seat: they receive no cards or blinds and do not prevent heads-up
+rules from applying to the two funded players.
 
 ---
 
@@ -696,14 +716,14 @@ const restored = restoreFromSnapshot(JSON.parse(json));
 
 ## 🧪 Testing
 
-The engine includes 362 tests across 38 suites:
+The engine includes 397 tests across 42 suites:
 
 | Category       | Files | Description                  |
 | -------------- | ----- | ---------------------------- |
-| Unit           | 27    | Individual component tests   |
-| Integration    | 4     | Full game flow tests         |
+| Unit           | 28    | Individual component tests   |
+| Integration    | 6     | Full game flow tests         |
 | Property       | 3     | Randomized invariant testing |
-| Bug Regression | 2     | Fixed bug verification       |
+| Bug Regression | 3     | Fixed bug verification       |
 | Security       | 2     | Anti-cheat/exploit tests     |
 
 ```bash

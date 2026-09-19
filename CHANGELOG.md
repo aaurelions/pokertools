@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.20] - 2026-09-19
+
+### Fixed
+
+- A short all-in big blind no longer lowers the full preflop bring-in for players with chips.
+- Odd chips in tied board-game pots now go to the first winning seat left of the button.
+- Heads-up transitions adjust the button so no player posts the big blind twice in succession.
+- Mid-hand departures preserve committed chips and the existing actor; unresolved all-in players cannot stand before settlement.
+- All live hands are revealed when betting completes with an all-in.
+
+### Tests
+
+- Added rules-audit regressions for bring-ins, odd chips, heads-up transitions, departures, and all-in disclosure.
+
 ## [1.0.19] - 2026-09-19
 
 ### Changed
@@ -605,6 +619,7 @@ Given a version number MAJOR.MINOR.PATCH:
 - [NPM: @pokertools/evaluator](https://www.npmjs.com/package/@pokertools/evaluator)
 - [NPM: @pokertools/types](https://www.npmjs.com/package/@pokertools/types)
 
+[1.0.20]: https://github.com/aaurelions/pokertools/compare/v1.0.19...v1.0.20
 [1.0.19]: https://github.com/aaurelions/pokertools/compare/v1.0.18...v1.0.19
 [1.0.18]: https://github.com/aaurelions/pokertools/compare/v1.0.17...v1.0.18
 [1.0.17]: https://github.com/aaurelions/pokertools/compare/v1.0.16...v1.0.17

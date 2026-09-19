@@ -32,6 +32,8 @@ export interface GameState {
 
   readonly handNumber: number;
   readonly buttonSeat: number | null;
+  /** Big-blind seat for the current/most recently dealt hand. */
+  readonly bigBlindSeat: number | null;
   /** Remaining cards as integer codes. */
   readonly deck: readonly number[];
   /** Community cards, e.g. ["As", "Kd", ...]. */
