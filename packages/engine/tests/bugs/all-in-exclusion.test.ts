@@ -1,8 +1,6 @@
 import { PokerEngine } from "../../src/engine/poker-engine";
 import { ActionType, Street } from "@pokertools/types";
 import { getInitialChips } from "../../src/utils/invariants";
-import { getBlindPositions } from "../../src/rules/blinds";
-import { getNextSeat } from "../../src/utils/positioning";
 
 describe("All-In Exclusion Bug", () => {
   test("all-in player should not lose equity when active players fold", () => {
@@ -31,26 +29,12 @@ describe("All-In Exclusion Bug", () => {
     // Verify chips are still conserved
     expect(getInitialChips(engine.state)).toBe(1010);
 
-    // Determine who acts first dynamically
-    // Logic: Preflop action starts at the player after the Big Blind
-    // Depending on button logic, BB might vary, so we calculate it from state
-    const blinds = getBlindPositions(engine.state);
-    expect(blinds).not.toBeNull();
-
-    // Calculate expected UTG (Under The Gun)
-    // Start searching from seat after Big Blind
-    let expectedActor = getNextSeat(blinds!.bigBlindSeat, engine.state.maxPlayers);
-    // Find first active player
-    while (true) {
-      const p = engine.state.players[expectedActor];
-      if (p && p.status === "ACTIVE" && p.stack > 0) break;
-      expectedActor = getNextSeat(expectedActor, engine.state.maxPlayers);
-    }
-
     let currentPlayer = engine.state.players[engine.state.actionTo!]!;
 
-    // Ensure the engine's choice matches standard poker rules
-    expect(currentPlayer.seat).toBe(expectedActor);
+    // Three-handed with button=0, SB=1 and BB=2: seat 0 is UTG. Blind
+    // positions cannot be recomputed after posting because the all-in BB now
+    // has a zero stack and is intentionally skipped by position selection.
+    expect(currentPlayer.seat).toBe(0);
 
     // P0 folds (or whoever is first)
     engine.act({

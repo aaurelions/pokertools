@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.18] - 2026-09-19
+
+### Fixed
+
+- Engine hands now preserve the original blind positions when assigning preflop action, including when a blind posts all-in.
+- Betting rounds with only all-in players run out even when the current street has no bets.
+- Unmatched blinds are returned to the player who posted them, including a folded blind, rather than being awarded to the hand winner.
+
+### Tests
+
+- Added oversized-blind regressions and a deterministic 10,000-hand termination/chip-conservation sweep.
+
 ## [1.0.17] - 2026-09-10
 
 ### Added

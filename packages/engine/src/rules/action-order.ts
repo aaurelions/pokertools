@@ -8,6 +8,11 @@ import { getBlindPositions } from "./blinds";
  * Returns seat number or null if action is complete
  */
 export function getNextToAct(state: GameState): number | null {
+  // Avoid assigning another actor after the betting round has completed.
+  if (isActionComplete(state)) {
+    return null;
+  }
+
   if (isHeadsUp(state)) {
     return getNextToActHeadsUp(state);
   }
@@ -106,7 +111,7 @@ function getNextToActHeadsUp(state: GameState): number | null {
 /**
  * Get first player to act for the current street
  */
-export function getFirstToAct(state: GameState): number | null {
+export function getFirstToAct(state: GameState, preflopBigBlindSeat?: number): number | null {
   if (state.buttonSeat === null) {
     return null;
   }
@@ -130,7 +135,7 @@ export function getFirstToAct(state: GameState): number | null {
     }
 
     // UTG is the next actionable seat after Big Blind
-    return getNextActionableSeat(blinds.bigBlindSeat, state);
+    return getNextActionableSeat(preflopBigBlindSeat ?? blinds.bigBlindSeat, state);
   } else {
     // Postflop: First to act is left of Button
     // We start scanning immediately after button
@@ -144,9 +149,11 @@ export function getFirstToAct(state: GameState): number | null {
  */
 function getNextActionableSeat(startSeat: number, state: GameState): number | null {
   let seat = getNextSeat(startSeat, state.maxPlayers);
-  const endSeat = startSeat;
 
-  while (seat !== endSeat) {
+  // Inspect every seat, including startSeat after a full orbit. The latter is
+  // necessary when it is the only player who can act (for example, all other
+  // players posted short all-in blinds).
+  for (let inspected = 0; inspected < state.maxPlayers; inspected++) {
     const player = state.players[seat];
 
     if (player?.status === PlayerStatus.ACTIVE && player.stack > 0) {
@@ -181,11 +188,16 @@ export function isActionComplete(state: GameState): boolean {
   const currentBet = getCurrentBet(state);
   let activeCount = 0;
   let actedCount = 0;
+  let allInCount = 0;
 
   for (let seat = 0; seat < state.players.length; seat++) {
     const player = state.players[seat];
 
     if (!player) continue;
+
+    if (player.status === PlayerStatus.ALL_IN) {
+      allInCount++;
+    }
 
     // Count active players who can still act
     if (player.status === PlayerStatus.ACTIVE && player.stack > 0) {
@@ -203,10 +215,10 @@ export function isActionComplete(state: GameState): boolean {
   // Action complete if all active players have acted and matched bets
   // OR if there are no active players (all all-in or folded) during an active hand
   if (activeCount === 0) {
-    // Only return true if we're in a hand (not pre-deal)
-    // Check: Are there all-in players with bets?
-    const allInPlayers = state.players.filter((p) => p?.status === PlayerStatus.ALL_IN);
-    return allInPlayers.length > 0 && state.currentBets.size > 0;
+    // A later street may have no bets when the last actionable players fold
+    // while multiple players remain all-in from an earlier street. Requiring
+    // currentBets here strands that hand instead of running out the board.
+    return state.handNumber > 0 && state.winners === null && allInCount > 0;
   }
 
   return activeCount > 0 && activeCount === actedCount;

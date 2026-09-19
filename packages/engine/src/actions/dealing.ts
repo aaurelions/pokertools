@@ -293,7 +293,10 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
     timestamp: action.timestamp!,
   } as GameState & { initialChips?: number };
 
-  const firstToAct = getFirstToAct(newState);
+  // Use the blind positions selected before chips were posted. Recomputing
+  // them now skips a blind who posted all-in (their stack is zero), which can
+  // rotate action past the only actionable player and leave actionTo null.
+  const firstToAct = getFirstToAct(newState, blindPositions?.bigBlindSeat);
 
   return {
     ...newState,

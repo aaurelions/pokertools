@@ -7,7 +7,6 @@ import {
   BetAction,
   RaiseAction,
   ActionRecord,
-  ActionType,
   PlayerStatus,
   Winner,
 } from "@pokertools/types";
@@ -15,6 +14,7 @@ import { getPlayerById } from "../utils/positioning";
 import { getNextToAct } from "../rules/action-order";
 import { CriticalStateError } from "../errors/critical-state-error";
 import { calculateRake } from "../utils/rake";
+import { returnUncalledBet } from "../rules/side-pots";
 
 /**
  * Handle FOLD action
@@ -306,18 +306,21 @@ function getTotalPot(state: GameState): number {
  * Only the contested portion is subject to rake.
  */
 function awardPotToLastPlayer(state: GameState, winningSeat: number): GameState {
-  const newPlayers = [...state.players];
-  const newActionHistory = [...state.actionHistory];
+  // The unmatched wager may belong to a player who just folded (most notably
+  // an oversized blind), not necessarily to the winner. Normalize it before
+  // awarding any contested chips.
+  const normalizedState = returnUncalledBet(state);
+  const newPlayers = [...normalizedState.players];
   const winners: Winner[] = [];
   let totalRakeFromPots = 0;
 
-  for (const pot of state.pots) {
+  for (const pot of normalizedState.pots) {
     const eligibleNonFolded = pot.eligibleSeats.filter((seat) => {
-      const player = state.players[seat];
+      const player = normalizedState.players[seat];
       return player && player.status !== PlayerStatus.FOLDED;
     });
 
-    const { rake: potRake } = calculateRake(state, pot.amount, totalRakeFromPots);
+    const { rake: potRake } = calculateRake(normalizedState, pot.amount, totalRakeFromPots);
     totalRakeFromPots += potRake;
     const potAfterRake = pot.amount - potRake;
 
@@ -363,55 +366,15 @@ function awardPotToLastPlayer(state: GameState, winningSeat: number): GameState 
     }
   }
 
-  // Uncalled bet logic: three-step process.
-  if (state.currentBets.size > 0) {
-    const winnersBet = state.currentBets.get(winningSeat) ?? 0;
+  if (normalizedState.currentBets.size > 0) {
+    const contestedPot = Array.from(normalizedState.currentBets.values()).reduce(
+      (total, amount) => total + amount,
+      0
+    );
 
-    // Second-highest bet determines how much of winner's bet was actually "called".
-    let maxOpponentBet = 0;
-    for (const [seat, amount] of state.currentBets.entries()) {
-      if (seat !== winningSeat && amount > maxOpponentBet) {
-        maxOpponentBet = amount;
-      }
-    }
-
-    const uncalledAmount = winnersBet > maxOpponentBet ? winnersBet - maxOpponentBet : 0;
-    const calledPortion = winnersBet > maxOpponentBet ? maxOpponentBet : winnersBet;
-
-    // Step 1: Return uncalled bet immediately (NO RAKE on uncalled bets).
-    if (uncalledAmount > 0) {
-      const player = newPlayers[winningSeat]!;
-      newPlayers[winningSeat] = {
-        ...player,
-        stack: player.stack + uncalledAmount,
-        totalInvestedThisHand: player.totalInvestedThisHand - uncalledAmount,
-      };
-
-      newActionHistory.push({
-        action: {
-          type: ActionType.UNCALLED_BET_RETURNED,
-          playerId: player.id,
-          amount: uncalledAmount,
-          timestamp: state.timestamp,
-        },
-        seat: winningSeat,
-        resultingPot: getTotalPot(state) - uncalledAmount,
-        resultingStack: player.stack + uncalledAmount,
-        street: state.street,
-      });
-    }
-
-    // Step 2: Contested pot = winner's called portion + all opponent bets.
-    let contestedPot = calledPortion;
-    for (const [seat, amount] of state.currentBets.entries()) {
-      if (seat !== winningSeat) {
-        contestedPot += amount;
-      }
-    }
-
-    // Step 3: Rake and award the contested portion only.
+    // The sole live player wins all remaining matched bets.
     if (contestedPot > 0) {
-      const { rake } = calculateRake(state, contestedPot, totalRakeFromPots);
+      const { rake } = calculateRake(normalizedState, contestedPot, totalRakeFromPots);
       const totalRake = totalRakeFromPots + rake;
       const winnings = contestedPot - rake;
 
@@ -445,14 +408,13 @@ function awardPotToLastPlayer(state: GameState, winningSeat: number): GameState 
   }
 
   return {
-    ...state,
+    ...normalizedState,
     players: newPlayers,
     street: Street.SHOWDOWN,
     pots: [],
     currentBets: new Map(),
     winners,
     actionTo: null,
-    actionHistory: newActionHistory,
-    rakeThisHand: state.rakeThisHand + totalRakeFromPots,
+    rakeThisHand: normalizedState.rakeThisHand + totalRakeFromPots,
   };
 }
