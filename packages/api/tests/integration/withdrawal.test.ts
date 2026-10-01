@@ -4,6 +4,7 @@ import { buildApp } from "../../src/app.js";
 import type { FastifyInstance } from "fastify";
 import { PrismaClient } from "../../generated/prisma/index.js";
 import { privateKeyToAccount } from "viem/accounts";
+import { ANVIL_PUBLIC_PRIVATE_KEY } from "../fixtures/anvil-public-key.js";
 
 describe("Withdrawal Endpoint", () => {
   let app: FastifyInstance;
@@ -14,7 +15,7 @@ describe("Withdrawal Endpoint", () => {
   let tokenId: string;
 
   // Test wallet
-  const testPrivateKey = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+  const testPrivateKey = ANVIL_PUBLIC_PRIVATE_KEY;
   const testAccount = privateKeyToAccount(testPrivateKey);
   const testAddress = testAccount.address;
 

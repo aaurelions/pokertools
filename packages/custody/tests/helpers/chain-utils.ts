@@ -11,9 +11,10 @@ import {
   type Account,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import { ANVIL_PUBLIC_PRIVATE_KEY } from "../fixtures/anvil-public-key.js";
 
 // Standard Anvil Private Key #0
-export const DEPLOYER_PK = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+export const DEPLOYER_PK = ANVIL_PUBLIC_PRIVATE_KEY;
 export const ANVIL_PORT = 8545;
 export const ANVIL_RPC = `http://127.0.0.1:${ANVIL_PORT}`;
 

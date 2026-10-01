@@ -85,19 +85,40 @@ module.exports = tseslint.config(
           patterns: [
             {
               group: [
-                "**/packages/custody/src/**", "**/packages/api/src/**", "**/packages/bench/src/**", "**/packages/engine/src/**", "**/packages/evaluator/src/**", "**/packages/sdk/src/**", "**/packages/types/src/**",
-                "../custody/src/**", "../../custody/src/**", "../../../custody/src/**",
-                "../api/src/**", "../../api/src/**", "../../../api/src/**",
-                "../bench/src/**", "../../bench/src/**", "../../../bench/src/**",
-                "../engine/src/**", "../../engine/src/**", "../../../engine/src/**",
-                "../evaluator/src/**", "../../evaluator/src/**", "../../../evaluator/src/**",
-                "../sdk/src/**", "../../sdk/src/**", "../../../sdk/src/**",
-                "../types/src/**", "../../types/src/**", "../../../types/src/**",
+                "**/packages/custody/src/**",
+                "**/packages/api/src/**",
+                "**/packages/bench/src/**",
+                "**/packages/engine/src/**",
+                "**/packages/evaluator/src/**",
+                "**/packages/sdk/src/**",
+                "**/packages/types/src/**",
+                "../custody/src/**",
+                "../../custody/src/**",
+                "../../../custody/src/**",
+                "../api/src/**",
+                "../../api/src/**",
+                "../../../api/src/**",
+                "../bench/src/**",
+                "../../bench/src/**",
+                "../../../bench/src/**",
+                "../engine/src/**",
+                "../../engine/src/**",
+                "../../../engine/src/**",
+                "../evaluator/src/**",
+                "../../evaluator/src/**",
+                "../../../evaluator/src/**",
+                "../sdk/src/**",
+                "../../sdk/src/**",
+                "../../../sdk/src/**",
+                "../types/src/**",
+                "../../types/src/**",
+                "../../../types/src/**",
               ],
-              message: "Do not import using relative paths from other packages. Use the package name instead."
-            }
-          ]
-        }
+              message:
+                "Do not import using relative paths from other packages. Use the package name instead.",
+            },
+          ],
+        },
       ],
     },
   },
@@ -106,7 +127,15 @@ module.exports = tseslint.config(
   // These files are NOT in your main tsconfig.json, so we must disable
   // type-checked rules for them to prevent parsing errors.
   {
-    files: ["**/tests/**/*.ts", "**/*.test.ts", "packages/bench/**/*.ts", "packages/api/scripts/**/*.ts", "packages/api/scripts/**/*.mjs", "packages/api/examples/**/*.ts", "*.config.js"],
+    files: [
+      "**/tests/**/*.ts",
+      "**/*.test.ts",
+      "packages/bench/**/*.ts",
+      "packages/api/scripts/**/*.ts",
+      "packages/api/scripts/**/*.mjs",
+      "packages/api/examples/**/*.ts",
+      "*.config.js",
+    ],
     // This instructs the parser NOT to look for a tsconfig for these files
     extends: [tseslint.configs.disableTypeChecked],
     rules: {
@@ -132,10 +161,7 @@ module.exports = tseslint.config(
   // 5. EXEMPTIONS: API Routes and Services (Fastify/Prisma dynamic types)
   // Fastify routes and Prisma transactions use dynamic types that are hard to type strictly
   {
-    files: [
-      "packages/api/src/routes/**/*.ts",
-      "packages/api/src/services/**/*.ts",
-    ],
+    files: ["packages/api/src/routes/**/*.ts", "packages/api/src/services/**/*.ts"],
     rules: {
       "@typescript-eslint/no-explicit-any": "warn",
       "@typescript-eslint/no-unsafe-assignment": "off",

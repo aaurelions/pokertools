@@ -859,7 +859,7 @@ Prometheus-format metrics endpoint for scraping by monitoring systems.
 curl http://localhost:3000/metrics
 
 # Production (bearer auth required)
-curl -H "Authorization: Bearer your-metrics-token" http://localhost:3000/metrics
+curl -H "Authorization: Bearer $METRICS_TOKEN" http://localhost:3000/metrics
 ```
 
 Exposes counters: `pokertools_http_requests_total`, `pokertools_game_actions_total`, `pokertools_risk_denials_total`, `pokertools_idempotency_hits_total`, `pokertools_audit_log_failures_total`, plus process uptime gauge.

@@ -14,6 +14,11 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, "../../../.env"), quiet: true });
 dotenv.config({ path: path.resolve(__dirname, "../.env"), quiet: true });
 
+// Environment files may supply NODE_ENV too. Recheck before reading any secret
+// files or mnemonic material; the initial check still rejects explicit production
+// before dotenv itself runs.
+assertCustodyProcessSafety(process.env);
+
 /**
  * Helper to load secrets from file (Docker Secret) or Env
  */
