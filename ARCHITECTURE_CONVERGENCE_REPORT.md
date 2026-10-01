@@ -160,4 +160,235 @@ The requested architecture convergence is **not complete**. Principal/service-cr
 
 Existing unsafe financial semantics and audit findings must not be enabled in production. Production admission is intentionally blocked in code; readiness remains false regardless of healthy DB/Redis. **Real-money operation is not safe to enable.** Passing existing regression suites is not sufficient to remove the block.
 
+Historical partial-phase verdict: **FAIL**. The findings above are preserved as
+the handoff evidence; they are not claims about the continuation below.
+
+## Continuation implementation
+
+- Read the complete handoff before inspection or implementation. Reviewed status,
+  staged and unstaged diffs, untracked candidates, lockfile origins, relocated
+  custody contents, and the twenty-commit history. No reset, stash or developer
+  subagent was used. Read-only exploration/research assisted diagnosis.
+- Recoverable checkpoint: **`90d867e2faa17ef9dfdc2b8d4ac74c761bd26138`**.
+  Commit hooks required formatting the existing partial work, then passed lint
+  and quick tests. The checkpoint contains no runtime DB/logs, generated secrets,
+  local `.env`, Anvil state or Docker artifacts. The deliberately public,
+  renamed custody `.env.test` remains a test fixture, not a real credential.
+- Candidate secret scan before checkpoint: six reviewed matches (empty setting,
+  public Anvil account-zero key, source expressions, truncated/example tokens).
+  No real credential was identified. Default full-tree scan still had the 165
+  historical matches; a reviewed policy and canary tests were subsequently added.
+- Focused commits: `820bf90` (tournament reconciliation and public play),
+  `9f35a7d` (maintained SIWE and nonce claims), `f81a5cd` (scanner policy,
+  runtime dependency evidence and environment-file custody gate).
+
+## Resolved blockers
+
+### Tournament root cause and correction
+
+The old Docker harness erased chips, retained zero-stack busted seat objects,
+left hand-boundary fields inconsistent, and ignored reconciliation HTTP failures.
+It was not a valid tournament simulation. Production code also had independent
+defects: it counted zero-stack all-in contenders as eliminated during an active
+hand, closed source tables after deferred/failed moves, never consolidated
+multiple half-full tables, and let late snapshot jobs reset status to ACTIVE.
+
+The director now holds sorted table locks under its tournament lock; uses actual
+settled/undealt hand boundaries for both movement endpoints; retains all-in
+contenders until awards; clears settled busted seats through engine STAND; fails
+closed on missing/inconsistent assignments; consolidates capacity; refreshes its
+observations after movement; and closes only empty, unassigned tables. Rollback
+removes a successful destination SIT before reseating at source if the entry
+update fails. Failed automatic reconciliation is observable without turning an
+already accepted action into a falsely failed mutation.
+
+Queued snapshot projection uses version and state/lifecycle compare-and-set and
+cannot regress a newer snapshot or reopen a CLOSED table. Next-hand jobs also
+respect CLOSED. **This is not a PostgreSQL-authority/outbox implementation.**
+
+`tournament-public-play.test.ts` exercises the original all-in elimination defect
+through public action/reconcile routes, then plays eight entrants across four
+tables to a winner, asserting 4 → 2 → 1, no active entry on a closed table,
+idempotent reconciliation/settlement and rejection of a late closure projection.
+No action, seat, stack or elimination fixture edits are used in that test.
+Authentication/funding are explicitly test fixtures, not principal/finance proof.
+
+The 30-player Docker tournament now uses SDK HTTP actions for all hands, public
+registration/director/settlement, progressive elimination, winner chip conservation
+(90,000), 4 → 2 → 1 observations and repeated reconciliation/settlement. Raw state
+mutation helpers and reconciliation sleeps were removed. Every tournament HTTP
+status is checked; login no longer retries and ignores HTTP failures. The original
+`activeTables.length <= 2` assertion was retained and stronger assertions added.
+First-failure container diagnostics are captured before teardown.
+
+### Authentication and startup corrections
+
+SDK formatting/parsing delegates to `viem/siwe` (a direct SDK runtime dependency).
+The parser preserves resources and returns maintained Date-valued timestamps;
+the formatter accepts Date/ISO ergonomic inputs and rejects malformed fields.
+Old non-standard short-nonce/short-address fixtures were corrected, not retained
+as a permissive formatting path. Invalid construction is explicitly tested.
+
+API SIWE validates required fields, version, URI context, chain, issuedAt and
+maintained validity checks. A tightly bounded 30-second future-issuedAt tolerance
+handles independent wallet/API clocks (Docker exposed millisecond skew); a
+60-second future value remains rejected. notBefore/expiration retain absolute
+enforcement. Signature verification precedes atomic GETDEL nonce consumption:
+wrong signers cannot burn a challenge and concurrent valid replays yield exactly
+one success. Real loopback tests cover all these boundaries.
+
+Custody rechecks the production gate after dotenv but **before** reading secret
+files/mnemonic material. A regression verifies production supplied by an environment
+file is blocked. The original immediate explicit-production refusal remains.
+
+## Final architecture
+
+**The requested final ownership model is still a target, not fully delivered.**
+
+| Boundary              | Required ownership                                                                            | Continuation state                                                                                     |
+| --------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `@pokertools/engine`  | Deterministic rules and masked views                                                          | Preserved; no AI/LLM rules added.                                                                      |
+| `@pokertools/types`   | Canonical runtime/wire contracts                                                              | Operational/strict-action contracts preserved; full REST/WS unification missing.                       |
+| `@pokertools/api`     | Principals/auth/seats/turns, durable state/events, ledger/intents, chain verification, replay | Tournament and SIWE defects corrected; wallet User, legacy finance and Redis authority remain.         |
+| `@pokertools/sdk`     | Universal browser/Node client and optional React                                              | Maintained SIWE and existing transports; service/actionId/asset protocol missing.                      |
+| `@pokertools/custody` | Isolated signing, nonce/raw bytes, broadcast, finality/reorg/reconciliation worker            | Name/security gates preserved and strengthened; legacy Telegram workflow remains.                      |
+| Redis                 | Cache/pubsub/locks/queues only                                                                | **Not achieved**: still hot game authority.                                                            |
+| PostgreSQL            | Durable authoritative platform state                                                          | Migration integrity preserved; atomic game action/event/idempotency/outbox authority **not achieved**. |
+
+No AI/LLM-specific functionality was introduced. No old admin-package alias was
+added. Neither production gate nor fail-closed readiness was weakened.
+
+## Final tests
+
+Final continuation verification results are recorded below after command completion.
+Logs are external to the repository under the approved `T/opencode` directory,
+with `continuation-*` names. Mandatory acceptances that are not implemented are
+**missing**, not passing and not counted as harmless skips.
+
+## Anvil evidence
+
+Only valueless local chain 31337 and the historical six-decimal MockUSDC strategy
+are exercised. This continuation does **not** demonstrate a second chain/asset,
+direct treasury tx/log claims, RPC quorum, real custody raw-byte broadcast,
+post-credit/withdrawal reorg monitoring, treasury freeze or gas-starvation recovery.
+Legacy simulated withdrawal approval is not claimed as real custody acceptance.
+
+## SDK/browser/service acceptance
+
+- Real loopback Node SDK wallet HTTP/WebSocket/masking/reconnect hand acceptance
+  remains, and maintained SDK SIWE now has real loopback validity/replay coverage.
+- Public tournament gameplay uses SDK HTTP; focused API regression uses injected
+  HTTP requests. It does not substitute for canonical Turn/LegalAction acceptance.
+- SERVICE-only, mixed wallet/service, ten-seat and browser acceptance are still
+  missing. No fake wallet was introduced to pretend a SERVICE principal exists.
+- Lost-response finance/action/registration tests, canonical turn race tests and
+  durable Redis-loss/outbox recovery remain missing.
+
+## Dependency audit
+
+Fresh registry/advisory research still finds Prisma 7.10.0 to be the newest stable
+compatible line. The `prisma` latest tag points at 8.0.0-rc.19, not a stable 8.0.0.
+Prisma pins mysql2 3.15.3 and config pins deepmerge-ts 7.1.5; patched upstream
+libraries exist, but compatible stable Prisma has not adopted them. Upstream
+`prisma/orm#30295` remains open. No override, legacy-peer-deps, disabled audit or
+forced downgrade was used.
+
+| Advisory                             | Package/range       | Affected path                           | Stable upstream status                                                             |
+| ------------------------------------ | ------------------- | --------------------------------------- | ---------------------------------------------------------------------------------- |
+| GHSA-ggr8-5vv4-36mx / CVE-2026-40345 | deepmerge-ts <8.0.0 | Recursive config merge stack exhaustion | Library patched in 8.0.0; Prisma config pins 7.1.5.                                |
+| GHSA-3f6p-5ww8-9rcr                  | mysql2 <3.22.0      | MySQL auth downgrade to plaintext       | Library patched in 3.22.0; Prisma CLI pins 3.15.3.                                 |
+| GHSA-rgwj-5xj2-c3m3                  | mysql2 <=3.23.0     | Compressed MySQL protocol inflate       | Library patched in 3.23.1; Prisma CLI pins 3.15.3. Advisory is moderate, not high. |
+
+Raw `npm audit --omit=dev --json` still reports four high **package findings**
+(including propagation to Prisma/config), not four separate high advisories.
+The development install is not audit-clean.
+
+The existing Docker build removes these CLI-only packages. New reproducible
+`scripts/test-runtime-dependencies.mjs <image>` checks **every installed package
+manifest** and API/custody module resolution in the actual built image, with no
+network. It proves prisma, @prisma/config, deepmerge-ts and mysql2 are not shipped
+or resolvable there. This evidence is specific to the tested Docker artifact;
+it is not a blanket acceptance for arbitrary npm-based deployments or development
+CLI use. Root audit output is retained unchanged.
+
+## Secret scan
+
+`.gitleaks.toml` extends the default scanner, adds literal EVM signing-key detection,
+excludes only pinned third-party Foundry submodules, and uses value/path/rule-scoped
+exceptions for reviewed placeholders, expressions and the public Anvil key in
+named isolated fixtures. No first-party test/fixture/Solidity/docs blanket ignore.
+
+Canaries caught Gitleaks 8.30.1's global path+regex AND enumeration defect
+(upstream PR #2227). `targetRules` avoids whole-file suppression. Eight first-party
+paths, including exempted files, contracts, docs/examples and a build log, must
+still detect random signing keys/credential canaries. Source and captured release
+reports are scanned separately; final results are recorded with final tests.
+Zero findings is scanner evidence, not proof against all secret classes/history.
+
+## Remaining limitations
+
+The table below maps every previously missing architecture/acceptance requirement
+to its actual continuation status. “Missing” means no implementation and no new
+acceptance evidence; it is intentionally not a PASS.
+
+| Requirement                    | Previous status                       | Implementation / evidence                                                        | Final status                        |
+| ------------------------------ | ------------------------------------- | -------------------------------------------------------------------------------- | ----------------------------------- |
+| 1–2 preservation/checkpoint    | Uncommitted partial work              | Preserved, reviewed/scanned, checkpoint SHA above                                | Delivered                           |
+| 3 tournament regression        | Docker merge failure; invalid harness | Director/projection fixes; API public-play regression; replaced Docker harness   | Verification recorded below         |
+| 4 DB game authority            | Redis authority                       | No atomic game/event/idempotency/outbox model                                    | Missing                             |
+| 5 Principal model              | Wallet User only                      | No replacement Principal/seat model                                              | Missing                             |
+| 6 scoped service auth          | Missing                               | No service credentials/scopes                                                    | Missing                             |
+| 7 actor identity               | Spoof field rejected, old protocol    | Auth-derived playerId preserved; no turn/version/actionId request                | Incomplete                          |
+| 8 Turn/Observation/LegalAction | Missing                               | No canonical decision boundary                                                   | Missing                             |
+| 9 SDK legality                 | Independent helpers                   | Not converted to authoritative legal-action consumption                          | Missing                             |
+| 10 shared wire contracts       | Partial                               | No comprehensive DTO/schema unification                                          | Incomplete                          |
+| 11 maintained SIWE             | Home-grown SDK helper                 | viem delegation; SDK and real loopback validity/replay tests                     | Delivered                           |
+| 12 atomic asset model          | Cents/default currency                | No asset registry/atomic finance replacement                                     | Missing                             |
+| 13 balanced postings           | Legacy ledger                         | No immutable asset journal/rebuild/arbitrary atomic tests                        | Missing                             |
+| 14 remove donations            | No donation found                     | None introduced; source inspection finds no donation feature                     | Preserved absence                   |
+| 15 RPC pool/quorum             | Primary/backup                        | No arbitrary validated pool/quorum                                               | Missing                             |
+| 16 exact treasury claims       | Derived deposits                      | No chain/tx/log treasury claim path                                              | Missing                             |
+| 17 deposit finality            | No post-credit monitoring             | No durable reorg incident/freeze workflow                                        | Missing                             |
+| 18 typed withdrawal            | Hand-built USD string                 | EIP-712 intent not implemented                                                   | Missing                             |
+| 19 persist-before-broadcast    | Unsafe legacy flow                    | Signed raw-byte/nonce durable workflow absent                                    | Missing                             |
+| 20 replacement policy          | Not converged                         | No explicit audited conservative policy                                          | Missing                             |
+| 21 withdrawal reorg            | Not converged                         | No quorum/deep-finality/owed-obligation handling                                 | Missing                             |
+| 22 asset operational state     | Missing                               | No ACTIVE/DEGRADED/FROZEN model                                                  | Missing                             |
+| 23 treasury reconciliation     | Legacy balance checks                 | No quorum-backed liability/equity/freeze evidence                                | Missing                             |
+| 24 native gas readiness        | Legacy monitor                        | No obligation-preserving quorum signing gate                                     | Missing                             |
+| 25 narrow custody              | Renamed, legacy Telegram coupling     | Startup gate hardened; core workflow still coupled                               | Incomplete                          |
+| 26 incidents/resolution        | Missing                               | No durable incident/resolution model                                             | Missing                             |
+| 27 readiness                   | Hard-coded fail-closed                | Correctly left blocked; real financial checks missing                            | Incomplete                          |
+| 28 universal SDK               | Wallet only                           | Maintained SIWE; service/legal-action/asset APIs absent                          | Incomplete                          |
+| 29 lost-response retries       | Transport fixes, limited idempotency  | No complete real loopback mutation-loss suite                                    | Incomplete                          |
+| 30 generic chat                | Absent                                | No append-only public chat/replay contract                                       | Missing                             |
+| 31 event/outbox                | Missing                               | Late projection hardened, no durable event/outbox stream                         | Missing                             |
+| 32 replay/audit                | Legacy hand history                   | No sequence integrity/durable boundary                                           | Incomplete                          |
+| 33 single next-major schema    | Legacy models remain                  | No replacement baseline; no compatibility alias added                            | Incomplete                          |
+| 34 dependency audit            | Four high package findings            | New stable research and actual Docker absence proof; raw audit remains nonzero   | Artifact-specific evidence only     |
+| 35 secret scanning             | 165 findings                          | Narrow policy, isolated public key fixtures, canaries, release scans             | Verification recorded below         |
+| 36 two SERVICE gameplay        | Missing                               | No implementation/test                                                           | Missing                             |
+| 37 mixed wallet/service        | Missing                               | No implementation/test                                                           | Missing                             |
+| 38 ten-seat API/SDK            | Missing                               | No implementation/test                                                           | Missing                             |
+| 39 complete API-only MTT       | Manipulated failing harness           | New 30-player public/SDK path; canonical turn protocol still absent              | Incomplete canonical acceptance     |
+| 40 Redis loss                  | Not proven durable                    | No DB action/outbox recovery acceptance                                          | Missing                             |
+| 41 timeout/action race         | Redis-version tests only              | No cross-process canonical turn/DB CAS acceptance                                | Missing                             |
+| 42 multi-chain Anvil           | Single chain                          | No second chain/decimal token                                                    | Missing                             |
+| 43 real deposit claims         | Legacy derived deposits               | No canonical treasury-claim acceptance                                           | Missing                             |
+| 44 real custody withdrawal     | Simulated approval                    | No persist/recover exact-byte acceptance                                         | Missing                             |
+| 45 deterministic reorgs        | Missing                               | No deposit/withdrawal reorg acceptance                                           | Missing                             |
+| 46 RPC disagreement            | Missing                               | No quorum/freeze acceptance                                                      | Missing                             |
+| 47 treasury shortfall          | Missing                               | No real liability/quorum/freeze acceptance                                       | Missing                             |
+| 48 gas starvation              | Missing                               | No obligation-preserving custody acceptance                                      | Missing                             |
+| 49 browser SDK                 | Missing                               | No browser-level public SDK acceptance                                           | Missing                             |
+| 50 final verification          | Historical partial results            | Continuation commands/results below; missing acceptance suites cannot be counted | Incomplete convergence verification |
+| 51 production admission        | Blocked                               | Refusal preserved and tested; no unsafe override                                 | Correctly still blocked             |
+| 52 focused commits             | None                                  | Checkpoint and focused commits recorded                                          | Delivered                           |
+| 53 report                      | Historical FAIL                       | History preserved; continuation requirements/evidence explicit                   | Updated                             |
+| 54 ownership                   | Target not achieved                   | Explicit target/current map above                                                | Incomplete                          |
+| 55 final criteria              | FAIL                                  | Many mandatory implementations and acceptances absent                            | FAIL                                |
+
+No downstream product integration was attempted. Passing legacy/new regression
+tests does not enable valuable assets. **Production remains blocked.**
+
 POKERTOOLS_CONVERGENCE=FAIL
