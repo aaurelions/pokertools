@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
+  createSiweMessage as maintainedFormatter,
+  parseSiweMessage as maintainedParser,
+} from "viem/siwe";
+import {
   createSiweMessage,
   parseSiweMessage,
   isSiweExpired,
@@ -9,18 +13,56 @@ import {
 
 describe("Auth Utilities", () => {
   describe("createSiweMessage", () => {
+    it("delegates formatting and parsing of every optional field to viem", () => {
+      const params = {
+        domain: "poker.example.com",
+        address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e" as const,
+        uri: "https://poker.example.com",
+        chainId: 31337,
+        nonce: "abcdefgh1234",
+        version: "1" as const,
+        issuedAt: new Date("2026-01-01T00:00:00Z"),
+        expirationTime: new Date("2027-01-01T00:00:00Z"),
+        notBefore: new Date("2026-01-01T00:00:00Z"),
+        requestId: "login-1",
+        statement: "Sign in",
+        resources: ["https://poker.example.com/tables"],
+      };
+      const message = createSiweMessage(params);
+      expect(message).toBe(maintainedFormatter(params));
+      expect(parseSiweMessage(message)).toEqual(maintainedParser(message));
+      expect(parseSiweMessage(message).resources).toEqual(params.resources);
+    });
+
+    it("rejects malformed construction instead of producing non-standard messages", () => {
+      const params = {
+        domain: "poker.example.com",
+        address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e" as const,
+        uri: "https://poker.example.com",
+        nonce: "abcdefgh1234",
+      };
+      for (const change of [
+        { nonce: "short" },
+        { uri: "not-a-uri" },
+        { statement: "line\ninjection" },
+        { issuedAt: "invalid" },
+      ]) {
+        expect(() => createSiweMessage({ ...params, ...change })).toThrow();
+      }
+      expect(isSiweExpired("not a SIWE message")).toBe(true);
+    });
     it("creates a valid SIWE message with required fields", () => {
       const message = createSiweMessage({
         domain: "poker.example.com",
         address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
         uri: "https://poker.example.com",
-        nonce: "abc123",
+        nonce: "abc12345",
       });
 
       expect(message).toContain("poker.example.com wants you to sign in");
       expect(message).toContain("0x742d35Cc6634C0532925a3b844Bc454e4438f44e");
       expect(message).toContain("URI: https://poker.example.com");
-      expect(message).toContain("Nonce: abc123");
+      expect(message).toContain("Nonce: abc12345");
       expect(message).toContain("Chain ID: 1");
       expect(message).toContain("Version: 1");
     });
@@ -30,7 +72,7 @@ describe("Auth Utilities", () => {
         domain: "poker.example.com",
         address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
         uri: "https://poker.example.com",
-        nonce: "abc123",
+        nonce: "abc12345",
         statement: "Sign in to PokerTools",
       });
 
@@ -42,7 +84,7 @@ describe("Auth Utilities", () => {
         domain: "poker.example.com",
         address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
         uri: "https://poker.example.com",
-        nonce: "abc123",
+        nonce: "abc12345",
         chainId: 137,
       });
 
@@ -55,7 +97,7 @@ describe("Auth Utilities", () => {
         domain: "poker.example.com",
         address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
         uri: "https://poker.example.com",
-        nonce: "abc123",
+        nonce: "abc12345",
         expirationTime,
       });
 
@@ -67,7 +109,7 @@ describe("Auth Utilities", () => {
         domain: "poker.example.com",
         address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
         uri: "https://poker.example.com",
-        nonce: "abc123",
+        nonce: "abc12345",
         resources: ["https://poker.example.com/tables", "https://poker.example.com/user"],
       });
 
@@ -83,7 +125,7 @@ describe("Auth Utilities", () => {
         domain: "poker.example.com",
         address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
         uri: "https://poker.example.com",
-        nonce: "abc123",
+        nonce: "abc12345",
         chainId: 1,
       });
 
@@ -92,7 +134,7 @@ describe("Auth Utilities", () => {
       expect(parsed.domain).toBe("poker.example.com");
       expect(parsed.address).toBe("0x742d35Cc6634C0532925a3b844Bc454e4438f44e");
       expect(parsed.uri).toBe("https://poker.example.com");
-      expect(parsed.nonce).toBe("abc123");
+      expect(parsed.nonce).toBe("abc12345");
       expect(parsed.chainId).toBe(1);
       expect(parsed.version).toBe("1");
     });
@@ -102,7 +144,7 @@ describe("Auth Utilities", () => {
         domain: "poker.example.com",
         address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
         uri: "https://poker.example.com",
-        nonce: "abc123",
+        nonce: "abc12345",
         statement: "Sign in to PokerTools",
       });
 
@@ -117,7 +159,7 @@ describe("Auth Utilities", () => {
         domain: "poker.example.com",
         address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
         uri: "https://poker.example.com",
-        nonce: "abc123",
+        nonce: "abc12345",
       });
 
       expect(isSiweExpired(message)).toBe(false);
@@ -129,7 +171,7 @@ describe("Auth Utilities", () => {
         domain: "poker.example.com",
         address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
         uri: "https://poker.example.com",
-        nonce: "abc123",
+        nonce: "abc12345",
         expirationTime: futureDate,
       });
 
@@ -142,7 +184,7 @@ describe("Auth Utilities", () => {
         domain: "poker.example.com",
         address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
         uri: "https://poker.example.com",
-        nonce: "abc123",
+        nonce: "abc12345",
         expirationTime: pastDate,
       });
 

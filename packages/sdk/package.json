@@ -64,7 +64,8 @@
     "node": ">=24.0.0"
   },
   "dependencies": {
-    "@pokertools/types": "1.0.20"
+    "@pokertools/types": "1.0.20",
+    "viem": "^2.57.2"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^7.0.1",

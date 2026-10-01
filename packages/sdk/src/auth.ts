@@ -4,16 +4,28 @@
  * These utilities help construct SIWE messages for wallet signing.
  */
 
+import {
+  createSiweMessage as formatSiweMessage,
+  parseSiweMessage,
+  validateSiweMessage,
+  type CreateSiweMessageParameters,
+} from "viem/siwe";
+
+export { parseSiweMessage } from "viem/siwe";
+
 const DEFAULT_CHAIN_ID = 1;
 
 /**
  * SIWE message parameters
  */
-export interface SiweMessageParams {
+export interface SiweMessageParams extends Omit<
+  CreateSiweMessageParameters,
+  "chainId" | "version" | "issuedAt" | "expirationTime" | "notBefore"
+> {
   /** Domain making the request (e.g., "poker.example.com") */
   domain: string;
   /** Ethereum address (checksummed) */
-  address: string;
+  address: `0x${string}`;
   /** Human-readable statement (optional) */
   statement?: string;
   /** URI of the signing resource */
@@ -25,11 +37,11 @@ export interface SiweMessageParams {
   /** Nonce from server */
   nonce: string;
   /** Issued at timestamp (ISO 8601) */
-  issuedAt?: string;
+  issuedAt?: string | Date;
   /** Expiration time (ISO 8601) */
-  expirationTime?: string;
+  expirationTime?: string | Date;
   /** Not before time (ISO 8601) */
-  notBefore?: string;
+  notBefore?: string | Date;
   /** Request ID */
   requestId?: string;
   /** Resources (URIs) */
@@ -63,104 +75,15 @@ export interface SiweMessageParams {
  * ```
  */
 export function createSiweMessage(params: SiweMessageParams): string {
-  const {
-    domain,
-    address,
-    statement,
-    uri,
-    version = "1",
-    chainId = DEFAULT_CHAIN_ID,
-    nonce,
-    issuedAt = new Date().toISOString(),
-    expirationTime,
-    notBefore,
-    requestId,
-    resources,
-  } = params;
-
-  // Build message following EIP-4361
-  const lines: string[] = [];
-
-  lines.push(`${domain} wants you to sign in with your Ethereum account:`);
-  lines.push(address);
-
-  if (statement) {
-    lines.push("");
-    lines.push(statement);
-  }
-
-  lines.push("");
-  lines.push(`URI: ${uri}`);
-  lines.push(`Version: ${version}`);
-  lines.push(`Chain ID: ${chainId}`);
-  lines.push(`Nonce: ${nonce}`);
-  lines.push(`Issued At: ${issuedAt}`);
-
-  if (expirationTime) {
-    lines.push(`Expiration Time: ${expirationTime}`);
-  }
-  if (notBefore) {
-    lines.push(`Not Before: ${notBefore}`);
-  }
-  if (requestId) {
-    lines.push(`Request ID: ${requestId}`);
-  }
-  if (resources && resources.length > 0) {
-    lines.push(`Resources:`);
-    for (const resource of resources) {
-      lines.push(`- ${resource}`);
-    }
-  }
-
-  return lines.join("\n");
-}
-
-/**
- * Parse a SIWE message string back into params
- */
-export function parseSiweMessage(message: string): Partial<SiweMessageParams> {
-  const lines = message.split("\n");
-  const result: Partial<SiweMessageParams> = {};
-
-  const domainMatch = /^(.+) wants you to sign in with your Ethereum account:$/.exec(lines[0]);
-  if (domainMatch) {
-    result.domain = domainMatch[1];
-  }
-
-  if (lines[1]) {
-    result.address = lines[1];
-  }
-
-  for (const line of lines) {
-    if (line.startsWith("URI: ")) {
-      result.uri = line.slice(5);
-    } else if (line.startsWith("Version: ")) {
-      result.version = line.slice(9) as "1";
-    } else if (line.startsWith("Chain ID: ")) {
-      result.chainId = parseInt(line.slice(10), 10);
-    } else if (line.startsWith("Nonce: ")) {
-      result.nonce = line.slice(7);
-    } else if (line.startsWith("Issued At: ")) {
-      result.issuedAt = line.slice(11);
-    } else if (line.startsWith("Expiration Time: ")) {
-      result.expirationTime = line.slice(17);
-    } else if (line.startsWith("Not Before: ")) {
-      result.notBefore = line.slice(12);
-    } else if (line.startsWith("Request ID: ")) {
-      result.requestId = line.slice(12);
-    }
-  }
-
-  // Statement is the text block between the address line and "URI:"
-  const uriIndex = lines.findIndex((l) => l.startsWith("URI: "));
-  if (uriIndex > 3) {
-    const statementLines = lines.slice(3, uriIndex - 1).filter((l) => l.trim());
-    if (statementLines.length > 0) {
-      result.statement = statementLines.join("\n");
-    }
-  }
-
-  return result;
+  return formatSiweMessage({
+    ...params,
+    version: params.version ?? "1",
+    chainId: params.chainId ?? DEFAULT_CHAIN_ID,
+    issuedAt: params.issuedAt === undefined ? new Date() : new Date(params.issuedAt),
+    expirationTime:
+      params.expirationTime === undefined ? undefined : new Date(params.expirationTime),
+    notBefore: params.notBefore === undefined ? undefined : new Date(params.notBefore),
+  });
 }
 
 /**
@@ -168,10 +91,16 @@ export function parseSiweMessage(message: string): Partial<SiweMessageParams> {
  */
 export function isSiweExpired(message: string): boolean {
   const parsed = parseSiweMessage(message);
-  if (!parsed.expirationTime) {
-    return false;
-  }
-  return new Date(parsed.expirationTime) < new Date();
+  // Display convenience only, never authentication authority. Malformed and
+  // not-yet-valid messages fail closed rather than appearing usable.
+  return (
+    !parsed.uri ||
+    !parsed.nonce ||
+    parsed.version !== "1" ||
+    !parsed.issuedAt ||
+    !Number.isFinite(parsed.issuedAt.getTime()) ||
+    !validateSiweMessage({ message: parsed })
+  );
 }
 
 /**

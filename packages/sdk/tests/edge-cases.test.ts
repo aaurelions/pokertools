@@ -436,7 +436,7 @@ describe("Auth utility edge cases", () => {
         domain: "poker.example.com",
         address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
         uri: "https://poker.example.com",
-        nonce: "abc123",
+        nonce: "abc12345",
         statement: "Sign in to PokerTools",
         expirationTime: "2024-12-31T23:59:59.999Z",
         notBefore: "2024-01-01T00:00:00.000Z",
@@ -449,24 +449,23 @@ describe("Auth utility edge cases", () => {
       expect(parsed.domain).toBe("poker.example.com");
       expect(parsed.address).toBe("0x742d35Cc6634C0532925a3b844Bc454e4438f44e");
       expect(parsed.uri).toBe("https://poker.example.com");
-      expect(parsed.nonce).toBe("abc123");
+      expect(parsed.nonce).toBe("abc12345");
       expect(parsed.statement).toBe("Sign in to PokerTools");
-      expect(parsed.expirationTime).toBe("2024-12-31T23:59:59.999Z");
-      expect(parsed.notBefore).toBe("2024-01-01T00:00:00.000Z");
+      expect(parsed.expirationTime).toEqual(new Date("2024-12-31T23:59:59.999Z"));
+      expect(parsed.notBefore).toEqual(new Date("2024-01-01T00:00:00.000Z"));
       expect(parsed.requestId).toBe("req-123");
     });
 
     it("preserves resources parsing as a list of URIs", () => {
       const original = createSiweMessage({
         domain: "poker.example.com",
-        address: "0xabc",
+        address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
         uri: "https://poker.example.com",
-        nonce: "n1",
+        nonce: "abcdefgh1",
         resources: ["https://r1.example.com", "https://r2.example.com"],
       });
       const parsed = parseSiweMessage(original);
-      // Parse doesn't currently surface resources back, but for the test assert
-      // parse at minimum preserves the primary known fields
+      expect(parsed.resources).toEqual(["https://r1.example.com", "https://r2.example.com"]);
       expect(parsed.domain).toBe("poker.example.com");
       // Check the message text contains the resources
       expect(original).toContain("- https://r1.example.com");
@@ -478,7 +477,7 @@ describe("Auth utility edge cases", () => {
         domain: "poker.example.com",
         address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
         uri: "https://poker.example.com",
-        nonce: "abc123",
+        nonce: "abc12345",
       });
 
       const parsed = parseSiweMessage(original);
@@ -498,7 +497,7 @@ describe("Auth utility edge cases", () => {
         domain: "poker.example.com",
         address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
         uri: "https://poker.example.com",
-        nonce: "abc123",
+        nonce: "abc12345",
         // statement omitted
       });
       const parsed = parseSiweMessage(original);
@@ -512,9 +511,9 @@ describe("Auth utility edge cases", () => {
       const pastDate = "2020-01-01T00:00:00.000Z";
       const message = createSiweMessage({
         domain: "poker.example.com",
-        address: "0xabc",
+        address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
         uri: "https://poker.example.com",
-        nonce: "n",
+        nonce: "abcdefgh1",
         expirationTime: pastDate,
       });
       expect(isSiweExpired(message)).toBe(true);
@@ -524,9 +523,9 @@ describe("Auth utility edge cases", () => {
       const futureDate = "2999-12-31T23:59:59.999Z";
       const message = createSiweMessage({
         domain: "poker.example.com",
-        address: "0xabc",
+        address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
         uri: "https://poker.example.com",
-        nonce: "n",
+        nonce: "abcdefgh1",
         expirationTime: futureDate,
       });
       expect(isSiweExpired(message)).toBe(false);
@@ -535,9 +534,9 @@ describe("Auth utility edge cases", () => {
     it("returns false if message has no expiration at all", () => {
       const message = createSiweMessage({
         domain: "poker.example.com",
-        address: "0xabc",
+        address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
         uri: "https://poker.example.com",
-        nonce: "n",
+        nonce: "abcdefgh1",
       });
       expect(isSiweExpired(message)).toBe(false);
     });

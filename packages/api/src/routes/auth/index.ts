@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { verifyMessage } from "viem";
-import { generateSiweNonce, parseSiweMessage } from "viem/siwe";
+import { generateSiweNonce, parseSiweMessage, validateSiweMessage } from "viem/siwe";
 import crypto from "node:crypto";
 import { LoginRequest } from "@pokertools/types";
 import { z } from "zod";
@@ -73,15 +73,31 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       } catch {
         return reply.code(400).send({ error: "Invalid SIWE message" });
       }
+      if (
+        !siweMessage.uri ||
+        !siweMessage.nonce ||
+        siweMessage.version !== "1" ||
+        !siweMessage.issuedAt ||
+        !Number.isFinite(siweMessage.issuedAt.getTime())
+      ) {
+        return reply.code(400).send({ error: "Invalid SIWE message" });
+      }
       const expectedDomain = normalizeHost(request.hostname);
       if (siweMessage.domain?.toLowerCase() !== expectedDomain) {
         return reply.code(401).send({ error: "Invalid SIWE domain" });
       }
-      if (siweMessage.uri) {
+      try {
         const uri = new URL(siweMessage.uri);
-        if (normalizeHost(uri.host) !== expectedDomain) {
+        if (
+          !["http:", "https:"].includes(uri.protocol) ||
+          uri.username ||
+          uri.password ||
+          normalizeHost(uri.host) !== expectedDomain
+        ) {
           return reply.code(401).send({ error: "Invalid SIWE URI" });
         }
+      } catch {
+        return reply.code(400).send({ error: "Invalid SIWE URI" });
       }
 
       if (!siweMessage.chainId || !allowedSiweChainIds().has(siweMessage.chainId)) {
@@ -89,6 +105,12 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       const now = new Date();
+      if (siweMessage.issuedAt > now) {
+        return reply.code(401).send({ error: "SIWE issuedAt is in the future" });
+      }
+      if (!validateSiweMessage({ message: siweMessage, time: now })) {
+        return reply.code(401).send({ error: "Invalid SIWE validity" });
+      }
       if (siweMessage.expirationTime && siweMessage.expirationTime <= now) {
         return reply.code(401).send({ error: "SIWE message expired" });
       }
@@ -96,7 +118,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(401).send({ error: "SIWE message not yet valid" });
       }
 
-      const nonceExists = await fastify.redis.getdel(`nonce:${siweMessage.nonce}`);
+      const nonceExists = await fastify.redis.get(`nonce:${siweMessage.nonce}`);
       if (!nonceExists) {
         return reply.code(401).send({ error: "Invalid or expired nonce" });
       }
@@ -114,6 +136,12 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
 
       if (!valid) {
         return reply.code(401).send({ error: "Invalid signature" });
+      }
+
+      // Invalid signatures cannot consume another wallet's challenge. GETDEL
+      // after verification is the atomic once-only claim for concurrent replays.
+      if (!(await fastify.redis.getdel(`nonce:${siweMessage.nonce}`))) {
+        return reply.code(401).send({ error: "Invalid or expired nonce" });
       }
 
       // Upsert user (store address in lowercase)
