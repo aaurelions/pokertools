@@ -303,7 +303,15 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
               await reconcileTournament(fastify, table.tournamentId, userId);
             }
           } catch {
-            // Reconciliation is best-effort; don't fail the action
+            // The poker action has already committed. Do not turn a director
+            // failure into an ambiguous failed mutation, but do not hide it.
+            fastify.observabilityManager.increment(
+              "pokertools_tournament_reconcile_failures_total"
+            );
+            fastify.log.warn(
+              { tableId: id },
+              "Tournament reconciliation deferred after accepted action"
+            );
           }
         }
 

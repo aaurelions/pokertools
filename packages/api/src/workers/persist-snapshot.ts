@@ -2,6 +2,7 @@ import { Worker } from "bullmq";
 import { Redis } from "ioredis";
 import { config } from "../config.js";
 import { createPrismaClient } from "../utils/prisma-client.js";
+import { persistSnapshotProjection } from "../services/snapshot-projection.js";
 
 const prisma = createPrismaClient();
 const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
@@ -17,14 +18,7 @@ const worker = new Worker(
   async (job) => {
     const { tableId, snapshot } = job.data;
 
-    await prisma.table.update({
-      where: { id: tableId },
-      data: {
-        state: JSON.stringify(snapshot),
-        status: "ACTIVE",
-        updatedAt: new Date(),
-      },
-    });
+    await persistSnapshotProjection(prisma, tableId, snapshot);
 
     console.log(`💾 Persisted snapshot for table ${tableId} to database`);
   },

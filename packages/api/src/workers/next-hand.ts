@@ -46,13 +46,11 @@ const worker = new Worker(
     }
 
     try {
+      const table = await prisma.table.findUnique({ where: { id: tableId } });
+      if (!table || table.status === "CLOSED") return;
       // Load state from Redis, recovering from durable DB snapshot if Redis expired
       let stateJson = await redis.get(`table:${tableId}`);
       if (!stateJson) {
-        const table = await prisma.table.findUnique({
-          where: { id: tableId },
-          select: { state: true },
-        });
         if (!table?.state) {
           console.warn(`⚠️  No state found for table ${tableId}, skipping next hand`);
           return;
@@ -73,8 +71,8 @@ const worker = new Worker(
       const activePlayers = snapshot.players.filter((p) => p !== null && p.stack > 0);
       if (activePlayers.length < 2) {
         console.log(`⏸️  Table ${tableId} has < 2 players, pausing game`);
-        await prisma.table.update({
-          where: { id: tableId },
+        await prisma.table.updateMany({
+          where: { id: tableId, status: { not: "CLOSED" } },
           data: { status: "WAITING" },
         });
         return;

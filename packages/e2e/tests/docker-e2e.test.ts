@@ -16,7 +16,7 @@
  *  - Run: npm run e2e:docker
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -73,6 +73,26 @@ const E2E_SECRETS = {
   WALLET_XPRIV_ENCRYPTION_SECRET: "e2e-wallet-xpriv-encryption-secret-for-tests-only",
 };
 
+let capturedFailureDiagnostics = false;
+afterEach(({ task }) => {
+  if (task.result?.state !== "fail" || capturedFailureDiagnostics) return;
+  capturedFailureDiagnostics = true;
+  // Preserve the first failure's process/worker evidence before teardown. Later
+  // failures in this sequential lifecycle suite may only be consequences.
+  try {
+    const logs = execSync(
+      `POKERTOOLS_E2E_RUNTIME="${E2E_RUNTIME_DIR}" docker compose -f "${COMPOSE_FILE}" logs --no-color --tail 60 api worker`,
+      { encoding: "utf8", timeout: 15000 }
+    );
+    let redacted = logs.replace(/(\w+:\/\/)[^\s/@]+:[^\s/@]+@/g, "$1[redacted]@");
+    for (const secret of Object.values(E2E_SECRETS))
+      redacted = redacted.replaceAll(secret, "[redacted]");
+    console.error("[E2E] First-failure diagnostics:\n" + redacted);
+  } catch {
+    console.error("[E2E] First-failure container diagnostics unavailable");
+  }
+});
+
 const USDC_ABI = parseAbi([
   "function mint(address to, uint256 amount)",
   "function transfer(address to, uint256 amount) returns (bool)",
@@ -93,13 +113,6 @@ interface TestUser {
   userId: string;
   username: string;
   depositAddress: string;
-}
-
-interface RawTableState {
-  players?: Array<
-    ({ id?: string; stack?: number; status?: string } & Record<string, unknown>) | null
-  >;
-  _version?: number;
 }
 
 let player1: TestUser;
@@ -244,17 +257,6 @@ async function startDeposit(token: string): Promise<string> {
   const body = data as { address: string };
   expect(body.address).toMatch(/^0x[a-fA-F0-9]{40}$/);
   return body.address;
-}
-
-async function getRawTableState(tableId: string, token: string): Promise<RawTableState | null> {
-  const { status, data } = await api("GET", `/tables/${tableId}/test-state`, undefined, token);
-  if (status !== 200) return null;
-  return (data as { state: RawTableState }).state;
-}
-
-async function saveRawTableState(tableId: string, state: unknown, token: string): Promise<void> {
-  const { status } = await api("POST", `/tables/${tableId}/test-state`, { state }, token);
-  expect(status).toBe(200);
 }
 
 // ============================================================================
@@ -737,107 +739,110 @@ describe("Docker E2E Integration", () => {
     expect(entriesWithTable.length).toBe(30);
     console.log(`[E2E] Multi-table verification passed`);
 
-    // ── 4g. Exercise reconciliation: simulate eliminations via direct engine state ──
-    // Bust some players on the first table to test elimination tracking
-    const allTableIds: string[] = tables.map((t) => t.id);
-    for (const tid of allTableIds) {
-      const snap = await getRawTableState(tid, player1.token);
-      if (!snap?.players) continue;
-
-      let busted = 0;
-      for (let s = 0; s < snap.players.length; s++) {
-        const player = snap.players[s];
-        if (player && (player.stack ?? 0) > 0 && busted < 2) {
-          snap.players[s] = { ...player, stack: 0, status: "BUSTED" };
-          busted++;
-        }
-      }
-      if (busted > 0) {
-        snap._version = (snap._version || 0) + 1;
-        await saveRawTableState(tid, snap, player1.token);
-        console.log(`[E2E] Busted ${busted} players on table ${tid} (direct state modification)`);
-      }
-    }
-
-    // Call reconcile endpoint
-    const reconcileRes = await api(
-      "POST",
-      `/tournaments/${tournamentId}/reconcile`,
-      undefined,
-      player1.token
+    // ── 4g–4i. Play real hands; never edit seats, stacks or placements. ────
+    const clients = new Map(
+      mtUsers.map((user) => [
+        user.userId,
+        new PokerClient({ baseUrl: API_BASE, token: user.token, retry: { count: 0 } }),
+      ])
     );
-    expect(reconcileRes.status).toBe(200);
-    const reconcileBody = reconcileRes.data as { success: boolean; tables: unknown[] };
-    expect(reconcileBody.success).toBe(true);
-    console.log(`[E2E] Reconciliation triggered`);
-
-    // Verify eliminated entries in tournament details
-    const detailsRes3 = await api("GET", `/tournaments/${tournamentId}`);
-    const t3 = (detailsRes3.data as { tournament: Record<string, unknown> }).tournament;
-    const entries3 = t3.entries as Array<{ status: string; placement: number | null }>;
-    const eliminatedCount = entries3.filter((e) => e.status === "ELIMINATED").length;
-    expect(eliminatedCount).toBeGreaterThan(0);
-    console.log(`[E2E] Eliminated entries after reconciliation: ${eliminatedCount}`);
-
-    // ── 4h. Simulate final table merge ────────────────────────────────────
-    // Bust all players except 1 on each table; then reconcile to merge to final table
-    for (const tid of allTableIds) {
-      const snap = await getRawTableState(tid, player1.token);
-      if (!snap?.players) continue;
-
-      let keptOne = false;
-      for (let s = 0; s < snap.players.length; s++) {
-        const player = snap.players[s];
-        if (player && (player.stack ?? 0) > 0) {
-          if (!keptOne) {
-            keptOne = true;
-          } else {
-            snap.players[s] = { ...player, stack: 0, status: "BUSTED" };
-          }
+    interface TournamentProgress {
+      entries: Array<{ userId: string; status: string; currentTableId: string }>;
+      tables: Array<{ id: string; status: string }>;
+    }
+    const progress = async (): Promise<TournamentProgress> => {
+      const response = await api("GET", `/tournaments/${tournamentId}`, undefined, player1.token);
+      expect(response.status).toBe(200);
+      return (response.data as { tournament: TournamentProgress }).tournament;
+    };
+    const reconcile = async () => {
+      const response = await api(
+        "POST",
+        `/tournaments/${tournamentId}/reconcile`,
+        undefined,
+        player1.token
+      );
+      expect(response.status, JSON.stringify(response.data)).toBe(200);
+    };
+    const observedTableCounts = new Set<number>([4]);
+    for (let round = 0; round < 300; round++) {
+      let current = await progress();
+      if (current.entries.filter((entry) => entry.status === "ACTIVE").length === 1) break;
+      for (const table of current.tables.filter((candidate) => candidate.status !== "CLOSED")) {
+        current = await progress();
+        const assigned = current.entries.filter(
+          (entry) => entry.status === "ACTIVE" && entry.currentTableId === table.id
+        );
+        if (
+          assigned.length < 2 ||
+          current.tables.find((candidate) => candidate.id === table.id)?.status === "CLOSED"
+        )
+          continue;
+        const reader = clients.get(assigned[0].userId)!;
+        let state = (await reader.getTableState(table.id))!;
+        if (state.actionTo == null) {
+          state = await reader.action(table.id, {
+            type: "DEAL",
+            idempotencyKey: `deal-${table.id}-${state.version}`,
+          });
+        }
+        // Only two contenders shove; others fold. This exercises progressive
+        // elimination/balancing rather than skipping directly from four tables
+        // to one in a single mass all-in. The engine adjudicates every request.
+        const contenders = new Set(
+          state.players
+            .filter((player) => player && player.stack > 0)
+            .sort(
+              (a, b) => a!.stack + a!.totalInvestedThisHand - b!.stack - b!.totalInvestedThisHand
+            )
+            .slice(0, 2)
+            .map((player) => player!.id)
+        );
+        for (let step = 0; step < 200 && state.actionTo != null; step++) {
+          const actor = state.players[state.actionTo]!;
+          const client = clients.get(actor.id)!;
+          const maxBet = Math.max(...state.players.map((player) => player?.betThisStreet ?? 0));
+          const amount = actor.stack + actor.betThisStreet;
+          state = await client.action(table.id, {
+            type: !contenders.has(actor.id)
+              ? "FOLD"
+              : amount <= maxBet
+                ? "CALL"
+                : maxBet === 0
+                  ? "BET"
+                  : "RAISE",
+            ...(contenders.has(actor.id) && amount > maxBet ? { amount } : {}),
+            idempotencyKey: `play-${table.id}-${state.version}`,
+          });
+        }
+        expect(state.actionTo).toBeNull();
+        expect(state.winners?.length).toBeGreaterThan(0);
+        await reconcile();
+        current = await progress();
+        observedTableCounts.add(
+          current.tables.filter((candidate) => candidate.status !== "CLOSED").length
+        );
+        for (const entry of current.entries.filter((entry) => entry.status === "ACTIVE")) {
+          expect(
+            current.tables.find((candidate) => candidate.id === entry.currentTableId)?.status
+          ).not.toBe("CLOSED");
         }
       }
-      snap._version = (snap._version || 0) + 1;
-      await saveRawTableState(tid, snap, player1.token);
     }
-    console.log(`[E2E] Reduced to 1 live player per table`);
-
-    // Reconcile multiple times to handle table breaking and final merge
-    for (let i = 0; i < 4; i++) {
-      await api("POST", `/tournaments/${tournamentId}/reconcile`, undefined, player1.token);
-      await sleep(500);
-    }
-    console.log(`[E2E] Multi-step reconciliation complete`);
-
-    // Verify final table merge
-    const detailsRes4 = await api("GET", `/tournaments/${tournamentId}`);
-    const t4 = (detailsRes4.data as { tournament: Record<string, unknown> }).tournament;
-    const tables4 = t4.tables as Array<{ id: string; status: string }>;
-    const activeTables = tables4.filter((t) => t.status === "ACTIVE");
-    // After merging, at most one table should be active (or we might have more if tableMaxPlayers > activePlayerCount)
+    const finalProgress = await progress();
+    const survivors = finalProgress.entries.filter((entry) => entry.status === "ACTIVE");
+    expect(survivors).toHaveLength(1);
+    const winningUserId = survivors[0].userId;
+    const winnerState = await clients
+      .get(winningUserId)!
+      .getTableState(survivors[0].currentTableId);
+    expect(winnerState!.players.find((player) => player?.id === winningUserId)?.stack).toBe(90000);
+    const activeTables = finalProgress.tables.filter((table) => table.status === "ACTIVE");
     expect(activeTables.length).toBeLessThanOrEqual(2);
-    console.log(`[E2E] Active tables after merge: ${activeTables.length}`);
-
-    // ── 4i. Ensure single winner and settle ──────────────────────────────
-    // Bust all but one player across all tables
-    let winningUserId = "";
-    const tableIdsForSettlement = tables4.filter((t) => t.status !== "CLOSED").map((t) => t.id);
-    for (const tid of tableIdsForSettlement) {
-      const snap = await getRawTableState(tid, player1.token);
-      if (!snap?.players) continue;
-
-      for (let s = 0; s < snap.players.length; s++) {
-        const player = snap.players[s];
-        if (player && (player.stack ?? 0) > 0) {
-          if (!winningUserId) {
-            winningUserId = player.id ?? "";
-          } else {
-            snap.players[s] = { ...player, stack: 0, status: "BUSTED" };
-          }
-        }
-      }
-      snap._version = (snap._version || 0) + 1;
-      await saveRawTableState(tid, snap, player1.token);
-    }
+    expect(observedTableCounts.has(2)).toBe(true);
+    expect(observedTableCounts.has(1)).toBe(true);
+    await reconcile();
+    expect((await progress()).entries).toEqual(finalProgress.entries);
     expect(winningUserId).toBeTruthy();
     console.log(`[E2E] Single winner: ${winningUserId}`);
 
@@ -858,6 +863,14 @@ describe("Docker E2E Integration", () => {
     expect(settleBody.success).toBe(true);
     expect(settleBody.winnerUserId).toBe(winningUserId);
     expect(settleBody.prize).toBe(3000); // 30 × 100
+    const settleAgain = await api(
+      "POST",
+      `/tournaments/${tournamentId}/settle`,
+      undefined,
+      player1.token
+    );
+    expect(settleAgain.status, JSON.stringify(settleAgain.data)).toBe(200);
+    expect((settleAgain.data as { winnerUserId: string }).winnerUserId).toBe(winningUserId);
     console.log(`[E2E] Tournament settled: winner ${winningUserId} gets ${settleBody.prize}`);
 
     // ── 4j. Verify ledger balance conservation ────────────────────────────

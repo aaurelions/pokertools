@@ -144,10 +144,28 @@ export async function reconcileTournament(
     [`lock:tournament:${tournamentId}`],
     config.TOURNAMENT_LOCK_TTL_MS
   );
+  let tableLock;
   try {
+    const tables = await fastify.prisma.table.findMany({
+      where: { tournamentId },
+      select: { id: true },
+      orderBy: { id: "asc" },
+    });
+    // Freeze the observed hand boundaries while reconciling. A source hand
+    // completion must not race an automatic deal or a destination player action.
+    if (tables.length) {
+      tableLock = await fastify.redlock.lock(
+        tables.map((table) => `lock:table:${table.id}`),
+        config.TOURNAMENT_LOCK_TTL_MS
+      );
+    }
     await reconcileTournamentState(fastify, tournamentId, actorUserId, MAX_RECONCILE_ITERATIONS);
   } finally {
-    await lock.unlock();
+    try {
+      await tableLock?.unlock();
+    } finally {
+      await lock.unlock();
+    }
   }
 }
 
@@ -173,13 +191,14 @@ async function safeMovePlayer(
   const origTableId = player.tableId;
   const origSeat = player.seat;
   let stood = false;
+  let seatedAtDestination = false;
 
   try {
     await fastify.gameManager.processAction(
       origTableId,
       { type: ActionType.STAND, playerId: player.userId },
       actorUserId,
-      { skipIdentity: true }
+      { skipIdentity: true, skipLock: true }
     );
     stood = true;
 
@@ -193,8 +212,9 @@ async function safeMovePlayer(
         stack: player.stack,
       },
       actorUserId,
-      { skipIdentity: true }
+      { skipIdentity: true, skipLock: true }
     );
+    seatedAtDestination = true;
 
     await fastify.prisma.tournamentEntry.update({
       where: { id: player.entryId },
@@ -204,6 +224,14 @@ async function safeMovePlayer(
     // Rollback: if we stood but SIT failed, re-seat the player at their original seat
     if (stood) {
       try {
+        if (seatedAtDestination) {
+          await fastify.gameManager.processAction(
+            destTableId,
+            { type: ActionType.STAND, playerId: player.userId },
+            actorUserId,
+            { skipIdentity: true, skipLock: true }
+          );
+        }
         await fastify.gameManager.processAction(
           origTableId,
           {
@@ -214,7 +242,7 @@ async function safeMovePlayer(
             stack: player.stack,
           },
           actorUserId,
-          { skipIdentity: true }
+          { skipIdentity: true, skipLock: true }
         );
       } catch (rollbackError) {
         // Player is stranded — log critical error and surface
@@ -274,6 +302,9 @@ async function reconcileTournamentState(
 
   const allLivePlayers: LivePlayer[] = [];
   const tablePlayerCounts = new Map<string, number>();
+  const seenActiveUsers = new Set<string>();
+  const eliminatedUserIds = new Set<string>();
+  const completedTables = new Set<string>();
 
   for (const table of t.tables) {
     try {
@@ -282,15 +313,27 @@ async function reconcileTournamentState(
 
       let liveCount = 0;
       const players = state.players;
+      const completed = Boolean(state.winners?.length && state.actionTo == null);
+      if (completed) completedTables.add(table.id);
       for (let seatIdx = 0; seatIdx < players.length; seatIdx++) {
         const p = players[seatIdx];
-        if (p && p.stack > 0) {
+        if (p) {
           // Find the tournament entry for this player
           const entry = t.entries.find(
             (e: { userId: string; status: string; id: string }) =>
               e.userId === p.id && e.status === "ACTIVE"
           );
           if (entry) {
+            if (seenActiveUsers.has(p.id)) {
+              throw new Error("Duplicate tournament seat assignment");
+            }
+            seenActiveUsers.add(p.id);
+            // An all-in player with no uncommitted stack is still competing.
+            // Elimination is authoritative only after chips have been awarded.
+            if (completed && p.stack === 0) {
+              eliminatedUserIds.add(p.id);
+              continue;
+            }
             allLivePlayers.push({
               entryId: entry.id,
               userId: p.id,
@@ -313,10 +356,36 @@ async function reconcileTournamentState(
     }
   }
 
+  for (const entry of t.entries) {
+    if (
+      entry.status === "ACTIVE" &&
+      !seenActiveUsers.has(entry.userId) &&
+      entry.currentTableId &&
+      completedTables.has(entry.currentTableId)
+    ) {
+      // Settled pending departures may already have been removed by the engine.
+      eliminatedUserIds.add(entry.userId);
+    }
+  }
+  if (
+    allLivePlayers.length === 0 ||
+    t.entries.some(
+      (entry) =>
+        entry.status === "ACTIVE" &&
+        !seenActiveUsers.has(entry.userId) &&
+        !eliminatedUserIds.has(entry.userId)
+    )
+  ) {
+    throw Object.assign(new Error("Tournament seat assignments are inconsistent"), {
+      statusCode: 503,
+      code: "TOURNAMENT_STATE_UNAVAILABLE",
+    });
+  }
+
   // 2. Update eliminated entries with placements
-  const liveUserIds = new Set(allLivePlayers.map((p) => p.userId));
   const eliminatedEntries = t.entries.filter(
-    (e: { status: string; userId: string }) => e.status === "ACTIVE" && !liveUserIds.has(e.userId)
+    (e: { status: string; userId: string }) =>
+      e.status === "ACTIVE" && eliminatedUserIds.has(e.userId)
   );
 
   if (eliminatedEntries.length > 0) {
@@ -330,6 +399,23 @@ async function reconcileTournamentState(
         where: { id: eliminatedEntries[i].id },
         data: { status: "ELIMINATED", placement: highestPlacementToAssign - i },
       });
+    }
+  }
+
+  // Clear settled busted seats through the engine, not by editing snapshots.
+  // This preserves chip conservation and makes the seat available to the director.
+  for (const table of t.tables) {
+    const state = await fastify.gameManager.getState(table.id);
+    if (!state.winners?.length || state.actionTo != null) continue;
+    for (const player of state.players) {
+      if (player && player.stack === 0) {
+        await fastify.gameManager.processAction(
+          table.id,
+          { type: ActionType.STAND, playerId: player.id },
+          actorUserId,
+          { skipIdentity: true, skipLock: true }
+        );
+      }
     }
   }
 
@@ -355,6 +441,7 @@ async function reconcileTournamentState(
     for (const player of allLivePlayers) {
       if (player.tableId === finalTableId) continue;
       if (!(await canMovePlayer(fastify, player.tableId))) continue;
+      if (!(await canMovePlayer(fastify, finalTableId))) continue;
 
       // Pre-validate destination has an open seat before standing
       let destSeat: number;
@@ -372,13 +459,11 @@ async function reconcileTournamentState(
       await safeMovePlayer(fastify, player, finalTableId, destSeat, actorUserId);
     }
 
-    // Close all non-final tables
+    // Never close a table with players still assigned to it (including deferred
+    // moves while either hand is in progress).
     for (const table of t.tables) {
       if (table.id !== finalTableId) {
-        await fastify.prisma.table.update({
-          where: { id: table.id },
-          data: { status: "CLOSED" },
-        });
+        await closeEmptyTournamentTable(fastify, table.id);
       }
     }
 
@@ -397,6 +482,40 @@ async function reconcileTournamentState(
   const tablesWithLivePlayers = Array.from(tablePlayerCounts.entries()).filter(
     ([, count]) => count > 0
   );
+
+  // Consolidate completed tables to the minimum capacity, not just tables with
+  // one survivor. Four half-full tables must become two, then one final table.
+  const requiredTables = Math.ceil(liveCount / tableMax);
+  const orderedTables = [...tablesWithLivePlayers].sort(
+    (a, b) =>
+      Number(b[0] === t.tableId) - Number(a[0] === t.tableId) ||
+      b[1] - a[1] ||
+      a[0].localeCompare(b[0])
+  );
+  const destinations = orderedTables.slice(0, requiredTables);
+  for (const [sourceId] of orderedTables.slice(requiredTables)) {
+    if (!movableTables.has(sourceId)) continue;
+    let moved = false;
+    for (const player of allLivePlayers.filter((candidate) => candidate.tableId === sourceId)) {
+      const target = destinations.find(
+        ([id]) => movableTables.has(id) && (tablePlayerCounts.get(id) ?? 0) < tableMax
+      );
+      if (!target) break;
+      const seat = await findOpenSeat(fastify, target[0]);
+      await safeMovePlayer(fastify, player, target[0], seat, actorUserId);
+      moved = true;
+      tablePlayerCounts.set(target[0], (tablePlayerCounts.get(target[0]) ?? 0) + 1);
+      tablePlayerCounts.set(sourceId, (tablePlayerCounts.get(sourceId) ?? 0) - 1);
+    }
+    await closeEmptyTournamentTable(fastify, sourceId);
+    if (moved) {
+      await reconcileTournamentState(fastify, tournamentId, actorUserId, remainingIterations - 1);
+      return;
+    }
+  }
+  for (const [id, count] of tablePlayerCounts) {
+    if (count === 0) await closeEmptyTournamentTable(fastify, id);
+  }
 
   // Find max and min player counts
   let maxCount = 0;
@@ -420,7 +539,11 @@ async function reconcileTournamentState(
     if (count <= 1 && movableTables.has(tableId)) {
       // Find another table with most open seats
       const targetTable = t.tables.find(
-        (tb: { id: string }) => tb.id !== tableId && (tablePlayerCounts.get(tb.id) ?? 0) < tableMax
+        (tb: { id: string; status: string }) =>
+          tb.id !== tableId &&
+          tb.status !== "CLOSED" &&
+          movableTables.has(tb.id) &&
+          (tablePlayerCounts.get(tb.id) ?? 0) < tableMax
       );
       if (targetTable) {
         const playersToMove = allLivePlayers.filter((p) => p.tableId === tableId);
@@ -439,10 +562,7 @@ async function reconcileTournamentState(
           await safeMovePlayer(fastify, player, targetTable.id, openSeat, actorUserId);
         }
         // Close the short table
-        await fastify.prisma.table.update({
-          where: { id: tableId },
-          data: { status: "CLOSED" },
-        });
+        if (!(await closeEmptyTournamentTable(fastify, tableId))) continue;
         // Re-run reconciliation after moving
         await reconcileTournamentState(fastify, tournamentId, actorUserId, remainingIterations - 1);
         return;
@@ -454,6 +574,7 @@ async function reconcileTournamentState(
   if (
     maxCount - minCount > tolerance &&
     movableTables.has(maxTableId) &&
+    movableTables.has(minTableId) &&
     maxTableId !== minTableId
   ) {
     // Move one player from max table to min table
@@ -483,17 +604,29 @@ async function canMovePlayer(fastify: FastifyInstance, tableId: string): Promise
   try {
     const state = await fastify.gameManager.getState(tableId);
     if (!state) return false;
-    // Tournament seats may normally be moved only after a completed hand. A table
-    // with one or fewer live stacks is also safe to break because no further
-    // betting action can alter relative stacks on that table.
-    const livePlayers = state.players.filter((player) => player && player.stack > 0).length;
-    if (livePlayers <= 1) return true;
+    // A zero uncommitted stack may be all-in, not busted. Never infer a hand
+    // boundary from stack count: only undealt tables or settled hands are safe.
+    if (state.handNumber === 0 && state.actionTo == null) return true;
     const winners = state.winners;
     const actionTo = state.actionTo;
     return Boolean(winners && winners.length > 0 && actionTo == null);
   } catch {
     return false;
   }
+}
+
+async function closeEmptyTournamentTable(
+  fastify: FastifyInstance,
+  tableId: string
+): Promise<boolean> {
+  const assigned = await fastify.prisma.tournamentEntry.count({
+    where: { currentTableId: tableId, status: "ACTIVE" },
+  });
+  if (assigned > 0) return false;
+  const state = await fastify.gameManager.getState(tableId);
+  if (state.players.some((player) => player && player.stack > 0)) return false;
+  await fastify.prisma.table.update({ where: { id: tableId }, data: { status: "CLOSED" } });
+  return true;
 }
 
 /**
