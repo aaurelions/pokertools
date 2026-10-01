@@ -7,6 +7,10 @@ import { z } from "zod";
 import { allowedSiweChainIds, config } from "../../config.js";
 import type { PrismaClient } from "../../../generated/prisma/index.js";
 
+// Wallets and the API can run on different clocks (including Docker's VM).
+// Bound tolerance tightly; nonce TTL and atomic consumption still govern replay.
+const SIWE_MAX_FUTURE_SKEW_MS = 30_000;
+
 const loginSchema = z.object({
   message: z.string().min(1).max(4096),
   signature: z.string().regex(/^0x[a-fA-F0-9]{130}$/, "Invalid signature format"),
@@ -105,17 +109,17 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       const now = new Date();
-      if (siweMessage.issuedAt > now) {
+      if (siweMessage.issuedAt.getTime() > now.getTime() + SIWE_MAX_FUTURE_SKEW_MS) {
         return reply.code(401).send({ error: "SIWE issuedAt is in the future" });
-      }
-      if (!validateSiweMessage({ message: siweMessage, time: now })) {
-        return reply.code(401).send({ error: "Invalid SIWE validity" });
       }
       if (siweMessage.expirationTime && siweMessage.expirationTime <= now) {
         return reply.code(401).send({ error: "SIWE message expired" });
       }
       if (siweMessage.notBefore && siweMessage.notBefore > now) {
         return reply.code(401).send({ error: "SIWE message not yet valid" });
+      }
+      if (!validateSiweMessage({ message: siweMessage, time: now })) {
+        return reply.code(401).send({ error: "Invalid SIWE validity" });
       }
 
       const nonceExists = await fastify.redis.get(`nonce:${siweMessage.nonce}`);

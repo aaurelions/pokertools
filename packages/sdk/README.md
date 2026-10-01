@@ -617,8 +617,8 @@ Exported from `@pokertools/sdk`:
 | Function                                               | Description                                                                                          |
 | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
 | `createSiweMessage(params)`                            | Build an [EIP-4361](https://eips.ethereum.org/EIPS/eip-4361) SIWE message string for wallet signing. |
-| `parseSiweMessage(message)`                            | Parse a SIWE message back into `Partial<SiweMessageParams>`.                                         |
-| `isSiweExpired(message)`                               | Check if a SIWE message's expiration time has passed.                                                |
+| `parseSiweMessage(message)`                            | Maintained `viem/siwe` parser; timestamps are `Date` values and resources are preserved.             |
+| `isSiweExpired(message)`                               | Non-authoritative display check; expired, malformed or not-yet-valid messages return true.           |
 | `createWithdrawalMessage(amount, address, nonce, ts?)` | Build a replay-safe withdrawal message with nonce + timestamp.                                       |
 | `generateIdempotencyKey()`                             | Generate a random UUID v4 idempotency key.                                                           |
 

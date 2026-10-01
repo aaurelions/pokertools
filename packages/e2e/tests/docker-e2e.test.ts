@@ -199,42 +199,25 @@ async function authenticateAccount(
   acc: PrivateKeyAccount,
   fallbackUsername = ""
 ): Promise<TestUser> {
-  let loginBody: { token: string; user: { id: string; username: string } } | null = null;
-  let lastLoginRes: { status: number; data: unknown } | null = null;
-
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const nonceRes = await api("POST", "/auth/nonce");
-    const nonce = (nonceRes.data as { nonce: string }).nonce;
-
-    const siweMsg = createSiweMessage({
-      address: acc.address,
-      chainId: 31337,
-      domain: "localhost",
-      nonce,
-      uri: "http://localhost:3000",
-      version: "1",
-      statement: "Sign in to PokerTools E2E Test",
-      issuedAt: new Date(),
-    });
-    const sig = await acc.signMessage({ message: siweMsg });
-
-    lastLoginRes = await api("POST", "/auth/login", {
-      message: siweMsg,
-      signature: sig,
-    });
-    if (lastLoginRes.status === 200) {
-      loginBody = lastLoginRes.data as {
-        token: string;
-        user: { id: string; username: string };
-      };
-      break;
-    }
-    await sleep(100 * (attempt + 1));
-  }
-
-  expect(lastLoginRes?.status, JSON.stringify(lastLoginRes?.data)).toBe(200);
-  expect(loginBody).not.toBeNull();
-  const body = loginBody!;
+  const nonceRes = await api("POST", "/auth/nonce");
+  expect(nonceRes.status, JSON.stringify(nonceRes.data)).toBe(200);
+  const nonce = (nonceRes.data as { nonce: string }).nonce;
+  const siweMsg = createSiweMessage({
+    address: acc.address,
+    chainId: 31337,
+    domain: "localhost",
+    nonce,
+    uri: "http://localhost:3000",
+    version: "1",
+    statement: "Sign in to PokerTools E2E Test",
+    issuedAt: new Date(),
+  });
+  const loginRes = await api("POST", "/auth/login", {
+    message: siweMsg,
+    signature: await acc.signMessage({ message: siweMsg }),
+  });
+  expect(loginRes.status, JSON.stringify(loginRes.data)).toBe(200);
+  const body = loginRes.data as { token: string; user: { id: string; username: string } };
   expect(body.token).toBeTruthy();
   expect(body.user.id).toBeTruthy();
 
@@ -904,17 +887,10 @@ describe("Docker E2E Integration", () => {
     const finalTournament = await prisma.tournament.findUnique({ where: { id: tournamentId } });
     expect(finalTournament?.status).toBe("FINISHED");
 
-    // Cleanup: delete tournament users
-    for (const u of mtUsers) {
-      await prisma.session.deleteMany({ where: { userId: u.userId } });
-      await prisma.ledgerEntry.deleteMany({
-        where: { account: { userId: u.userId } },
-      });
-      await prisma.tournamentEntry.deleteMany({ where: { userId: u.userId } });
-      await prisma.account.deleteMany({ where: { userId: u.userId } });
-      await prisma.user.delete({ where: { id: u.userId } }).catch(() => undefined);
-    }
-
+    // Keep accepted-action identities/history until workers have stopped.
+    // afterAll stops the stack before removing its disposable database. Deleting
+    // identities mid-suite races still-running archive/projection jobs and is
+    // neither a public tournament lifecycle transition nor safe cleanup ordering.
     console.log(`[E2E] 30-player multi-table tournament test complete`);
   }, 300000);
 

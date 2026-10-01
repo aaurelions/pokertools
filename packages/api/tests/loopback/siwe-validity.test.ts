@@ -59,6 +59,12 @@ it("enforces SIWE context, validity and once-only nonce claims through loopback"
     });
     userIds.add(login.user.id);
     expect(await send(valid)).toBe(401);
+    const clockSkew = createSiweMessage({
+      ...parameters,
+      nonce: await client.getNonce(),
+      issuedAt: new Date(Date.now() + 10000),
+    });
+    expect(await send(clockSkew)).toBe(200);
     const concurrent = createSiweMessage({ ...parameters, nonce: await client.getNonce() });
     expect((await Promise.all([send(concurrent), send(concurrent)])).sort()).toEqual([200, 401]);
   } finally {
