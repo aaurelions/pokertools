@@ -1,5 +1,5 @@
 /** Player status within a hand. */
-export const enum PlayerStatus {
+export enum PlayerStatus {
   /** In hand, can act. */
   ACTIVE = "ACTIVE",
   /** Folded this hand. */
@@ -17,7 +17,7 @@ export const enum PlayerStatus {
 }
 
 /** Sit-in timing options for cash games. */
-export const enum SitInOption {
+export enum SitInOption {
   /** Sit in immediately. */
   IMMEDIATE = "IMMEDIATE",
   /** Wait until Big Blind position to sit in. */

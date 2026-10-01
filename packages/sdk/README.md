@@ -1,5 +1,7 @@
 # 🃏 @pokertools/sdk
 
+> Next-major convergence is incomplete. Root exports work without React; React lives at `@pokertools/sdk/react`. `health()` validates the canonical liveness schema but does not assert financial readiness. Service credentials, canonical turns and EIP-712 withdrawal helpers are not implemented yet; existing gameplay/finance examples below are development-only. See the root convergence report.
+
 [![npm version](https://img.shields.io/npm/v/@pokertools/sdk)](https://www.npmjs.com/package/@pokertools/sdk)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 

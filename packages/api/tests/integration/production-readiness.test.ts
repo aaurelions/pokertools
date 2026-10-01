@@ -80,10 +80,15 @@ describe("Production readiness controls", () => {
 
     const health = await ctx.app.inject({ method: "GET", url: "/health" });
     expect(health.statusCode).toBe(200);
-    const body = JSON.parse(health.body);
+    expect(JSON.parse(health.body)).toMatchObject({ status: "ok" });
+    const readiness = await ctx.app.inject({ method: "GET", url: "/ready" });
+    expect(readiness.statusCode).toBe(503);
+    const body = JSON.parse(readiness.body);
     expect(body.checks.db.status).toBe("ok");
     expect(body.checks.redis.status).toBe("ok");
     expect(body.checks.queue.status).toBe("ok");
+    expect(body.financial.status).toBe("blocked");
+    expect(body.migrations.status).toBe("unverified");
 
     const metrics = await ctx.app.inject({ method: "GET", url: "/metrics" });
     expect(metrics.statusCode).toBe(200);

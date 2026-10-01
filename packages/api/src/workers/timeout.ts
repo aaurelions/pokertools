@@ -8,7 +8,7 @@ import { createJobQueues } from "../plugins/queue.js";
 import { GameManager } from "../services/game-manager.js";
 
 const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
-const redlock = new Redlock([redis as any], {
+const redlock = new Redlock([redis as unknown as Redlock.CompatibleRedisClient], {
   driftFactor: config.REDLOCK_DRIFT_FACTOR,
   retryCount: config.REDLOCK_RETRY_COUNT,
   retryDelay: config.REDLOCK_RETRY_DELAY_MS,

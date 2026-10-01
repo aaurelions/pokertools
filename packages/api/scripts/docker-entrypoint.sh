@@ -26,6 +26,8 @@ echo "    PORT      = ${PORT:-3000}"
 # docker-compose fallback) will abort startup with a clear error.
 # ---------------------------------------------------------------------------
 if [ "${NODE_ENV:-production}" = "production" ]; then
+  echo "ARCHITECTURE_CONVERGENCE_INCOMPLETE: production startup is blocked"
+  exit 1
   DEV_SECRET_PATTERNS=(
     "dev-jwt-secret-not-for-production"
     "dev-cookie-secret-not-for-production"

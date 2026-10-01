@@ -31,7 +31,7 @@ versioned, built and (where applicable) published to npm.
 </div>
 
 <div class="pkg-card">
-<div class="pkg-name"><a href="/pokertools/packages/admin">@pokertools/admin</a></div>
+<div class="pkg-name"><a href="/pokertools/packages/custody">@pokertools/custody</a></div>
 <p>Blockchain sweeps, withdrawals, gas monitoring, Telegram ops.</p>
 </div>
 

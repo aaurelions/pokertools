@@ -102,6 +102,32 @@ describe("PokerSocket", () => {
   });
 
   describe("disconnect", () => {
+    it("ignores delayed close and private-state messages from a replaced socket", async () => {
+      await socket.connect();
+      const oldSocket = (socket as any).ws as MockWebSocket;
+      socket.disconnect();
+      await socket.connect();
+      oldSocket.onclose?.({ code: 1000, reason: "late close" });
+      oldSocket.onmessage?.({
+        data: JSON.stringify({
+          type: "SNAPSHOT",
+          tableId: "old-private-table",
+          version: 1,
+          state: { version: 1, players: [{ hand: ["As", "Ks"] }] },
+          timestamp: Date.now(),
+        }),
+      });
+      expect(socket.isConnected()).toBe(true);
+      expect(socket.getCachedState("old-private-table")).toBeUndefined();
+    });
+
+    it("rejects a connection attempt cancelled before open", async () => {
+      const attempt = socket.connect();
+      const rejected = expect(attempt).rejects.toThrow("Connection closed");
+      socket.disconnect();
+      await rejected;
+    });
+
     it("disconnects and cleans up", async () => {
       await socket.connect();
       const onDisconnect = vi.fn();

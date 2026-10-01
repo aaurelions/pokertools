@@ -140,14 +140,14 @@ export async function reconcileTournament(
   tournamentId: string,
   actorUserId: string
 ): Promise<void> {
-  const lock = await fastify.redlock.acquire(
+  const lock = await fastify.redlock.lock(
     [`lock:tournament:${tournamentId}`],
     config.TOURNAMENT_LOCK_TTL_MS
   );
   try {
     await reconcileTournamentState(fastify, tournamentId, actorUserId, MAX_RECONCILE_ITERATIONS);
   } finally {
-    await lock.release();
+    await lock.unlock();
   }
 }
 
@@ -870,7 +870,7 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: errorMessage(error) });
       }
 
-      const lock = await fastify.redlock.acquire(
+      const lock = await fastify.redlock.lock(
         [`lock:tournament:${tournament.id}`],
         config.TOURNAMENT_LOCK_TTL_MS
       );
@@ -1006,7 +1006,7 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
         });
         throw error;
       } finally {
-        await lock.release();
+        await lock.unlock();
       }
     }
   );
@@ -1161,7 +1161,7 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
       await requireTournamentManager(fastify, tournamentId, request.user.userId);
 
       // Acquire tournament lock before reading state and executing settlement
-      const lock = await fastify.redlock.acquire(
+      const lock = await fastify.redlock.lock(
         [`lock:tournament:${tournamentId}`],
         config.TOURNAMENT_LOCK_TTL_MS
       );
@@ -1392,7 +1392,7 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
           })),
         };
       } finally {
-        await lock.release();
+        await lock.unlock();
       }
     }
   );

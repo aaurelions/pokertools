@@ -59,7 +59,7 @@ export class GameManager {
         : appConfig.TABLE_LOCK_TTL_MS;
     let lock = options.skipLock
       ? null
-      : await this.redlock.acquire([`lock:table:${tableId}`], lockTTL);
+      : await this.redlock.lock([`lock:table:${tableId}`], lockTTL);
 
     const lockStartTime = Date.now();
     const lockExtendThreshold = lockTTL * 0.6;
@@ -188,7 +188,7 @@ export class GameManager {
       // Return masked view for the actor
       return engine.view(userId, currentVersion);
     } finally {
-      await lock?.release();
+      await lock?.unlock();
     }
   }
 

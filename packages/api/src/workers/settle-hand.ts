@@ -8,7 +8,7 @@ import { createPrismaClient } from "../utils/prisma-client.js";
 
 const prisma = createPrismaClient();
 const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
-const redlock = new Redlock([redis as any], {
+const redlock = new Redlock([redis as unknown as Redlock.CompatibleRedisClient], {
   driftFactor: config.REDLOCK_DRIFT_FACTOR,
   retryCount: 0,
   retryDelay: config.REDLOCK_RETRY_DELAY_MS,
@@ -37,7 +37,7 @@ const worker = new Worker(
     const lockKey = `lock:table:${tableId}`;
     let lock;
     try {
-      lock = await redlock.acquire([lockKey], config.SETTLE_HAND_LOCK_TTL_MS);
+      lock = await redlock.lock([lockKey], config.SETTLE_HAND_LOCK_TTL_MS);
     } catch {
       throw new Error(`Unable to acquire settlement lock for table ${tableId}`);
     }
@@ -121,7 +121,7 @@ const worker = new Worker(
         }
       });
     } finally {
-      await lock.release().catch(() => undefined);
+      await lock.unlock().catch(() => undefined);
     }
 
     logger.info({ handId, rakeTotal }, "Hand settled");

@@ -1,5 +1,7 @@
 # 🃏 @pokertools/api
 
+> Production startup is blocked while architecture convergence is incomplete. `/health` is liveness; `/ready` returns 503 and explicit financial-readiness reasons. The API must not receive treasury private keys, mnemonic/xpriv material or `WALLET_XPRIV_ENCRYPTION_SECRET`. See the root convergence report and `docs/ARCHITECTURE_DECISION.md`; the older route examples below describe only the current development protocol.
+
 > Production-ready REST/WebSocket API for real-time poker games with blockchain payments
 
 [![Node.js](https://img.shields.io/badge/Node.js-≥24.0.0-339933?logo=node.js)](https://nodejs.org)
@@ -225,16 +227,15 @@ npm run workers
 
 #### Security & Authentication
 
-| Variable                         | Type     | Default      | Description                                                                              |
-| -------------------------------- | -------- | ------------ | ---------------------------------------------------------------------------------------- |
-| `JWT_SECRET`                     | `string` | **required** | JWT signing key (rejects known dev defaults in production)                               |
-| `COOKIE_SECRET`                  | `string` | **required** | Cookie signing key (rejects known dev defaults in production)                            |
-| `WALLET_ENCRYPTION_SECRET`       | `string` | **required** | Separate key for encrypted wallet material (rejects known dev defaults in production)    |
-| `WALLET_XPRIV_ENCRYPTION_SECRET` | `string` | `""`         | Separate secret for private wallet material (API should not have this set in production) |
-| `ALLOWED_SIWE_CHAIN_IDS`         | `string` | `"1,31337"`  | Comma-separated EIP-155 chain IDs accepted for SIWE login                                |
-| `SESSION_TTL_SECONDS`            | `number` | `604800`     | JWT session TTL in seconds (default 7 days)                                              |
-| `NONCE_TTL_SECONDS`              | `number` | `300`        | TTL of SIWE auth nonces in seconds                                                       |
-| `PBKDF2_ITERATIONS`              | `number` | `600000`     | Number of PBKDF2 iterations for key derivation                                           |
+| Variable                   | Type     | Default      | Description                                                                           |
+| -------------------------- | -------- | ------------ | ------------------------------------------------------------------------------------- |
+| `JWT_SECRET`               | `string` | **required** | JWT signing key (rejects known dev defaults in production)                            |
+| `COOKIE_SECRET`            | `string` | **required** | Cookie signing key (rejects known dev defaults in production)                         |
+| `WALLET_ENCRYPTION_SECRET` | `string` | **required** | Separate key for encrypted wallet material (rejects known dev defaults in production) |
+| `ALLOWED_SIWE_CHAIN_IDS`   | `string` | `"1,31337"`  | Comma-separated EIP-155 chain IDs accepted for SIWE login                             |
+| `SESSION_TTL_SECONDS`      | `number` | `604800`     | JWT session TTL in seconds (default 7 days)                                           |
+| `NONCE_TTL_SECONDS`        | `number` | `300`        | TTL of SIWE auth nonces in seconds                                                    |
+| `PBKDF2_ITERATIONS`        | `number` | `600000`     | Number of PBKDF2 iterations for key derivation                                        |
 
 #### Rate Limiting
 

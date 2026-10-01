@@ -6,13 +6,8 @@ import { config } from "../config.js";
  *
  * Uses AES-256-GCM for authenticated encryption.
  *
- * Split-secret architecture:
- * - WALLET_ENCRYPTION_SECRET encrypts xpub material (public keys only)
- * - WALLET_XPRIV_ENCRYPTION_SECRET encrypts xpriv material (private keys)
- *
- * In production, the API should NEVER have WALLET_XPRIV_ENCRYPTION_SECRET set.
- * The admin service should NEVER have the API's WALLET_ENCRYPTION_SECRET, but
- * DOES have its own WALLET_XPRIV_ENCRYPTION_SECRET for decrypting xprivs.
+ * The public service only processes xpub material. Private wallet material
+ * and its decryption key belong exclusively to the custody process.
  */
 
 const ALGORITHM = "aes-256-gcm";
@@ -91,26 +86,4 @@ export function encryptXpub(xpub: string): string {
  */
 export function decryptXpub(encryptedXpub: string): string {
   return decryptWithSecret(encryptedXpub, config.WALLET_ENCRYPTION_SECRET);
-}
-
-/**
- * Encrypts xpriv for database storage (Admin-side, private key)
- * Uses WALLET_XPRIV_ENCRYPTION_SECRET for defense-in-depth
- */
-export function encryptXpriv(xpriv: string): string {
-  if (!config.WALLET_XPRIV_ENCRYPTION_SECRET) {
-    throw new Error("WALLET_XPRIV_ENCRYPTION_SECRET is not configured");
-  }
-  return encryptWithSecret(xpriv, config.WALLET_XPRIV_ENCRYPTION_SECRET);
-}
-
-/**
- * Decrypts xpriv from database (Admin-side, private key)
- * Uses WALLET_XPRIV_ENCRYPTION_SECRET for defense-in-depth
- */
-export function decryptXpriv(encryptedXpriv: string): string {
-  if (!config.WALLET_XPRIV_ENCRYPTION_SECRET) {
-    throw new Error("WALLET_XPRIV_ENCRYPTION_SECRET is not configured");
-  }
-  return decryptWithSecret(encryptedXpriv, config.WALLET_XPRIV_ENCRYPTION_SECRET);
 }

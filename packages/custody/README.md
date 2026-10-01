@@ -1,4 +1,6 @@
-# 🃏 @pokertools/admin
+# 🃏 @pokertools/custody
+
+> Private executable/security boundary, not a room-administration SDK. Production startup is blocked until exactly-once broadcast, quorum, finality/reorg and asset-ledger acceptance is demonstrated. The existing Telegram-coupled workflow below has not yet been converged to an optional adapter. Do not enable valuable funds. See the root convergence report.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-≥24.0.0-339933?logo=node.js)](https://nodejs.org)
@@ -209,7 +211,7 @@ DEFAULT_CURRENCY=USDC                   # default: USDC
 npm install
 
 # Or from the admin package
-cd packages/admin && npm install
+cd packages/custody && npm install
 
 # Compile Solidity contracts
 npm run contracts:build

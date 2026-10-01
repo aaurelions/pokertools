@@ -51,7 +51,7 @@
         header_up Host {host}
 
         # Health-check the upstream so Caddy can fail over / report status
-        health_uri /health
+        health_uri /ready
         health_interval 15s
         health_timeout 3s
     }

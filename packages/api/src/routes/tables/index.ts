@@ -7,6 +7,7 @@ import {
   BuyInRequest,
   AddChipsRequest,
   GameActionRequest,
+  GameActionRequestSchema,
 } from "@pokertools/types";
 import { config } from "../../config.js";
 import { reconcileTournament } from "../tournaments/index.js";
@@ -171,10 +172,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
               code: "BUY_IN_ABOVE_MAXIMUM",
             });
           }
-          const lock = await fastify.redlock.acquire(
-            [`lock:table:${id}`],
-            config.TABLE_LOCK_TTL_MS
-          );
+          const lock = await fastify.redlock.lock([`lock:table:${id}`], config.TABLE_LOCK_TTL_MS);
           let debited = false;
           try {
             const state = await fastify.gameManager.getState(id);
@@ -221,7 +219,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
             }
             throw error;
           } finally {
-            await lock.release();
+            await lock.unlock();
           }
         },
       });
@@ -255,17 +253,23 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
     async (request, reply) => {
       const { id } = request.params;
       const { userId } = request.user;
-      const { type, amount, idempotencyKey } = request.body;
+      const submittedType = request.body?.type;
 
       // SECURITY: Whitelist only gameplay actions
       // Management actions (SIT, ADD_CHIPS, RESERVE_SEAT) must go through dedicated endpoints with financial checks
       // Whitelist is defined in @pokertools/types to ensure it stays in sync with engine action types
-      if (!isAllowedGameplayAction(type as ActionType)) {
+      if (!isAllowedGameplayAction(submittedType as ActionType)) {
         return reply.code(403).send({
           error: "INVALID_ACTION",
-          message: `Action type '${type}' is not allowed through this endpoint. Use dedicated endpoints for management actions.`,
+          message: "Action is not allowed through this endpoint",
         });
       }
+
+      const parsed = GameActionRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: "INVALID_ACTION", message: "Invalid action request" });
+      }
+      const { type, amount, cardIndices, idempotencyKey } = parsed.data;
 
       const runAction = async () => {
         const state = await fastify.gameManager.processAction(
@@ -273,7 +277,8 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
           {
             type,
             playerId: userId,
-            amount: amount ? Number(amount) : undefined,
+            amount,
+            cardIndices,
           } as Action,
           userId
         );
@@ -311,7 +316,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
             key: idempotencyKey,
             scope: `game-action:${id}`,
             userId,
-            requestHash: fastify.idempotencyManager.hash({ id, type, amount }),
+            requestHash: fastify.idempotencyManager.hash({ id, type, amount, cardIndices }),
             ttlSeconds: 3600,
             handler: runAction,
           });
@@ -484,10 +489,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
 
       // Use the same table lock namespace as game actions/settlement so engine
       // state reads and financial writes are serialized for the table.
-      const lock = await fastify.redlock.acquire(
-        [`lock:table:${id}`],
-        config.TABLE_LOCK_TTL_MS * 3
-      );
+      const lock = await fastify.redlock.lock([`lock:table:${id}`], config.TABLE_LOCK_TTL_MS * 3);
 
       try {
         const table = await fastify.prisma.table.findUniqueOrThrow({
@@ -676,7 +678,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
 
         return { success: true };
       } finally {
-        await lock.release();
+        await lock.unlock();
       }
     }
   );

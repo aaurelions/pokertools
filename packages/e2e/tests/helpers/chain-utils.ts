@@ -74,19 +74,19 @@ export async function deployContracts(): Promise<DeployedContracts> {
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
 
-  const contractsDir = path.resolve(__dirname, "../../../admin/contracts/out");
+  const contractsDir = path.resolve(__dirname, "../../../custody/contracts/out");
 
   const usdcArtifactPath = path.join(contractsDir, "MockUSDC.sol/MockUSDC.json");
   const sweeperArtifactPath = path.join(contractsDir, "BatchSweeper.sol/BatchSweeper.json");
 
   if (!fs.existsSync(usdcArtifactPath)) {
     throw new Error(
-      `MockUSDC artifact not found at ${usdcArtifactPath}. Run 'forge build' in packages/admin first.`
+      `MockUSDC artifact not found at ${usdcArtifactPath}. Run 'forge build' in packages/custody first.`
     );
   }
   if (!fs.existsSync(sweeperArtifactPath)) {
     throw new Error(
-      `BatchSweeper artifact not found at ${sweeperArtifactPath}. Run 'forge build' in packages/admin first.`
+      `BatchSweeper artifact not found at ${sweeperArtifactPath}. Run 'forge build' in packages/custody first.`
     );
   }
 

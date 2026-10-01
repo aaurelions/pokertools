@@ -44,14 +44,14 @@ The runner exits non-zero on the first failed scenario; `docker compose -f docke
 
 ## Relation to unit/integration tests
 
-| Layer        | Where                      | What                                                 |
-| :----------- | :------------------------- | :--------------------------------------------------- |
-| Engine rules | `packages/engine/tests`    | Reducer correctness, invariants, security            |
-| Evaluator    | `packages/evaluator/tests` | Scores, frequencies, validation                      |
-| API + DB     | `packages/api/tests`       | Routes, workers, ledger integrity, scheduled actions |
-| Admin        | `packages/admin/tests`     | Wallets, sweepers, refunds                           |
-| Contracts    | `packages/admin/contracts` | Foundry unit tests against Anvil                     |
-| **Stack**    | **`packages/e2e`**         | **Everything wired together**                        |
+| Layer        | Where                        | What                                                 |
+| :----------- | :--------------------------- | :--------------------------------------------------- |
+| Engine rules | `packages/engine/tests`      | Reducer correctness, invariants, security            |
+| Evaluator    | `packages/evaluator/tests`   | Scores, frequencies, validation                      |
+| API + DB     | `packages/api/tests`         | Routes, workers, ledger integrity, scheduled actions |
+| Custody      | `packages/custody/tests`     | Wallets, sweepers, refunds                           |
+| Contracts    | `packages/custody/contracts` | Foundry unit tests against Anvil                     |
+| **Stack**    | **`packages/e2e`**           | **Everything wired together**                        |
 
 ::: warning
 Docker e2e and production PostgreSQL validation require separate infrastructure and are

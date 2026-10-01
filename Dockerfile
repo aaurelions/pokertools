@@ -5,7 +5,7 @@ FROM node:24-slim AS build
 
 # openssl required by Prisma engines (especially for PostgreSQL TLS connections)
 RUN apt-get update -y && \
-    apt-get install -y --no-install-recommends openssl && \
+    apt-get install -y --no-install-recommends openssl python3 make g++ && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -20,7 +20,7 @@ COPY packages/evaluator/package.json packages/evaluator/tsconfig.json packages/e
 COPY packages/engine/package.json packages/engine/tsconfig.json packages/engine/
 COPY packages/sdk/package.json packages/sdk/tsconfig.json packages/sdk/tsconfig.build.json packages/sdk/tsup.config.ts packages/sdk/
 COPY packages/bench/package.json packages/bench/tsconfig.json packages/bench/
-COPY packages/admin/package.json packages/admin/tsconfig.json packages/admin/
+COPY packages/custody/package.json packages/custody/tsconfig.json packages/custody/
 COPY packages/api/package.json packages/api/tsconfig.json packages/api/prisma.config.ts packages/api/
 
 # Prisma schema + migrations (required by prisma generate)
@@ -28,12 +28,10 @@ COPY packages/api/prisma/ packages/api/prisma/
 
 # ---- Install all dependencies (workspaces linked via npm workspaces) ----
 # --ignore-scripts keeps the layer deterministic (no prepare/install scripts).
-# Native binaries are never compiled: better-sqlite3 13 ships N-API prebuilds
-# (linux x64/arm64, darwin, win32) inside the npm tarball, so no node-gyp
-# toolchain (Python/make/g++) is required in this image. The npm override in
-# the root package.json keeps a single better-sqlite3@13 copy, replacing the
-# nested 12.x that @prisma/adapter-better-sqlite3 used to pin.
+# Rebuild the adapter's supported native SQLite dependency explicitly rather
+# than overriding its dependency range to force an incompatible major.
 RUN npm ci --ignore-scripts
+RUN npm rebuild better-sqlite3
 
 # ---- Copy source files for packages we build ----
 COPY packages/types/src packages/types/src
@@ -42,7 +40,7 @@ COPY packages/engine/src packages/engine/src
 COPY packages/api/src packages/api/src
 COPY packages/api/types packages/api/types
 COPY packages/api/scripts packages/api/scripts
-COPY packages/admin/src packages/admin/src
+COPY packages/custody/src packages/custody/src
 
 # ---- Generate Prisma client (output -> packages/api/generated/prisma) ----
 # prisma.config.ts requires DATABASE_URL at generation time.  A throw-away
@@ -63,7 +61,7 @@ RUN npm run build -w @pokertools/types && \
     npm run build -w @pokertools/evaluator && \
     npm run build -w @pokertools/engine && \
     npm run build -w @pokertools/api && \
-    npm run build -w @pokertools/admin
+    npm run build -w @pokertools/custody
 
 # ---- Remove dev-only workspaces (not part of the API/admin runtime) ----
 # This removes their package.json manifests so the following prune step drops
@@ -186,7 +184,7 @@ COPY --from=build --chown=pokertools:pokertools /app/packages/types ./packages/t
 COPY --from=build --chown=pokertools:pokertools /app/packages/evaluator ./packages/evaluator
 COPY --from=build --chown=pokertools:pokertools /app/packages/engine ./packages/engine
 COPY --from=build --chown=pokertools:pokertools /app/packages/api ./packages/api
-COPY --from=build --chown=pokertools:pokertools /app/packages/admin ./packages/admin
+COPY --from=build --chown=pokertools:pokertools /app/packages/custody ./packages/custody
 
 # ---- Entrypoint ----
 COPY --chown=pokertools:pokertools packages/api/scripts/docker-entrypoint.sh /app/docker-entrypoint.sh

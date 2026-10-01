@@ -173,7 +173,7 @@ describe("Chaos & Resilience", () => {
       await buyIn(ctx.app, player2.token, tableId, 1000, 1);
 
       // Manually acquire the same lock key that the stand endpoint uses
-      const lock = await ctx.app.redlock.acquire([`lock:table:${tableId}`], 60000);
+      const lock = await ctx.app.redlock.lock([`lock:table:${tableId}`], 60000);
 
       try {
         // Try a table operation that requires the lock - must fail
@@ -185,7 +185,7 @@ describe("Chaos & Resilience", () => {
         // The stand endpoint should fail because it cannot acquire the lock
         expect(res.statusCode).toBeGreaterThanOrEqual(400);
       } finally {
-        await lock.release();
+        await lock.unlock();
       }
 
       // After releasing the manual lock, a stand operation should succeed
@@ -393,17 +393,17 @@ describe("Chaos & Resilience", () => {
 
       // Rapidly acquire and release the redlock 10 times
       for (let i = 0; i < 10; i++) {
-        const lock = await ctx.app.redlock.acquire([lockKey], 10000);
+        const lock = await ctx.app.redlock.lock([lockKey], 10000);
         expect(lock).toBeDefined();
-        await lock.release();
+        await lock.unlock();
       }
 
       // After rapid churn, verify we can still acquire the lock
-      const finalLock = await ctx.app.redlock.acquire([lockKey], 10000);
+      const finalLock = await ctx.app.redlock.lock([lockKey], 10000);
       expect(finalLock).toBeDefined();
 
       // Release and verify normal table operations still work
-      await finalLock.release();
+      await finalLock.unlock();
 
       const state = await getTableState(ctx.app, player1.token, tableId);
       const player = state.players.find((p: { id: string } | null) => p?.id === player1.id);

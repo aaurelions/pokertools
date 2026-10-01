@@ -40,7 +40,7 @@ module.exports = tseslint.config(
         ...globals.jest,
       },
       parserOptions: {
-        projectService: true,
+        projectService: { allowDefaultProject: ["packages/custody/vitest.config.ts"] },
         tsconfigRootDir: __dirname,
       },
     },
@@ -85,8 +85,8 @@ module.exports = tseslint.config(
           patterns: [
             {
               group: [
-                "**/packages/admin/src/**", "**/packages/api/src/**", "**/packages/bench/src/**", "**/packages/engine/src/**", "**/packages/evaluator/src/**", "**/packages/sdk/src/**", "**/packages/types/src/**",
-                "../admin/src/**", "../../admin/src/**", "../../../admin/src/**",
+                "**/packages/custody/src/**", "**/packages/api/src/**", "**/packages/bench/src/**", "**/packages/engine/src/**", "**/packages/evaluator/src/**", "**/packages/sdk/src/**", "**/packages/types/src/**",
+                "../custody/src/**", "../../custody/src/**", "../../../custody/src/**",
                 "../api/src/**", "../../api/src/**", "../../../api/src/**",
                 "../bench/src/**", "../../bench/src/**", "../../../bench/src/**",
                 "../engine/src/**", "../../engine/src/**", "../../../engine/src/**",

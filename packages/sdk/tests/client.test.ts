@@ -56,7 +56,11 @@ describe("PokerClient", () => {
       expect(nonce).toBe("abc123");
       expect(mockFetch).toHaveBeenCalledWith(
         "https://api.example.com/auth/nonce",
-        expect.objectContaining({ method: "POST" })
+        expect.objectContaining({
+          method: "POST",
+          body: undefined,
+          headers: { Accept: "application/json", Authorization: "Bearer test-token" },
+        })
       );
     });
 
@@ -77,6 +81,7 @@ describe("PokerClient", () => {
 
       expect(response.token).toBe("new-jwt");
       expect(client.getToken()).toBe("new-jwt");
+      expect(mockFetch.mock.calls[0][1].headers["Content-Type"]).toBe("application/json");
     });
 
     it("logout clears token", async () => {

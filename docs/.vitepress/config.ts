@@ -109,7 +109,7 @@ export default defineConfig({
             { text: "@pokertools/engine", link: "/packages/engine" },
             { text: "@pokertools/sdk", link: "/packages/sdk" },
             { text: "@pokertools/api", link: "/packages/api" },
-            { text: "@pokertools/admin", link: "/packages/admin" },
+            { text: "@pokertools/custody", link: "/packages/custody" },
             { text: "@pokertools/bench", link: "/packages/bench" },
             { text: "@pokertools/e2e", link: "/packages/e2e" },
           ],

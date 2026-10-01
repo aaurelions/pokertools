@@ -4,7 +4,9 @@
 [![CI](https://github.com/aaurelions/pokertools/actions/workflows/ci.yml/badge.svg)](https://github.com/aaurelions/pokertools/actions/workflows/ci.yml)
 [![Docs](https://github.com/aaurelions/pokertools/actions/workflows/docs.yml/badge.svg)](https://aaurelions.github.io/pokertools/)
 
-**PokerTools** is an enterprise-grade platform for building, deploying, and managing real-time Texas Hold'em poker applications. This monorepo contains the complete ecosystem, from shared DTOs, the core game engine, and the hand evaluator to a Fastify REST/WebSocket API, blockchain administration workers, Docker E2E tests, benchmarks, and a TypeScript/React client SDK.
+**PokerTools** provides a deterministic Texas Hold'em engine, evaluator, room API, SDK and private custody worker.
+
+> **Not approved for production or real-money operation.** Architecture convergence is incomplete. API, room workers and custody refuse `NODE_ENV=production`; there is no override. `/health` is liveness only; `/ready` returns 503 with safe, explicit unverified-finance reasons. See [the execution report](ARCHITECTURE_CONVERGENCE_REPORT.md) and [the boundary decision](docs/ARCHITECTURE_DECISION.md). Development/test stacks must use disposable assets only.
 
 ## 📚 Documentation
 
@@ -14,24 +16,24 @@ Full documentation is available at **[https://aaurelions.github.io/pokertools/](
 
 The repository is organized into workspaces managed by NPM.
 
-| Package                                           | Description                                                                                                          | Version  |
-| :------------------------------------------------ | :------------------------------------------------------------------------------------------------------------------- | :------- |
-| **[@pokertools/engine](./packages/engine)**       | The immutable core logic for Texas Hold'em state management.                                                         | `1.0.20` |
-| **[@pokertools/evaluator](./packages/evaluator)** | High-performance evaluation of 5-, 6-, and 7-card poker hands.                                                       | `1.0.20` |
-| **[@pokertools/api](./packages/api)**             | Scalable REST & WebSocket API built with Fastify, Redis, BullMQ, and Prisma (SQLite default, PostgreSQL supported).  | `1.0.20` |
-| **[@pokertools/sdk](./packages/sdk)**             | TypeScript SDK with REST helpers, WebSocket state sync, auth utilities, and optional React 19 hooks.                 | `1.0.20` |
-| **[@pokertools/admin](./packages/admin)**         | Private blockchain administration service for sweeps, withdrawal processing, gas monitoring, and Telegram approvals. | `1.0.20` |
-| **[@pokertools/types](./packages/types)**         | Shared TypeScript domain types, API DTOs, WebSocket messages, Zod schemas, and action whitelists.                    | `1.0.20` |
-| **[@pokertools/bench](./packages/bench)**         | Performance benchmarking suite for evaluator, API, workers, sockets, and game actions.                               | `1.0.20` |
-| **[@pokertools/e2e](./packages/e2e)**             | Docker-based end-to-end integration tests exercising the full API, SDK, WebSocket, and blockchain stack.             | `1.0.20` |
+| Package                                           | Description                                                                                                         | Version  |
+| :------------------------------------------------ | :------------------------------------------------------------------------------------------------------------------ | :------- |
+| **[@pokertools/engine](./packages/engine)**       | The immutable core logic for Texas Hold'em state management.                                                        | `1.0.20` |
+| **[@pokertools/evaluator](./packages/evaluator)** | High-performance evaluation of 5-, 6-, and 7-card poker hands.                                                      | `1.0.20` |
+| **[@pokertools/api](./packages/api)**             | Scalable REST & WebSocket API built with Fastify, Redis, BullMQ, and Prisma (SQLite default, PostgreSQL supported). | `1.0.20` |
+| **[@pokertools/sdk](./packages/sdk)**             | TypeScript SDK with REST helpers, WebSocket state sync, auth utilities, and optional React 19 hooks.                | `1.0.20` |
+| **[@pokertools/custody](./packages/custody)**     | Private custody worker for sweeps, withdrawal processing and gas monitoring.                                        | `1.0.20` |
+| **[@pokertools/types](./packages/types)**         | Shared TypeScript domain types, API DTOs, WebSocket messages, Zod schemas, and action whitelists.                   | `1.0.20` |
+| **[@pokertools/bench](./packages/bench)**         | Performance benchmarking suite for evaluator, API, workers, sockets, and game actions.                              | `1.0.20` |
+| **[@pokertools/e2e](./packages/e2e)**             | Docker-based end-to-end integration tests exercising the full API, SDK, WebSocket, and blockchain stack.            | `1.0.20` |
 
 ## ✨ Key Features
 
 - **Robust Game Engine**: Handles complex side pots, all-in scenarios, and exact rake calculations. Verified with property-based testing.
 - **High Performance**: Evaluator can process millions of hands per second.
 - **Scalable Infrastructure**: API designed for horizontal scaling with Redis Pub/Sub and atomic database transactions.
-- **Financial Integrity**: Double-entry ledger system for all chip movements.
-- **Blockchain Integration**: Built-in support for EVM deposits, withdrawals, worker queues, sweep batching, and operator approvals via the admin service.
+- **Financial integration under convergence**: Current cents-oriented accounting and deposit/withdrawal workflows are not approved for settlement. Atomic multi-asset postings, quorum and exactly-once custody acceptance remain outstanding.
+- **Isolated custody boundary**: Private signing belongs to `@pokertools/custody`, never the public API. The former public private-wallet creation CLI and xpriv helpers were removed.
 - **Developer Experience**: Fully typed SDK, React hooks, comprehensive package READMEs, and workspace-level scripts for build/test/lint/format workflows.
 
 ## 🚀 Getting Started
@@ -138,7 +140,7 @@ Most packages rely on environment variables. Copy the example files in each pack
 
 ```bash
 cp packages/api/.env.example packages/api/.env
-cp packages/admin/.env.example packages/admin/.env
+cp packages/custody/.env.example packages/custody/.env
 ```
 
 ### Endpoints
@@ -174,7 +176,7 @@ Each workspace README is maintained as the primary developer reference for that 
 - [`packages/engine`](./packages/engine/README.md): state model, action handling, security boundaries, hand history, rake, tournaments, and browser entrypoint.
 - [`packages/api`](./packages/api/README.md): Fastify app, auth, routes, WebSockets, workers, Prisma/BullMQ/Redis services, and operations.
 - [`packages/sdk`](./packages/sdk/README.md): REST client, socket client, auth helpers, React provider/hooks, and export reference.
-- [`packages/admin`](./packages/admin/README.md): sweepers, withdrawal bot, blockchain service, gas monitor, operator workflow, and deployment notes.
+- [`packages/custody`](./packages/custody/README.md): private signing, custody workers and operator adapters.
 - [`packages/bench`](./packages/bench/README.md): evaluator comparisons plus API/worker/socket load benchmark scripts.
 - [`packages/e2e`](./packages/e2e/README.md): Docker-based integration test topology, prerequisites, secrets, and manual execution.
 

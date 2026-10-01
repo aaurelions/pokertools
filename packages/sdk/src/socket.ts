@@ -110,6 +110,7 @@ export class PokerSocket {
     Set<EventListener<keyof PokerSocketEvents>>
   >();
   private shouldReconnect = true;
+  private rejectConnection: ((error: Error) => void) | null = null;
 
   // Latest state cache for each table
   private stateCache = new Map<string, PublicState>();
@@ -183,12 +184,16 @@ export class PokerSocket {
 
       this.shouldReconnect = true;
       this.connectionState = "connecting";
+      this.rejectConnection = reject;
       this.log("Connecting to", this.url);
 
       try {
-        this.ws = new this.WebSocketImpl(this.url, ["pokertools", this.protocolToken]);
+        const ws = new this.WebSocketImpl(this.url, ["pokertools", this.protocolToken]);
+        this.ws = ws;
 
-        this.ws.onopen = () => {
+        ws.onopen = () => {
+          if (this.ws !== ws) return;
+          this.rejectConnection = null;
           this.connectionState = "connected";
           this.reconnectCount = 0;
           this.startHeartbeat();
@@ -201,22 +206,30 @@ export class PokerSocket {
           resolve();
         };
 
-        this.ws.onclose = (event) => {
+        ws.onclose = (event) => {
+          // A closing socket from a previous connection must not destroy the
+          // replacement connection or deliver another principal's old state.
+          if (this.ws !== ws) return;
+          this.rejectConnection?.(new PokerSDKError("Connection closed", "CONNECTION_CLOSED"));
+          this.rejectConnection = null;
           this.handleDisconnect(event.reason || "Connection closed");
         };
 
-        this.ws.onerror = (event) => {
+        ws.onerror = (event) => {
+          if (this.ws !== ws) return;
           this.log("WebSocket error:", event);
           if (this.connectionState === "connecting") {
             reject(new PokerSDKError("Connection failed", "CONNECTION_FAILED"));
           }
         };
 
-        this.ws.onmessage = (event) => {
+        ws.onmessage = (event) => {
+          if (this.ws !== ws) return;
           this.handleMessage(event.data as string);
         };
       } catch (error) {
         this.connectionState = "disconnected";
+        this.rejectConnection = null;
         // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
         reject(error);
       }
@@ -230,10 +243,15 @@ export class PokerSocket {
     this.shouldReconnect = false;
     this.stopHeartbeat();
     this.clearPendingRequests("Connection closed");
+    this.stateCache.clear();
+    this.tableVersions.clear();
+    this.rejectConnection?.(new PokerSDKError("Connection closed", "CONNECTION_CLOSED"));
+    this.rejectConnection = null;
 
     if (this.ws) {
-      this.ws.close(1000, "Client disconnect");
+      const closingSocket = this.ws;
       this.ws = null;
+      closingSocket.close(1000, "Client disconnect");
     }
 
     this.connectionState = "disconnected";
@@ -538,6 +556,7 @@ export class PokerSocket {
    */
   private handleDisconnect(reason: string): void {
     this.stopHeartbeat();
+    this.clearPendingRequests("Connection closed");
     this.ws = null;
 
     const wasConnected = this.connectionState === "connected";

@@ -4,7 +4,7 @@ import { resolve } from "path";
 
 // Load test environment variables
 if (process.env.NODE_ENV === "test") {
-  config({ path: resolve(__dirname, ".env.test"), quiet: true });
+  config({ path: resolve(import.meta.dirname, ".env.test"), quiet: true });
   process.env.ENABLE_TEST_ROUTES = "true";
 }
 
@@ -12,6 +12,10 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
+    include:
+      process.env.POKERTOOLS_LOOPBACK_TEST === "true"
+        ? ["tests/loopback/**/*.test.ts"]
+        : ["tests/{integration,unit}/**/*.test.ts"],
     testTimeout: 30000, // Increased for long-running tests
     hookTimeout: 30000,
     setupFiles: ["./tests/setup.ts"],
@@ -22,7 +26,7 @@ export default defineConfig({
     },
     // Run tests sequentially to avoid Redis/DB/Redlock conflicts
     pool: "forks",
-    singleFork: true,
+    maxWorkers: 1,
     // Ensure tests run one file at a time
     fileParallelism: false,
     // Isolate each test file

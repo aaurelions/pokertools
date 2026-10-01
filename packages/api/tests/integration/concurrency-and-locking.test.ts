@@ -55,7 +55,7 @@ describe("Stand endpoint lock namespace", () => {
 
     await buyIn(ctx.app, player1.token, ctx.tableId, 1000, 0);
 
-    const lock = await ctx.app.redlock.acquire([`lock:table:${ctx.tableId}`], 60000);
+    const lock = await ctx.app.redlock.lock([`lock:table:${ctx.tableId}`], 60000);
     try {
       const res = await ctx.app.inject({
         method: "POST",
@@ -64,7 +64,7 @@ describe("Stand endpoint lock namespace", () => {
       });
       expect(res.statusCode).toBeGreaterThanOrEqual(400);
     } finally {
-      await lock.release();
+      await lock.unlock();
     }
 
     const stateAfter = await getTableState(ctx.app, player1.token, ctx.tableId);

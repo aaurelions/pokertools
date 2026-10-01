@@ -174,11 +174,11 @@ Add a cron job on the Docker host:
 
 ## 🔗 Related Packages
 
-| Package                                | Description                       |
-| -------------------------------------- | --------------------------------- |
-| [@pokertools/api](../packages/api)     | REST/WebSocket API                |
-| [@pokertools/admin](../packages/admin) | Blockchain administration service |
-| [@pokertools/e2e](../packages/e2e)     | End-to-end integration tests      |
+| Package                                    | Description                  |
+| ------------------------------------------ | ---------------------------- |
+| [@pokertools/api](../packages/api)         | REST/WebSocket API           |
+| [@pokertools/custody](../packages/custody) | Private custody worker       |
+| [@pokertools/e2e](../packages/e2e)         | End-to-end integration tests |
 
 ## 📄 License
 

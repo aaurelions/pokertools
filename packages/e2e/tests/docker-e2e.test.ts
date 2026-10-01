@@ -278,17 +278,26 @@ beforeAll(async () => {
     fs.rmSync(E2E_RUNTIME_DIR, { recursive: true, force: true });
   }
   fs.mkdirSync(E2E_RUNTIME_DIR, { recursive: true });
+  // This throw-away bind mount is shared with the non-root container UID.
+  fs.chmodSync(E2E_RUNTIME_DIR, 0o777);
   console.log(`[E2E] Runtime dir: ${E2E_RUNTIME_DIR}`);
 
   // ── 4. Build and start Docker Compose ──────────────────────────────────
   console.log("[E2E] Building and starting Docker Compose stack...");
-  execSync(
-    `POKERTOOLS_E2E_RUNTIME="${E2E_RUNTIME_DIR}" docker compose -f "${COMPOSE_FILE}" up --build -d`,
-    {
-      stdio: "inherit",
-      timeout: 900000, // 15 minutes for cold Docker builds on constrained CI/desktop runners
-    }
-  );
+  try {
+    execSync(
+      `POKERTOOLS_E2E_RUNTIME="${E2E_RUNTIME_DIR}" docker compose -f "${COMPOSE_FILE}" up --build -d`,
+      { stdio: "inherit", timeout: 900000 }
+    );
+  } catch (error) {
+    // Capture diagnostics before afterAll removes the failed containers.
+    const logs = execSync(
+      `POKERTOOLS_E2E_RUNTIME="${E2E_RUNTIME_DIR}" docker compose -f "${COMPOSE_FILE}" logs --no-color --tail 40 api`,
+      { encoding: "utf8" }
+    );
+    console.error(logs.replace(/(\w+:\/\/)[^\s/@]+:[^\s/@]+@/g, "$1[redacted]@"));
+    throw error;
+  }
 
   // ── 5. Wait for API health ─────────────────────────────────────────────
   console.log("[E2E] Waiting for API health...");

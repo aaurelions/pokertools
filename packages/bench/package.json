@@ -35,10 +35,10 @@
   "dependencies": {
     "@pokertools/evaluator": "1.0.20",
     "benchmark": "^2.1.4",
-    "bullmq": "^6.3.8",
+    "bullmq": "^6.3.11",
     "phe": "^0.6.0",
     "poker-evaluator": "^2.1.1",
     "pokersolver": "^2.1.4",
-    "ws": "^8.21.3"
+    "ws": "^8.22.0"
   }
 }

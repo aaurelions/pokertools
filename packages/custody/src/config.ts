@@ -1,4 +1,7 @@
 import { cleanEnv, str, num, makeValidator } from "envalid";
+import { assertCustodyProcessSafety } from "./safety.js";
+
+assertCustodyProcessSafety(process.env);
 import dotenv from "dotenv";
 import path from "path";
 import fs from "fs";

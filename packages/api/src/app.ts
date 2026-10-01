@@ -26,6 +26,7 @@ import { notesRoutes } from "./routes/notes/index.js";
 import { tournamentRoutes } from "./routes/tournaments/index.js";
 
 import { config } from "./config.js";
+import { HealthResponseSchema, ReadinessResponseSchema } from "@pokertools/types";
 
 export async function buildApp() {
   const app = Fastify({
@@ -151,15 +152,39 @@ export async function buildApp() {
         route: request.routeOptions.url ?? request.url,
       });
     }
-    if (statusCode >= 500) request.log.error({ error: err }, "Unhandled request error");
+    if (statusCode >= 500) {
+      // Driver errors can contain database/RPC credentials; neither return nor
+      // log the untrusted error object in the public request path.
+      request.log.error({ requestId: request.id }, "Unhandled request error");
+      return reply.code(500).send({ error: "INTERNAL_ERROR", message: "Internal server error" });
+    }
     return reply.code(statusCode).send({ error: code, message: err.message });
   });
 
-  app.get("/health", async (request, reply) => {
+  app.get("/health", () => HealthResponseSchema.parse({ status: "ok", timestamp: Date.now() }));
+
+  app.get("/ready", async (_request, reply) => {
     const health = await app.observabilityManager.health();
-    if (health.status === "down") return reply.code(503).send(health);
-    if (health.status === "degraded") return reply.code(200).send(health);
-    return health;
+    // A reachable DB is not proof of migration integrity or financial safety.
+    // No configuration flag may turn missing acceptance evidence into readiness.
+    return reply.code(503).send(
+      ReadinessResponseSchema.parse({
+        status: "not_ready",
+        timestamp: Date.now(),
+        checks: health.checks,
+        migrations: { status: "unverified" },
+        financial: {
+          status: "blocked",
+          reasons: [
+            "ASSET_LEDGER_UNVERIFIED",
+            "RPC_QUORUM_UNVERIFIED",
+            "RECONCILIATION_UNVERIFIED",
+            "NATIVE_GAS_UNVERIFIED",
+            "CUSTODY_WORKFLOW_UNVERIFIED",
+          ],
+        },
+      })
+    );
   });
 
   app.get("/metrics", async (request, reply) => {

@@ -3,7 +3,7 @@ import { SitInOption } from "./player";
 /**
  * Action types that can be performed in the game
  */
-export const enum ActionType {
+export enum ActionType {
   // Management
   SIT = "SIT",
   STAND = "STAND",

@@ -11,7 +11,7 @@ import { ActionType } from "@pokertools/types";
 
 const prisma = createPrismaClient();
 const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
-const redlock = new Redlock([redis as any], {
+const redlock = new Redlock([redis as unknown as Redlock.CompatibleRedisClient], {
   driftFactor: config.REDLOCK_DRIFT_FACTOR,
   retryCount: config.REDLOCK_RETRY_COUNT,
   retryDelay: config.REDLOCK_RETRY_DELAY_MS,
@@ -40,7 +40,7 @@ const worker = new Worker(
     // If manual DEAL already happened, we can skip
     let lock;
     try {
-      lock = await redlock.acquire([`lock:table:${tableId}`], config.NEXT_HAND_LOCK_TTL_MS);
+      lock = await redlock.lock([`lock:table:${tableId}`], config.NEXT_HAND_LOCK_TTL_MS);
     } catch (err) {
       throw new Error(`Unable to acquire auto-deal lock for table ${tableId}`, { cause: err });
     }
@@ -89,7 +89,7 @@ const worker = new Worker(
 
       console.log(`✅ Auto-dealt next hand for table ${tableId}`);
     } finally {
-      await lock.release();
+      await lock.unlock();
     }
   },
   { connection: redis as any }

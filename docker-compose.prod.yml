@@ -13,7 +13,7 @@
 #                  └────┬────┘  └────────────┘
 #                       │
 #                  ┌────┴────┐     ┌──────────┐
-#                  │  Redis  │     │  Admin   │
+#                  │  Redis  │     │ Custody  │
 #                  │  :6379  │     │(sweeper) │
 #                  └─────────┘     └──────────┘
 #
@@ -238,9 +238,9 @@ services:
         max-file: "3"
 
   # ---------------------------------------------------------------------------
-  # Admin — sweepers, withdrawal bot, gas/transaction monitors (internal only)
+  # Custody — isolated signing worker (internal only)
   # ---------------------------------------------------------------------------
-  admin:
+  custody:
     build:
       context: .
       dockerfile: Dockerfile
@@ -289,9 +289,9 @@ services:
       STUCK_WITHDRAWAL_MAX_AGE_MS: ${STUCK_WITHDRAWAL_MAX_AGE_MS:-21600000}
     networks:
       - internal
-    working_dir: /app/packages/admin
+    working_dir: /app/packages/custody
     # Override the image ENTRYPOINT (docker-entrypoint.sh) which always starts
-    # the API server. The admin service must run its own entrypoint instead.
+    # the API server. Custody must run its own entrypoint instead.
     entrypoint: ["/bin/sh", "-lc"]
     command: ["exec node dist/index.js"]
     deploy:

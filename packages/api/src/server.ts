@@ -15,7 +15,7 @@ async function start() {
       -------------------------
       🌍 Server: http://${config.HOST}:${config.PORT}
       📚 Docs:   http://${config.HOST}:${config.PORT}/docs
-      🔌 Redis:  ${config.REDIS_URL}
+      🔌 Redis:  Connected
       🐘 DB:     Connected
       🎮 Ready to play poker!
     `);

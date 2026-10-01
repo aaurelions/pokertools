@@ -109,8 +109,8 @@ export class ObservabilityManager {
       await fn();
       const latencyMs = Date.now() - started;
       return { status: latencyMs > 1000 ? "degraded" : "ok", latencyMs } as const;
-    } catch (error) {
-      this.app.log.error({ error, check: name }, "Health check failed");
+    } catch {
+      this.app.log.error({ check: name }, "Health check failed");
       return { status: "down", latencyMs: Date.now() - started } as const;
     }
   }

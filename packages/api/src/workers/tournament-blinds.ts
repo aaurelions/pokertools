@@ -54,7 +54,7 @@ export async function scanAndAdvanceTournamentBlinds(
 
   if (runningTournaments.length === 0) return { advanced, skipped };
 
-  const redlock = new Redlock([redis as any], {
+  const redlock = new Redlock([redis as unknown as Redlock.CompatibleRedisClient], {
     driftFactor: 0.01,
     retryCount: 1,
     retryDelay: 50,
@@ -78,7 +78,7 @@ export async function scanAndAdvanceTournamentBlinds(
 
       let lock;
       try {
-        lock = await redlock.acquire(
+        lock = await redlock.lock(
           [lockKey],
           config.NODE_ENV === "test" ? config.TABLE_LOCK_TTL_MS_TEST : config.TABLE_LOCK_TTL_MS
         );
@@ -150,7 +150,7 @@ export async function scanAndAdvanceTournamentBlinds(
         );
         advanced.push(tournament.id);
       } finally {
-        await lock.release().catch(() => undefined);
+        await lock.unlock().catch(() => undefined);
       }
     }
   } finally {

@@ -10,8 +10,8 @@ node_modules/
 dist/
 generated/
 .tsbuildinfo
-packages/admin/contracts/out/
-packages/admin/cache/
+packages/custody/contracts/out/
+packages/custody/cache/
 
 # Runtime artifacts
 .runtime/

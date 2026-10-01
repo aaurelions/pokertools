@@ -7,7 +7,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "pretest:docker": "echo '🐳 Building Docker E2E dependencies...' && npm run build -w @pokertools/types && npm run build -w @pokertools/sdk && npm run contracts:build -w @pokertools/admin --if-present",
+    "pretest:docker": "echo '🐳 Building Docker E2E dependencies...' && npm run build -w @pokertools/types && npm run build -w @pokertools/sdk && npm run contracts:build -w @pokertools/custody --if-present",
     "test:docker": "NODE_ENV=test vitest run --config vitest.config.ts"
   },
   "dependencies": {
@@ -17,12 +17,12 @@
     "@scure/bip32": "^2.4.0",
     "@scure/bip39": "^2.4.0",
     "better-sqlite3": "^13.0.3",
-    "bullmq": "^6.3.8",
-    "dotenv": "^17.4.2",
+    "bullmq": "^6.3.11",
+    "dotenv": "^18.0.5",
     "fast-jwt": "^6.3.3",
     "ioredis": "^6.0.0",
-    "viem": "^2.56.8",
-    "vitest": "^5.0.1",
-    "ws": "^8.21.3"
+    "viem": "^2.57.2",
+    "vitest": "^5.0.3",
+    "ws": "^8.22.0"
   }
 }

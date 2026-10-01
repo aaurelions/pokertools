@@ -340,24 +340,37 @@ export const AddChipsRequestSchema = z.object({
 /**
  * Schema for game action request
  */
-export const GameActionRequestSchema = z.object({
-  type: z.enum([
-    "DEAL",
-    "CHECK",
-    "CALL",
-    "RAISE",
-    "BET",
-    "FOLD",
-    "SHOW",
-    "MUCK",
-    "TIME_BANK",
-    "STAND",
-    "NEXT_BLIND_LEVEL",
-  ]),
-  amount: z.number().int().positive().optional(),
-  cardIndices: z.array(z.number().int().min(0).max(1)).optional(),
-  idempotencyKey: z.string().min(1).optional(),
-});
+export const GameActionRequestSchema = z
+  .strictObject({
+    type: z.enum([
+      "DEAL",
+      "CHECK",
+      "CALL",
+      "RAISE",
+      "BET",
+      "FOLD",
+      "SHOW",
+      "MUCK",
+      "TIME_BANK",
+      "STAND",
+      "NEXT_BLIND_LEVEL",
+    ]),
+    amount: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+    cardIndices: z.array(z.number().int().min(0).max(1)).optional(),
+    idempotencyKey: z.string().min(1).max(128).optional(),
+  })
+  .superRefine((action, ctx) => {
+    if ((action.type === "BET" || action.type === "RAISE") && action.amount === undefined) {
+      ctx.addIssue({ code: "custom", path: ["amount"], message: "Chip amount is required" });
+    }
+    if (action.type !== "BET" && action.type !== "RAISE" && action.amount !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["amount"],
+        message: "This action takes no chip amount",
+      });
+    }
+  });
 
 // ============================================================================
 // Type Inference Helpers

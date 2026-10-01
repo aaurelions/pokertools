@@ -35,7 +35,7 @@ npm run e2e:docker
 
 This will:
 
-1. Build Solidity contracts (`forge build` in `packages/admin` if needed)
+1. Build Solidity contracts (`forge build` in `packages/custody` if needed)
 2. Build `@pokertools/types` and `@pokertools/sdk` TypeScript packages (via `pretest:docker`)
 3. Start a local Anvil chain (port 8545)
 4. Deploy MockUSDC and BatchSweeper contracts
@@ -113,11 +113,11 @@ All secrets used in this E2E test are deterministic, local-only values never use
 
 ## 🔗 Related Packages
 
-| Package                       | Description                       |
-| ----------------------------- | --------------------------------- |
-| [@pokertools/api](../api)     | REST/WebSocket API                |
-| [@pokertools/sdk](../sdk)     | TypeScript SDK with React hooks   |
-| [@pokertools/admin](../admin) | Blockchain administration service |
+| Package                           | Description                     |
+| --------------------------------- | ------------------------------- |
+| [@pokertools/api](../api)         | REST/WebSocket API              |
+| [@pokertools/sdk](../sdk)         | TypeScript SDK with React hooks |
+| [@pokertools/custody](../custody) | Private custody worker          |
 
 ## 📄 License
 

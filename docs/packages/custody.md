@@ -1,4 +1,4 @@
-# @pokertools/admin
+# @pokertools/custody
 
 Private blockchain administration service: sweep permits, broadcast withdrawals,
 monitor receipts, manage gas and approve operations over Telegram.
@@ -60,7 +60,7 @@ authorization behavior.
 ### Testing
 
 ```bash
-cd packages/admin/contracts
+cd packages/custody/contracts
 forge test          # 5 tests, incl. copied-permit theft attempt
 ```
 

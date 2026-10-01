@@ -1,4 +1,7 @@
 import { cleanEnv, str, num, makeValidator } from "envalid";
+import { assertPublicProcessSafety } from "./safety.js";
+
+assertPublicProcessSafety(process.env);
 
 // ---------------------------------------------------------------------------
 // Production security guard: refuse to start if any secret contains a
@@ -41,10 +44,6 @@ export const config = cleanEnv(process.env, {
   JWT_SECRET: productionSecret(),
   COOKIE_SECRET: productionSecret(),
   WALLET_ENCRYPTION_SECRET: productionSecret(),
-  WALLET_XPRIV_ENCRYPTION_SECRET: str({
-    default: "",
-    desc: "Separate secret for private wallet material (API should not have this set in production)",
-  }),
   PBKDF2_ITERATIONS: num({ default: 600_000 }),
 
   LOG_LEVEL: str({ default: "info", choices: ["debug", "info", "warn", "error"] }),
@@ -170,10 +169,6 @@ export const config = cleanEnv(process.env, {
     desc: "Redlock retry jitter in ms (test low-latency)",
   }),
   REDLOCK_DRIFT_FACTOR: num({ default: 0.01, desc: "Redlock drift factor" }),
-  REDLOCK_AUTOMATIC_EXTENSION_THRESHOLD_MS: num({
-    default: 500,
-    desc: "Redlock automatic extension threshold in ms",
-  }),
   RECONCILIATION_WINDOW_HOURS: num({
     default: 24,
     desc: "Reconciliation lookback window in hours",

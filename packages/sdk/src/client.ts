@@ -22,7 +22,9 @@ import type {
   StartTournamentResponse,
   ReconcileTournamentResponse,
   SettleTournamentResponse,
+  HealthResponse,
 } from "@pokertools/types";
+import { HealthResponseSchema } from "@pokertools/types";
 
 import {
   PokerSDKConfig,
@@ -492,8 +494,8 @@ export class PokerClient {
   /**
    * Health check
    */
-  async health(): Promise<{ status: string; timestamp: number }> {
-    return this.request("GET", "/health");
+  async health(): Promise<HealthResponse> {
+    return HealthResponseSchema.parse(await this.request("GET", "/health"));
   }
 
   // ============================================================================
@@ -505,9 +507,9 @@ export class PokerClient {
    */
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const url = `${this.baseUrl}${path}`;
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-    };
+    const headers: Record<string, string> = { Accept: "application/json" };
+    const serializedBody = body === undefined ? undefined : JSON.stringify(body);
+    if (serializedBody !== undefined) headers["Content-Type"] = "application/json";
 
     if (this.token) {
       headers.Authorization = `Bearer ${this.token}`;
@@ -529,13 +531,13 @@ export class PokerClient {
       const timeoutId = setTimeout(() => controller.abort(), this.timeout);
       try {
         if (this.debug) {
-          console.log(`[PokerSDK] ${method} ${path}`, body);
+          console.log(`[PokerSDK] ${method} ${path}`);
         }
 
         const response = await this.fetchFn(url, {
           method,
           headers,
-          body: body ? JSON.stringify(body) : undefined,
+          body: serializedBody,
           signal: controller.signal,
         });
 
@@ -564,7 +566,7 @@ export class PokerClient {
         const data = (await response.json()) as T;
 
         if (this.debug) {
-          console.log(`[PokerSDK] Response:`, data);
+          console.log(`[PokerSDK] Response: ${response.status}`);
         }
 
         return data;

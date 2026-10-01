@@ -41,7 +41,7 @@ features:
   - icon: 🛡️
     title: Blockchain Admin
     details: HD wallets, ERC-2612 permit sweeps, withdrawal broadcasting, gas monitoring and Telegram approvals.
-    link: /packages/admin
+    link: /packages/custody
 ---
 
 ## Why PokerTools
@@ -117,7 +117,7 @@ Every example above is expanded with tables and API references on its package pa
 | [@pokertools/engine](/packages/engine)       | Immutable Texas Hold'em state machine             | ✅ npm    |
 | [@pokertools/sdk](/packages/sdk)             | HTTP + WebSocket client and React 19 hooks        | ✅ npm    |
 | [@pokertools/api](/packages/api)             | Fastify REST/WS API, Redis state, BullMQ, Prisma  | 🐳 Docker |
-| [@pokertools/admin](/packages/admin)         | Blockchain sweeps, withdrawals, gas, Telegram ops | 🐳 Docker |
+| [@pokertools/custody](/packages/custody)     | Private custody worker                            | 🐳 Docker |
 | [@pokertools/bench](/packages/bench)         | Evaluator/API/worker/socket benchmarks            | local     |
 | [@pokertools/e2e](/packages/e2e)             | Docker + Anvil end-to-end scenarios               | local     |
 

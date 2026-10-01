@@ -1,7 +1,7 @@
 /// <reference path="../../types/fastify.d.ts" />
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { initTestContext, runCleanup, type TestContext } from "../helpers/test-utils.js";
-import { refundBroadcastWithdrawal } from "../../../admin/src/services/refund-broadcast-withdrawal.js";
+import { refundBroadcastWithdrawal } from "../../../custody/src/services/refund-broadcast-withdrawal.js";
 
 let ctx: TestContext;
 let blockchainId: string;

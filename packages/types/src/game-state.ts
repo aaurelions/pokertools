@@ -4,7 +4,7 @@ import { TableConfig } from "./config";
 import { ActionRecord } from "./action";
 
 /** Street in the hand. */
-export const enum Street {
+export enum Street {
   PREFLOP = "PREFLOP",
   FLOP = "FLOP",
   TURN = "TURN",

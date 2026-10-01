@@ -39,7 +39,7 @@ For API/admin work, copy the relevant example environment files before starting 
 
 ```bash
 cp packages/api/.env.example packages/api/.env
-cp packages/admin/.env.example packages/admin/.env
+cp packages/custody/.env.example packages/custody/.env
 ```
 
 For production-style Docker deployment, copy the root template and keep the filled file out of git:
@@ -57,7 +57,7 @@ This is a monorepo with multiple packages:
 - `packages/engine` - Poker game engine
 - `packages/api` - REST/WebSocket API service
 - `packages/sdk` - TypeScript and React client SDK
-- `packages/admin` - Fund sweeping and withdrawal administration service
+- `packages/custody` - Private signing and custody worker
 - `packages/e2e` - Docker-based end-to-end tests
 - `packages/bench` - Performance benchmarks (private)
 
@@ -140,7 +140,7 @@ Some service tests require local infrastructure. Use package-specific scripts wh
 npm run test:stand-alone -w @pokertools/api
 
 # Admin lifecycle test prerequisites include Foundry contracts and API DB preparation
-npm test -w @pokertools/admin
+npm test -w @pokertools/custody
 
 # Docker-based full-stack E2E suite
 npm run e2e:docker

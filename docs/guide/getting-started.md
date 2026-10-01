@@ -22,7 +22,7 @@ Welcome to the PokerTools monorepo — an enterprise-grade Texas Hold'em stack s
 | `packages/engine`    | `@pokertools/engine`    | Immutable game state machine (reducer + rules)           |
 | `packages/sdk`       | `@pokertools/sdk`       | HTTP client, WebSocket transport, React hooks            |
 | `packages/api`       | `@pokertools/api`       | Fastify REST/WS API, Redis state, BullMQ workers, Prisma |
-| `packages/admin`     | `@pokertools/admin`     | Blockchain sweeps, withdrawals, gas monitoring           |
+| `packages/custody`   | `@pokertools/custody`   | Private custody worker                                   |
 | `packages/bench`     | `@pokertools/bench`     | Evaluator + API/worker/socket benchmarks                 |
 | `packages/e2e`       | `@pokertools/e2e`       | Docker/Anvil end-to-end scenarios                        |
 
@@ -96,4 +96,4 @@ is safe even without a local CI run.
 | `npm install` reports blocked install scripts         | New native packages must be added to `allowScripts` in the root `package.json`, then re-run `npm install`.                                                                                                                                                                       |
 | `prisma db push` fails with NOT NULL drift            | In test env the schema is force-reset automatically; for local dev run `npm run db:migrate` or `db:reset`.                                                                                                                                                                       |
 | SDK requests hang                                     | Check `timeout` config (default 10 s) and that `baseUrl` is reachable; mutation replays only happen with an `idempotencyKey`.                                                                                                                                                    |
-| Forge tests fail to compile                           | Run `npm run contracts:build -w @pokertools/admin` to pull dependencies, or install Foundry via `foundryup`.                                                                                                                                                                     |
+| Forge tests fail to compile                           | Run `npm run contracts:build -w @pokertools/custody`, or install Foundry via `foundryup`.                                                                                                                                                                                        |
