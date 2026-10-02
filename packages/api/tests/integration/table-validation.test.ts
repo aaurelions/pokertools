@@ -7,12 +7,15 @@ import {
   createTable,
   buyIn,
   executeAction,
+  getObservation,
   getTableState,
+  toCanonicalActionRequest,
 } from "../helpers/test-utils.js";
 
 describe("Table Action Validation Integration Test", () => {
   let app: FastifyInstance;
   let token: string;
+  let token2: string;
   let userId: string;
   let tableId: string;
 
@@ -26,12 +29,14 @@ describe("Table Action Validation Integration Test", () => {
       data: {
         username: `validation_${randomId}`,
         address: `0xval${randomId}`,
-        accounts: {
-          create: [{ currency: "USDC", type: "MAIN", balance: 10000 }],
-        },
       },
     });
     userId = user.id;
+    await app.financialManager.grantChips(user.id, 10000, {
+      reason: "test_fixture",
+      operatorId: user.id,
+      idempotencyKey: `test-grant:${user.id}`,
+    });
 
     const jti = `jti_${randomId}`;
     token = await app.jwt.sign({ userId, address: user.address, jti }, { jti, expiresIn: "1h" });
@@ -56,13 +61,15 @@ describe("Table Action Validation Integration Test", () => {
       data: {
         username: `validation_2_${randomId2}`,
         address: `0xval2_${randomId2}`,
-        accounts: {
-          create: [{ currency: "USDC", type: "MAIN", balance: 10000 }],
-        },
       },
     });
+    await app.financialManager.grantChips(user2.id, 10000, {
+      reason: "test_fixture",
+      operatorId: user2.id,
+      idempotencyKey: `test-grant:${user2.id}`,
+    });
     const jti2 = `jti_2_${randomId2}`;
-    const token2 = await app.jwt.sign(
+    token2 = await app.jwt.sign(
       { userId: user2.id, address: user2.address, jti: jti2 },
       { jti: jti2, expiresIn: "1h" }
     );
@@ -81,8 +88,9 @@ describe("Table Action Validation Integration Test", () => {
   });
 
   it("should reject illegal SIT action sent to /action endpoint", async () => {
-    // SIT is a management action, must go through /buy-in
-    // Sending it to /action should be rejected by the whitelist check
+    // SIT is a management action, must go through /buy-in.
+    // The next-major route accepts only the canonical strict request, so a
+    // stale `{type,seat,...}` payload is rejected without executing a SIT.
     const response = await app.inject({
       method: "POST",
       url: `/tables/${tableId}/action`,
@@ -94,9 +102,9 @@ describe("Table Action Validation Integration Test", () => {
       },
     });
 
-    expect(response.statusCode).toBe(403);
+    expect([400, 403]).toContain(response.statusCode);
     const body = JSON.parse(response.body);
-    expect(body.error).toBe("INVALID_ACTION");
+    expect(["INVALID_ACTION", "INVALID_CANONICAL_ACTION"]).toContain(body.error);
   });
 
   it("should reject illegal ADD_CHIPS action sent to /action endpoint", async () => {
@@ -110,29 +118,34 @@ describe("Table Action Validation Integration Test", () => {
       },
     });
 
-    expect(response.statusCode).toBe(403);
+    expect([400, 403]).toContain(response.statusCode);
     const body = JSON.parse(response.body);
-    expect(body.error).toBe("INVALID_ACTION");
+    expect(["INVALID_ACTION", "INVALID_CANONICAL_ACTION"]).toContain(body.error);
   });
 
   it("should allow valid gameplay actions (FOLD)", async () => {
     // Deal first to make FOLD valid
     await executeAction(app, token, tableId, { type: "DEAL" });
 
+    const state = await getTableState(app, token, tableId);
+    const actingToken = state.actionTo === 1 ? token2 : token;
+
+    // Resolve the server-issued legal FOLD action and submit the canonical request.
+    const observation = await getObservation(app, actingToken, tableId);
+    const payload = toCanonicalActionRequest(observation, { type: "FOLD" });
+
     const response = await app.inject({
       method: "POST",
       url: `/tables/${tableId}/action`,
-      headers: { authorization: `Bearer ${token}` },
-      payload: {
-        type: "FOLD",
-      },
+      headers: { authorization: `Bearer ${actingToken}` },
+      payload,
     });
 
     // Should process (or at least not be 403 Forbidden, maybe 400 if not turn)
     expect(response.statusCode).not.toBe(403);
     if (response.statusCode === 400) {
-      // If 400, it means it passed the whitelist but failed engine validation (e.g. not turn)
-      // which confirms the whitelist check passed.
+      // If 400, it means it passed the canonical contract but failed engine
+      // validation (e.g. not turn), which confirms the whitelist is gone.
       const body = JSON.parse(response.body);
       expect(body.error).not.toBe("INVALID_ACTION");
     } else {

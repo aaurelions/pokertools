@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import { setTimeout } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { readFile } from "node:fs/promises";
 import pg from "pg";
 
 const exec = promisify(execFile);
@@ -55,7 +56,8 @@ test("applies reviewed migrations once, including concurrent startup", async () 
   assert(results.every((result) => result.ok), JSON.stringify(results));
   assert((await migrate()).ok);
   const { rows } = await pool.query('SELECT "name", "sha256" FROM "_migrations" ORDER BY "name"');
-  assert.equal(rows.length, 2);
+  const manifest = JSON.parse(await readFile(new URL("../../prisma/postgres/migrations.json", import.meta.url), "utf8"));
+  assert.deepEqual(rows, manifest.migrations.map(({ name, sha256 }) => ({ name, sha256 })));
   assert(rows.every((row) => /^[a-f0-9]{64}$/.test(row.sha256)));
 });
 

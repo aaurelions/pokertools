@@ -1,31 +1,155 @@
-import type { FastifyPluginAsync } from "fastify";
-import type { Action } from "@pokertools/engine";
+import type { FastifyPluginAsync, FastifyInstance } from "fastify";
 import type { ActionType } from "@pokertools/types";
 import {
-  isAllowedGameplayAction,
   CreateTableRequest,
   BuyInRequest,
   AddChipsRequest,
-  GameActionRequest,
-  GameActionRequestSchema,
+  CanonicalActionRequestSchema,
+  CanonicalActionResultSchema,
+  SeatObservationSchema,
+  ChatMessageSchema,
+  ChatPageSchema,
+  ReplayFrameSchema,
 } from "@pokertools/types";
+import type { AuthenticatedPrincipal } from "../../services/principal-manager.js";
 import { config } from "../../config.js";
+import { getHouseUserId } from "../../utils/house-user.js";
 import { reconcileTournament } from "../tournaments/index.js";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function retryTransient<T>(operation: () => Promise<T>, attempts = 20): Promise<T> {
+/**
+ * Only transient concurrency/transaction conflicts are safe to retry as a whole
+ * unit: the financial + engine transaction is idempotent (chip and hand markers)
+ * and never partially applies. Business rejections fail immediately.
+ */
+function isRetryableTransactionError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const code = (error as { code?: string }).code;
+  if (code === "P2034" || code === "CHIP_CONCURRENT_MODIFICATION") return true;
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  return message.includes("database is locked") || message.includes("timed out");
+}
+
+async function retryTransaction<T>(operation: () => Promise<T>, attempts = 8): Promise<T> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
       return await operation();
     } catch (error) {
       lastError = error;
-      if (attempt === attempts) break;
-      await sleep(250 * attempt);
+      if (!isRetryableTransactionError(error) || attempt === attempts) throw error;
+      await sleep(25 * attempt);
     }
   }
   throw lastError;
+}
+
+function parseOptionalInteger(value: string | undefined): number | undefined {
+  if (value === undefined || !/^-?\d+$/.test(value)) return undefined;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+function parseRequiredInteger(value: string | undefined): number | undefined {
+  return parseOptionalInteger(value);
+}
+
+// ---------------------------------------------------------------------------
+// Chat body hygiene. Stored text is escaped so it is HTML-inert on render, and
+// page sizes are clamped to a bounded server range.
+// ---------------------------------------------------------------------------
+
+const CHAT_MAX_BODY_LENGTH = 2000;
+const CHAT_MAX_PAGE_SIZE = 200;
+const CHAT_DEFAULT_PAGE_SIZE = 50;
+
+const HTML_ESCAPES: Readonly<Record<string, string>> = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#39;",
+};
+
+function sanitizeChatBody(body: string): string {
+  const escaped = body.replace(/[&<>"']/g, (character) => HTML_ESCAPES[character] ?? character);
+  return escaped.slice(0, CHAT_MAX_BODY_LENGTH);
+}
+
+function clampChatLimit(limit: number | undefined): number {
+  if (limit === undefined || !Number.isFinite(limit)) return CHAT_DEFAULT_PAGE_SIZE;
+  return Math.min(CHAT_MAX_PAGE_SIZE, Math.max(1, Math.trunc(limit)));
+}
+
+// ---------------------------------------------------------------------------
+// Canonical response validation. Public responses are validated against the
+// shared schemas at runtime so an internal shape drift cannot leak a malformed
+// or unmasked projection to clients.
+// ---------------------------------------------------------------------------
+
+/**
+ * Any canonical response that fails the shared strict contract is a server-side
+ * convergence failure: fail closed with 503 rather than leaking a malformed or
+ * unmasked projection (or claiming success).
+ */
+function invalidServerResponse(cause: unknown): Error {
+  return Object.assign(new Error("Canonical response failed schema validation"), {
+    statusCode: 503,
+    code: "INVALID_SERVER_RESPONSE",
+    cause,
+  });
+}
+
+/**
+ * Canonical turn ids are always non-empty strings, including at a hand
+ * boundary (`...:none`). There is no nullable-turn observation, so the full
+ * shared strict contract must validate on every response.
+ */
+function assertSeatObservation(observation: unknown): void {
+  const parsed = SeatObservationSchema.safeParse(observation);
+  if (!parsed.success) throw invalidServerResponse(parsed.error);
+}
+
+function assertCanonicalActionResult(result: unknown): void {
+  const parsed = CanonicalActionResultSchema.safeParse(result);
+  if (!parsed.success) throw invalidServerResponse(parsed.error);
+}
+
+function assertChatMessage(message: unknown): void {
+  const parsed = ChatMessageSchema.safeParse(message);
+  if (!parsed.success) throw invalidServerResponse(parsed.error);
+}
+
+function assertChatPage(page: unknown): void {
+  const parsed = ChatPageSchema.safeParse(page);
+  if (!parsed.success) throw invalidServerResponse(parsed.error);
+}
+
+/**
+ * The replay frame is the shared strict contract (hash-chain provenance,
+ * head bound, integrity flag, masked events). An internal shape drift must not
+ * reach clients as a valid-looking frame.
+ */
+function assertReplayFrame(frame: unknown): void {
+  const parsed = ReplayFrameSchema.safeParse(frame);
+  if (!parsed.success) throw invalidServerResponse(parsed.error);
+}
+
+/**
+ * The acting/viewing seat is resolved from durable game state, never from the
+ * request body. A seat-restricted SERVICE credential fails closed when its seat
+ * cannot be established; wallet principals are unrestricted.
+ */
+async function persistedSeatFor(
+  fastify: FastifyInstance,
+  tableId: string,
+  principal: AuthenticatedPrincipal
+): Promise<number | null> {
+  if (principal.restrictions.seat === null) return null;
+  const state = await fastify.gameManager.getState(tableId).catch(() => null);
+  const index = state?.players.findIndex((player) => player?.id === principal.id) ?? -1;
+  return index >= 0 ? index : null;
 }
 
 export const tableRoutes: FastifyPluginAsync = async (fastify) => {
@@ -141,6 +265,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
         amountCents: amountNum,
       });
 
+      const actorId = userId;
       const idem = await fastify.idempotencyManager.run({
         key: idempotencyKey,
         scope: `buy-in:${id}`,
@@ -173,51 +298,48 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
             });
           }
           const lock = await fastify.redlock.lock([`lock:table:${id}`], config.TABLE_LOCK_TTL_MS);
-          let debited = false;
           try {
-            const state = await fastify.gameManager.getState(id);
-            const seatedPlayer = state.players[seat];
+            // Single atomic boundary: the chip/atomic financial mutation AND the
+            // engine SIT (snapshot CAS + version + events + idempotency + outbox)
+            // commit together, or neither does. There is no post-commit engine
+            // call and no compensation path that could strand chips.
+            const applied = await retryTransaction(() =>
+              fastify.prisma.$transaction(async (tx) => {
+                const snapshot = await fastify.gameManager.loadTransactionSnapshot(tx, id);
+                const seatedPlayer = snapshot.players[seat];
 
-            if (seatedPlayer) {
-              if (seatedPlayer.id === userId) return { success: true };
-              throw Object.assign(new Error(`Seat ${seat} is already occupied`), {
-                statusCode: 400,
-                code: "SEAT_OCCUPIED",
-              });
-            }
+                if (seatedPlayer) {
+                  if (seatedPlayer.id === actorId) return false;
+                  throw Object.assign(new Error(`Seat ${seat} is already occupied`), {
+                    statusCode: 400,
+                    code: "SEAT_OCCUPIED",
+                  });
+                }
 
-            await fastify.financialManager.buyIn(userId, id, amountNum);
-            debited = true;
-            const user = await fastify.prisma.user.findUniqueOrThrow({
-              where: { id: userId },
-              select: { username: true },
-            });
+                const user = await tx.user.findUniqueOrThrow({
+                  where: { id: actorId },
+                  select: { username: true },
+                });
 
-            await fastify.gameManager.processAction(
-              id,
-              {
-                type: "SIT" as ActionType.SIT,
-                playerId: userId,
-                playerName: user.username,
-                seat,
-                stack: amountNum,
-              },
-              userId,
-              { skipLock: true }
+                await fastify.financialManager.applyBuyIn(tx, actorId, id, BigInt(amountNum), {
+                  idempotencyKey,
+                });
+                await fastify.gameManager.applyManagementMutationInTx(tx, id, actorId, {
+                  type: "SIT" as ActionType.SIT,
+                  playerId: actorId,
+                  playerName: user.username,
+                  seat,
+                  stack: amountNum,
+                });
+                return true;
+              })
             );
-            return { success: true };
-          } catch (error) {
-            if (debited) {
-              try {
-                await retryTransient(() => fastify.financialManager.cashOut(userId, id, amountNum));
-              } catch (rollbackError) {
-                fastify.log.error(
-                  { userId, tableId: id, amount: amountNum, error: rollbackError },
-                  "CRITICAL: failed to rollback buy-in after SIT failure"
-                );
-              }
+
+            if (applied) {
+              // Best-effort only: the mutation is already durably committed.
+              await fastify.gameManager.publishCommitted(id);
             }
-            throw error;
+            return { success: true };
           } finally {
             await lock.unlock();
           }
@@ -241,66 +363,120 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
     }
   );
 
-  // POST /tables/:id/action - Execute game action
-  fastify.post<{
-    Params: { id: string };
-    Body: GameActionRequest;
-  }>(
-    "/:id/action",
-    {
-      onRequest: [fastify.authenticate],
-    },
+  // GET /tables/:id/observation - Authoritative per-seat decision boundary
+  //
+  // Returns the masked public state plus the exact legal actions for the
+  // authenticated principal at the current turn. Private hole cards are masked
+  // server-side (only the viewer's own cards are visible), and a principal who
+  // does not own the acting seat receives no legal actions.
+  fastify.get<{ Params: { id: string } }>(
+    "/:id/observation",
+    { onRequest: [fastify.authenticate] },
     async (request, reply) => {
       const { id } = request.params;
-      const { userId } = request.user;
-      const submittedType = request.body?.type;
-
-      // SECURITY: Whitelist only gameplay actions
-      // Management actions (SIT, ADD_CHIPS, RESERVE_SEAT) must go through dedicated endpoints with financial checks
-      // Whitelist is defined in @pokertools/types to ensure it stays in sync with engine action types
-      if (!isAllowedGameplayAction(submittedType as ActionType)) {
-        return reply.code(403).send({
-          error: "INVALID_ACTION",
-          message: "Action is not allowed through this endpoint",
-        });
+      const principal = request.principal;
+      if (!principal) {
+        return reply.code(401).send({ error: "Unauthorized" });
       }
 
-      const parsed = GameActionRequestSchema.safeParse(request.body);
+      const authorization = fastify.authorizeTable(
+        request,
+        "table:observe",
+        id,
+        await persistedSeatFor(fastify, id, principal)
+      );
+      if (!authorization.allowed) {
+        return reply.code(403).send({ error: authorization.reason });
+      }
+
+      const observation = await fastify.gameManager.getObservation(id, principal.id);
+      assertSeatObservation(observation);
+      return observation;
+    }
+  );
+
+  // POST /tables/:id/action - Submit a strict canonical action
+  //
+  // The request carries only ids and an optional chip amount. Actor fields
+  // (playerId/principalId/seat/actor) are rejected by the strict schema, and
+  // the acting identity is derived from auth. Stale/unknown turns and version
+  // conflicts are rejected by the game authority's compare-and-set.
+  fastify.post<{ Params: { id: string } }>(
+    "/:id/action",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      const { id } = request.params;
+      const principal = request.principal;
+      if (!principal) {
+        return reply.code(401).send({ error: "Unauthorized" });
+      }
+
+      const authorization = fastify.authorizeTable(
+        request,
+        "table:act",
+        id,
+        await persistedSeatFor(fastify, id, principal)
+      );
+      if (!authorization.allowed) {
+        return reply.code(403).send({ error: authorization.reason });
+      }
+
+      const parsed = CanonicalActionRequestSchema.safeParse(request.body);
       if (!parsed.success) {
-        return reply.code(400).send({ error: "INVALID_ACTION", message: "Invalid action request" });
-      }
-      const { type, amount, cardIndices, idempotencyKey } = parsed.data;
-
-      const runAction = async () => {
-        const state = await fastify.gameManager.processAction(
-          id,
-          {
-            type,
-            playerId: userId,
-            amount,
-            cardIndices,
-          } as Action,
-          userId
-        );
-        fastify.observabilityManager.increment("pokertools_game_actions_total", { type });
-        await fastify.auditManager.record({
-          actorId: userId,
-          action: `GAME_${type}`,
-          resource: `table:${id}`,
-          request,
-          metadata: { amount },
+        return reply.code(400).send({
+          error: "INVALID_CANONICAL_ACTION",
+          message: "Invalid canonical action request",
         });
+      }
+
+      try {
+        const outcome = await fastify.gameManager.submitCanonicalAction(
+          id,
+          principal.id,
+          parsed.data
+        );
+        const result = { receipt: outcome.receipt, observation: outcome.observation };
+        assertCanonicalActionResult(result);
+
+        fastify.observabilityManager.increment("pokertools_game_actions_total", {
+          type: parsed.data.actionId,
+        });
+        // The action is already durably committed. An audit/metrics write must
+        // never turn an accepted mutation into a falsely failed response; the
+        // durable GameActionRequest + GameEvent rows remain the authority.
+        try {
+          await fastify.auditManager.record({
+            actorId: principal.id,
+            action: `GAME_${parsed.data.actionId}`,
+            resource: `table:${id}`,
+            request,
+            metadata: {
+              requestId: parsed.data.requestId,
+              turnId: parsed.data.turnId,
+              actionId: parsed.data.actionId,
+              amount: parsed.data.amount,
+              version: outcome.receipt.version,
+              eventSeq: outcome.receipt.eventSeq,
+              replayed: outcome.replayed,
+            },
+          });
+        } catch {
+          fastify.observabilityManager.increment("pokertools_audit_write_failures_total", {
+            action: "GAME_ACTION",
+          });
+        }
 
         // Tournament director: after a hand completes on a tournament table,
         // trigger reconciliation (elimination tracking, rebalancing, final table merge).
-        if (state.winners && state.winners.length > 0) {
+        const winners = outcome.observation.state.winners;
+        if (winners && winners.length > 0) {
           try {
             const table = await fastify.prisma.table.findUnique({
               where: { id },
               select: { mode: true, tournamentId: true },
             });
             if (table?.mode === "TOURNAMENT" && table.tournamentId) {
-              await reconcileTournament(fastify, table.tournamentId, userId);
+              await reconcileTournament(fastify, table.tournamentId, principal.id);
             }
           } catch {
             // The poker action has already committed. Do not turn a director
@@ -315,29 +491,9 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
           }
         }
 
-        return { state };
-      };
-
-      try {
-        if (idempotencyKey) {
-          const idem = await fastify.idempotencyManager.run({
-            key: idempotencyKey,
-            scope: `game-action:${id}`,
-            userId,
-            requestHash: fastify.idempotencyManager.hash({ id, type, amount, cardIndices }),
-            ttlSeconds: 3600,
-            handler: runAction,
-          });
-          if (idem.replayed) {
-            fastify.observabilityManager.increment("pokertools_idempotency_hits_total", {
-              scope: "game-action",
-            });
-          }
-          return idem.response;
-        }
-        return await runAction();
+        // CanonicalActionResult: durable receipt + the resulting observation.
+        return result;
       } catch (err: unknown) {
-        // Map engine errors to HTTP 400
         if (
           err &&
           typeof err === "object" &&
@@ -354,6 +510,144 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
       }
     }
   );
+
+  // GET /tables/:id/chat - Bounded page of the append-only chat stream
+  fastify.get<{
+    Params: { id: string };
+    Querystring: { limit?: string; beforeSeq?: string };
+  }>(
+    "/:id/chat",
+    {
+      onRequest: [fastify.authenticate],
+      config: {
+        rateLimit: {
+          max: config.NODE_ENV === "test" ? 100 : config.RATE_LIMIT_MAX,
+          timeWindow: "1 minute",
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      const principal = request.principal;
+      if (!principal) {
+        return reply.code(401).send({ error: "Unauthorized" });
+      }
+
+      const authorization = fastify.authorizeTable(
+        request,
+        "table:observe",
+        id,
+        await persistedSeatFor(fastify, id, principal)
+      );
+      if (!authorization.allowed) {
+        return reply.code(403).send({ error: authorization.reason });
+      }
+
+      const beforeSeq = parseOptionalInteger(request.query.beforeSeq);
+      if (beforeSeq !== undefined && beforeSeq < 0) {
+        return reply
+          .code(400)
+          .send({ error: "INVALID_CHAT_QUERY", message: "beforeSeq must be non-negative" });
+      }
+
+      const page = await fastify.gameManager.listChat(id, {
+        limit: clampChatLimit(parseOptionalInteger(request.query.limit)),
+        ...(beforeSeq !== undefined ? { beforeSeq } : {}),
+      });
+      assertChatPage(page);
+      return page;
+    }
+  );
+
+  // POST /tables/:id/chat - Append one bounded, HTML-inert chat message.
+  //
+  // Chat only advances `eventSeq` (never `stateVersion`); the body is escaped
+  // before it is persisted so it can never be executed as markup.
+  fastify.post<{ Params: { id: string }; Body: { body?: unknown } }>(
+    "/:id/chat",
+    {
+      onRequest: [fastify.authenticate],
+      config: {
+        rateLimit: {
+          max: config.NODE_ENV === "test" ? 100 : config.RATE_LIMIT_MAX,
+          timeWindow: "1 minute",
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      const principal = request.principal;
+      if (!principal) {
+        return reply.code(401).send({ error: "Unauthorized" });
+      }
+
+      const authorization = fastify.authorizeTable(
+        request,
+        "table:chat",
+        id,
+        await persistedSeatFor(fastify, id, principal)
+      );
+      if (!authorization.allowed) {
+        return reply.code(403).send({ error: authorization.reason });
+      }
+
+      const rawBody = (request.body ?? {}).body;
+      if (typeof rawBody !== "string") {
+        return reply.code(400).send({ error: "INVALID_CHAT_MESSAGE", message: "body is required" });
+      }
+
+      const body = sanitizeChatBody(rawBody).trim();
+      if (body.length === 0) {
+        return reply.code(400).send({ error: "INVALID_CHAT_MESSAGE", message: "body is required" });
+      }
+
+      const message = await fastify.gameManager.appendChat(id, principal.id, body);
+      assertChatMessage(message);
+      return message;
+    }
+  );
+
+  // GET /tables/:id/replay - Ordered, bounded replay slice of the event log
+  fastify.get<{
+    Params: { id: string };
+    Querystring: { fromEventSeq?: string; toEventSeq?: string };
+  }>("/:id/replay", { onRequest: [fastify.authenticate] }, async (request, reply) => {
+    const { id } = request.params;
+    const principal = request.principal;
+    if (!principal) {
+      return reply.code(401).send({ error: "Unauthorized" });
+    }
+
+    const authorization = fastify.authorizeTable(
+      request,
+      "table:observe",
+      id,
+      await persistedSeatFor(fastify, id, principal)
+    );
+    if (!authorization.allowed) {
+      return reply.code(403).send({ error: authorization.reason });
+    }
+
+    const fromEventSeq = parseRequiredInteger(request.query.fromEventSeq);
+    if (fromEventSeq === undefined || fromEventSeq < 1) {
+      return reply.code(400).send({
+        error: "INVALID_REPLAY_RANGE",
+        message: "fromEventSeq must be a positive integer",
+      });
+    }
+
+    const toEventSeq = parseOptionalInteger(request.query.toEventSeq);
+    if (toEventSeq !== undefined && toEventSeq < fromEventSeq) {
+      return reply.code(400).send({
+        error: "INVALID_REPLAY_RANGE",
+        message: "toEventSeq must not precede fromEventSeq",
+      });
+    }
+
+    const frame = await fastify.gameManager.replay(id, fromEventSeq, toEventSeq);
+    assertReplayFrame(frame);
+    return frame;
+  });
 
   // POST /tables/:id/add-chips - Add chips to stack (rebuy/top-up)
   fastify.post<{
@@ -411,6 +705,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
         amountCents: amountNum,
       });
 
+      const actorId = userId;
       const idem = await fastify.idempotencyManager.run({
         key: idempotencyKey,
         scope: `add-chips:${id}`,
@@ -428,45 +723,48 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
             });
           }
           const tableConfig = table.config as { maxBuyIn?: number };
-          // Verify player is seated at table
-          const state = await fastify.gameManager.getState(id, userId);
-          const player = state.players.find((p) => p?.id === userId);
+          const lock = await fastify.redlock.lock([`lock:table:${id}`], config.TABLE_LOCK_TTL_MS);
+          try {
+            // Single atomic boundary: escrow the chips (or exact atomic value)
+            // AND advance the engine stack in the same transaction.
+            await retryTransaction(() =>
+              fastify.prisma.$transaction(async (tx) => {
+                const snapshot = await fastify.gameManager.loadTransactionSnapshot(tx, id);
+                const player = snapshot.players.find((p) => p?.id === actorId);
 
-          if (!player) {
-            throw Object.assign(new Error("You must be seated at the table to add chips"), {
-              statusCode: 400,
-              code: "NOT_SEATED",
-            });
-          }
+                if (!player) {
+                  throw Object.assign(new Error("You must be seated at the table to add chips"), {
+                    statusCode: 400,
+                    code: "NOT_SEATED",
+                  });
+                }
 
-          if (
-            tableConfig.maxBuyIn !== undefined &&
-            player.stack + player.pendingAddOn + amountNum > tableConfig.maxBuyIn
-          ) {
-            throw Object.assign(
-              new Error(`Stack plus pending add-ons must not exceed ${tableConfig.maxBuyIn}`),
-              {
-                statusCode: 400,
-                code: "ADD_CHIPS_ABOVE_MAXIMUM",
-              }
+                if (
+                  tableConfig.maxBuyIn !== undefined &&
+                  player.stack + player.pendingAddOn + amountNum > tableConfig.maxBuyIn
+                ) {
+                  throw Object.assign(
+                    new Error(`Stack plus pending add-ons must not exceed ${tableConfig.maxBuyIn}`),
+                    { statusCode: 400, code: "ADD_CHIPS_ABOVE_MAXIMUM" }
+                  );
+                }
+
+                await fastify.financialManager.applyBuyIn(tx, actorId, id, BigInt(amountNum), {
+                  idempotencyKey,
+                });
+                await fastify.gameManager.applyManagementMutationInTx(tx, id, actorId, {
+                  type: "ADD_CHIPS" as ActionType.ADD_CHIPS,
+                  playerId: actorId,
+                  amount: amountNum,
+                });
+              })
             );
+
+            await fastify.gameManager.publishCommitted(id);
+            return { success: true };
+          } finally {
+            await lock.unlock();
           }
-
-          // Financial transaction (debit from MAIN, credit to IN_PLAY)
-          await fastify.financialManager.buyIn(userId, id, amountNum);
-
-          // Game action (adds to pendingAddOn)
-          await fastify.gameManager.processAction(
-            id,
-            {
-              type: "ADD_CHIPS" as ActionType.ADD_CHIPS,
-              playerId: userId,
-              amount: amountNum,
-            },
-            userId
-          );
-
-          return { success: true };
         },
       });
 
@@ -494,9 +792,11 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
     async (request) => {
       const { id } = request.params;
       const { userId } = request.user;
+      const actorId = userId;
 
       // Use the same table lock namespace as game actions/settlement so engine
-      // state reads and financial writes are serialized for the table.
+      // state reads, settlement flush and financial writes are serialized for
+      // the table (a concurrent settle-hand/next-hand worker takes the same key).
       const lock = await fastify.redlock.lock([`lock:table:${id}`], config.TABLE_LOCK_TTL_MS * 3);
 
       try {
@@ -504,186 +804,50 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
           where: { id },
           select: { mode: true },
         });
-        const state = await fastify.gameManager.getState(id);
-        const player = state.players.find((p) => p?.id === userId);
+        const houseUserId = table.mode === "CASH" ? await getHouseUserId(fastify.prisma) : null;
 
-        if (!player) {
-          throw new Error("Not seated at this table");
-        }
-
-        const stack = player.stack;
-
-        if (table.mode === "TOURNAMENT") {
-          await fastify.gameManager.processAction(
-            id,
-            { type: "STAND" as ActionType.STAND, playerId: userId },
-            userId,
-            { skipLock: true }
-          );
-
-          return { success: true };
-        }
-
-        // Get current IN_PLAY balance to calculate the delta
-        const balances = await fastify.financialManager.getBalances(userId);
-        const currentInPlay = balances.inPlay;
-
-        // CRITICAL: Cash out based on actual stack, not IN_PLAY balance
-        // The settle-hand worker may not have run yet, so IN_PLAY might be stale
-        // We need to settle up the difference between current IN_PLAY and engine stack
-        if (stack > 0) {
-          try {
-            await retryTransient(() =>
-              fastify.prisma.$transaction(async (tx) => {
-                // First, sync the IN_PLAY balance to match engine reality
-                const delta = BigInt(stack - currentInPlay);
-
-                if (delta !== 0n) {
-                  const syncAmount = delta < 0n ? -delta : delta;
-                  const inPlayAccount = await tx.account.findUniqueOrThrow({
-                    where: {
-                      userId_currency_type: {
-                        userId,
-                        currency: config.DEFAULT_CURRENCY,
-                        type: "IN_PLAY",
-                      },
-                    },
-                  });
-
-                  await tx.ledgerEntry.create({
-                    data: {
-                      accountId: inPlayAccount.id,
-                      amount: delta,
-                      type: delta > 0n ? "HAND_WIN" : "HAND_LOSS",
-                      referenceId: id,
-                      metadata: { reason: "stand_engine_stack_sync", tableId: id },
-                    },
-                  });
-
-                  if (delta < 0n) {
-                    await tx.account.update({
-                      where: {
-                        userId_currency_type: {
-                          userId,
-                          currency: config.DEFAULT_CURRENCY,
-                          type: "IN_PLAY",
-                        },
-                      },
-                      data: { balance: { decrement: syncAmount } },
-                    });
-                  } else {
-                    await tx.account.update({
-                      where: {
-                        userId_currency_type: {
-                          userId,
-                          currency: config.DEFAULT_CURRENCY,
-                          type: "IN_PLAY",
-                        },
-                      },
-                      data: { balance: { increment: syncAmount } },
-                    });
-                  }
-                }
-
-                // Cash out: move IN_PLAY -> MAIN with ledger entries
-                const inPlayAccount = await tx.account.findUniqueOrThrow({
-                  where: {
-                    userId_currency_type: {
-                      userId,
-                      currency: config.DEFAULT_CURRENCY,
-                      type: "IN_PLAY",
-                    },
-                  },
-                });
-
-                const mainAccount = await tx.account.findUniqueOrThrow({
-                  where: {
-                    userId_currency_type: {
-                      userId,
-                      currency: config.DEFAULT_CURRENCY,
-                      type: "MAIN",
-                    },
-                  },
-                });
-
-                await tx.ledgerEntry.createMany({
-                  data: [
-                    {
-                      accountId: inPlayAccount.id,
-                      amount: -BigInt(stack),
-                      type: "CASH_OUT",
-                      referenceId: id,
-                    },
-                    {
-                      accountId: mainAccount.id,
-                      amount: BigInt(stack),
-                      type: "CASH_OUT",
-                      referenceId: id,
-                    },
-                  ],
-                });
-
-                await tx.account.update({
-                  where: { id: inPlayAccount.id },
-                  data: { balance: { decrement: BigInt(stack) } },
-                });
-
-                await tx.account.update({
-                  where: { id: mainAccount.id },
-                  data: { balance: { increment: BigInt(stack) } },
-                });
-              })
-            );
-          } catch (cashOutError) {
-            fastify.log.error({ userId, error: cashOutError }, "Cash out failed");
-            throw new Error("Cash out failed. Please try again.", { cause: cashOutError });
-          }
-        } else if (currentInPlay > 0) {
-          // Player is busted (stack = 0) but still has IN_PLAY balance
-          // This means they lost all their chips, sync IN_PLAY to 0
-          await retryTransient(() =>
-            fastify.prisma.$transaction(async (tx) => {
-              const inPlayAccount = await tx.account.findUniqueOrThrow({
-                where: {
-                  userId_currency_type: {
-                    userId,
-                    currency: config.DEFAULT_CURRENCY,
-                    type: "IN_PLAY",
-                  },
-                },
+        // One atomic boundary: flush every durable settle-hand intent first so
+        // the reserve already reflects the settled engine stack, then sync and
+        // release the reserve, then apply the engine STAND (CAS/version/events/
+        // outbox). Any failure rolls back the financial and game mutations
+        // together, so a version race can never lose chips or pay a hand twice.
+        await retryTransaction(() =>
+          fastify.prisma.$transaction(async (tx) => {
+            const snapshot = await fastify.gameManager.loadTransactionSnapshot(tx, id);
+            const player = snapshot.players.find((p) => p?.id === actorId);
+            if (!player) {
+              throw Object.assign(new Error("Not seated at this table"), {
+                statusCode: 400,
+                code: "NOT_SEATED",
               });
-              await tx.ledgerEntry.create({
-                data: {
-                  accountId: inPlayAccount.id,
-                  amount: -BigInt(currentInPlay),
-                  type: "HAND_LOSS",
-                  referenceId: id,
-                  metadata: { reason: "stand_busted_sync", tableId: id },
-                },
-              });
-              await tx.account.update({
-                where: { id: inPlayAccount.id },
-                data: { balance: 0n },
-              });
-            })
-          );
-        }
+            }
 
-        // Only remove from table after successful cash out
-        await fastify.gameManager.processAction(
-          id,
-          { type: "STAND" as ActionType.STAND, playerId: userId },
-          userId,
-          { skipLock: true }
+            if (table.mode === "CASH" && houseUserId) {
+              // Deliver pending settle-hand payloads before crediting/cashing
+              // out: a later worker settlement of the same hand is an idempotent
+              // no-op and can never double-pay.
+              await fastify.financialManager.flushPendingTableSettlements(tx, id, houseUserId);
+              await fastify.financialManager.applyTableReserveSync(
+                tx,
+                actorId,
+                id,
+                BigInt(player.stack),
+                { referenceId: id, idempotencyKey: `stand-sync:${id}:${actorId}` }
+              );
+              await fastify.financialManager.applyResidualReserveRelease(tx, actorId, id, {
+                referenceId: id,
+                idempotencyKey: `stand-cashout:${id}:${actorId}`,
+              });
+            }
+
+            await fastify.gameManager.applyManagementMutationInTx(tx, id, actorId, {
+              type: "STAND" as ActionType.STAND,
+              playerId: actorId,
+            });
+          })
         );
 
-        const residualBalances = await fastify.financialManager.getBalances(userId);
-        if (residualBalances.inPlay > 0) {
-          await retryTransient(() =>
-            fastify.financialManager.cashOut(userId, id, residualBalances.inPlay)
-          );
-        }
-
+        await fastify.gameManager.publishCommitted(id);
         return { success: true };
       } finally {
         await lock.unlock();

@@ -1,6 +1,14 @@
 /// <reference path="../../types/fastify.d.ts" />
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
+import {
+  CanonicalActionResultSchema,
+  type CanonicalActionRequest,
+  type CanonicalActionResult,
+  type LegalAction,
+  type LegalActionFamily,
+  type SeatObservation,
+} from "@pokertools/types";
 import { buildApp } from "../../src/app.js";
 
 /**
@@ -39,17 +47,18 @@ export async function createTestUser(
     data: {
       username: `${username}_${randomId}`,
       address,
-      accounts: {
-        create: [
-          {
-            currency: "USDC",
-            type: "MAIN",
-            balance: initialBalance,
-          },
-        ],
-      },
     },
   });
+
+  // Canonical chip funding. `grantChips` is the only supported PLAY_CHIPS
+  // funding path; the legacy cents Account/LedgerEntry model is not seeded.
+  if (initialBalance > 0) {
+    await app.financialManager.grantChips(user.id, initialBalance, {
+      reason: "test_fixture",
+      operatorId: user.id,
+      idempotencyKey: `test-grant:${user.id}`,
+    });
+  }
 
   const jti = `test_${username}_${randomId}`;
   const token = await app.jwt.sign(
@@ -68,7 +77,7 @@ export async function createTestUser(
   return {
     id: user.id,
     username: user.username,
-    address: user.address,
+    address: user.address ?? address,
     token,
     jti,
   };
@@ -100,10 +109,12 @@ export async function cleanupTestUser(app: FastifyInstance, userId: string): Pro
   }
 
   await app.prisma.session.deleteMany({ where: { userId } });
-  await app.prisma.ledgerEntry.deleteMany({
-    where: { account: { userId } },
+  // Canonical chip journal/accounts are keyed by principal with no FK to User.
+  await app.prisma.chipLedgerEntry.deleteMany({
+    where: { account: { principalId: userId } },
   });
-  await app.prisma.account.deleteMany({ where: { userId } });
+  await app.prisma.chipGrant.deleteMany({ where: { principalId: userId } });
+  await app.prisma.chipAccount.deleteMany({ where: { principalId: userId } });
   await app.prisma.user.delete({ where: { id: userId } }).catch(() => {});
 }
 
@@ -199,7 +210,16 @@ export async function createTable(
 }
 
 /**
- * Buy in to a table (retries on rate limiting / velocity controls)
+ * True when a 500 is the known post-commit Redlock release fault: the mutation
+ * already committed and only the lock release failed. Retrying with the same
+ * idempotency identity replays the stored result instead of re-executing.
+ */
+function isPostCommitLockFailure(body: string): boolean {
+  return body.includes("Unable to fully release the lock");
+}
+
+/**
+ * Buy in to a table (retries on rate limiting and post-commit lock-release).
  */
 export async function buyIn(
   app: FastifyInstance,
@@ -209,6 +229,7 @@ export async function buyIn(
   seat: number,
   maxRetries = 3
 ): Promise<void> {
+  const idempotencyKey = crypto.randomUUID();
   let lastError: Error | undefined;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const response = await app.inject({
@@ -220,7 +241,7 @@ export async function buyIn(
       payload: {
         amount: amount.toString(),
         seat,
-        idempotencyKey: crypto.randomUUID(),
+        idempotencyKey,
       },
     });
 
@@ -238,37 +259,154 @@ export async function buyIn(
       continue;
     }
 
+    if (response.statusCode === 500 && isPostCommitLockFailure(response.body)) {
+      // The buy-in committed; only the lock release failed. Replay idempotently.
+      const delay = 25 * (attempt + 1);
+      lastError = new Error(`Post-commit lock failure: ${response.body} — retrying in ${delay}ms`);
+      await new Promise((r) => setTimeout(r, delay));
+      continue;
+    }
+
     throw new Error(`Failed to buy in: ${response.body}`);
   }
   throw lastError || new Error("Buy-in failed after retries");
 }
 
 /**
- * Execute a game action (retries on rate limiting)
+ * A requested gameplay action.
+ *
+ * This is the local, test-facing shape. The helper resolves the authoritative
+ * legal action (family, opaque actionId and amount bounds) from the server
+ * observation before submitting a canonical request. Actor hints passed by
+ * legacy callers are ignored: the server derives the actor from authentication.
+ */
+export interface RequestedAction {
+  /** Uppercase engine action family, e.g. `"CALL"` or `"RAISE"`. */
+  type: string;
+  /** Requested chip amount for BET/RAISE (an all-in shove included). */
+  amount?: number;
+  [key: string]: unknown;
+}
+
+/**
+ * Fetch the authoritative per-seat observation for the authenticated principal.
+ *
+ * The returned `legalActions` are the only actions the principal may submit;
+ * legality is never computed client-side.
+ */
+export async function getObservation(
+  app: FastifyInstance,
+  token: string,
+  tableId: string
+): Promise<SeatObservation> {
+  const response = await app.inject({
+    method: "GET",
+    url: `/tables/${tableId}/observation`,
+    headers: {
+      authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (response.statusCode !== 200) {
+    throw new Error(`Failed to get observation: ${response.body}`);
+  }
+
+  return JSON.parse(response.body) as SeatObservation;
+}
+
+/**
+ * Resolve the exact chip amount for a legal action without inventing legality.
+ *
+ * Mirrors the SDK: unbounded families take no amount; bounded families use the
+ * requested amount, falling back to the server-precomputed amount. Bounds are
+ * checked so the test fails locally with a clear message instead of relying on
+ * a server 400.
+ */
+function resolveLegalAmount(legal: LegalAction, requested?: number): number | undefined {
+  const bounded = legal.minAmount !== undefined || legal.maxAmount !== undefined;
+  if (!bounded) {
+    if (requested !== undefined) {
+      throw new Error(`The ${legal.family} action takes no chip amount`);
+    }
+    return legal.amount;
+  }
+
+  const amount = requested ?? legal.amount ?? legal.minAmount;
+  if (amount === undefined) {
+    throw new Error(`A chip amount is required for the ${legal.family} action`);
+  }
+  if (legal.minAmount !== undefined && amount < legal.minAmount) {
+    throw new Error(`Amount ${amount} is below minimum ${legal.minAmount} for ${legal.family}`);
+  }
+  if (legal.maxAmount !== undefined && amount > legal.maxAmount) {
+    throw new Error(`Amount ${amount} is above maximum ${legal.maxAmount} for ${legal.family}`);
+  }
+  return amount;
+}
+
+/**
+ * Resolve a requested action family against the authoritative legal actions and
+ * build the strict canonical request.
+ *
+ * Throws when the server does not currently offer the requested family; that is
+ * a real protocol violation, not something to paper over.
+ */
+export function toCanonicalActionRequest(
+  observation: SeatObservation,
+  requested: RequestedAction
+): CanonicalActionRequest {
+  const family = String(requested.type).toUpperCase() as LegalActionFamily;
+  const legal = observation.legalActions.find((action) => action.family === family);
+  if (!legal) {
+    throw new Error(
+      `Server did not offer a legal ${family} action (offered: ${observation.legalActions
+        .map((action) => action.family)
+        .join(", ")})`
+    );
+  }
+
+  const amount = resolveLegalAmount(legal, requested.amount);
+  return {
+    requestId: crypto.randomUUID(),
+    turnId: observation.turnId,
+    expectedVersion: observation.version,
+    actionId: legal.actionId,
+    ...(amount === undefined ? {} : { amount }),
+  };
+}
+
+/**
+ * Execute a gameplay action through the canonical observation/action protocol.
+ *
+ * Fetches a fresh observation for the authenticated principal, resolves the
+ * requested family to the server-issued legal action, then submits the strict
+ * `{requestId,turnId,expectedVersion,actionId,amount?}` request. The response is
+ * validated against the mandatory `CanonicalActionResultSchema` so a malformed
+ * server result fails loudly instead of being hidden. Retries only on 429.
  */
 export async function executeAction(
   app: FastifyInstance,
   token: string,
   tableId: string,
-  action: {
-    type: string;
-    amount?: number;
-    [key: string]: any;
-  },
+  requested: RequestedAction,
   maxRetries = 3
-): Promise<any> {
+): Promise<CanonicalActionResult> {
   let lastError: Error | undefined;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const observation = await getObservation(app, token, tableId);
+    const payload = toCanonicalActionRequest(observation, requested);
     const response = await app.inject({
       method: "POST",
       url: `/tables/${tableId}/action`,
       headers: {
         authorization: `Bearer ${token}`,
       },
-      payload: action,
+      payload,
     });
 
-    if (response.statusCode === 200) return JSON.parse(response.body);
+    if (response.statusCode === 200) {
+      return CanonicalActionResultSchema.parse(JSON.parse(response.body)) as CanonicalActionResult;
+    }
 
     if (response.statusCode === 429) {
       const delay = 1000 + attempt * 500;
@@ -312,7 +450,11 @@ export async function getUserBalances(
   app: FastifyInstance,
   userId: string
 ): Promise<{ main: number; inPlay: number }> {
-  return await app.financialManager.getBalances(userId);
+  const balances = await app.financialManager.getChipBalances(userId);
+  return {
+    main: Number(balances.available),
+    inPlay: Number(balances.inPlay + balances.tournament),
+  };
 }
 
 /**
@@ -323,17 +465,27 @@ export async function standFromTable(
   token: string,
   tableId: string
 ): Promise<void> {
-  const response = await app.inject({
-    method: "POST",
-    url: `/tables/${tableId}/stand`,
-    headers: {
-      authorization: `Bearer ${token}`,
-    },
-  });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const response = await app.inject({
+      method: "POST",
+      url: `/tables/${tableId}/stand`,
+      headers: {
+        authorization: `Bearer ${token}`,
+      },
+    });
 
-  if (response.statusCode !== 200) {
+    if (response.statusCode === 200) return;
+
+    // The stand committed; only the lock release failed. Retry the idempotent
+    // stand, which replays the stored cash-out instead of double-spending.
+    if (response.statusCode === 500 && isPostCommitLockFailure(response.body)) {
+      await new Promise((r) => setTimeout(r, 25 * (attempt + 1)));
+      continue;
+    }
+
     throw new Error(`Failed to stand: ${response.body}`);
   }
+  throw new Error("Failed to stand after retries");
 }
 
 /**

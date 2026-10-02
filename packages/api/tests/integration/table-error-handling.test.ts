@@ -7,7 +7,7 @@ import { cleanupTestUser } from "../helpers/test-utils.js";
 
 describe("Table Error Handling Test", () => {
   let app: FastifyInstance;
-  let testUser: { id: string; address: string };
+  let testUser: { id: string; address: string | null };
   let token: string;
 
   beforeAll(async () => {
@@ -16,25 +16,22 @@ describe("Table Error Handling Test", () => {
 
     // Create test user
     const randomId = Date.now();
+    const address = `0xtest${randomId}`;
     testUser = await app.prisma.user.create({
       data: {
         username: `test_errors_${randomId}`,
-        address: `0xtest${randomId}`,
-        accounts: {
-          create: [
-            {
-              currency: "USDC",
-              type: "MAIN",
-              balance: 10000,
-            },
-          ],
-        },
+        address,
       },
+    });
+    await app.financialManager.grantChips(testUser.id, 10000, {
+      reason: "test_fixture",
+      operatorId: testUser.id,
+      idempotencyKey: `test-grant:${testUser.id}`,
     });
 
     const jti = `test_jti_${randomId}`;
     token = await app.jwt.sign(
-      { userId: testUser.id, address: testUser.address, jti },
+      { userId: testUser.id, address: testUser.address ?? address, jti },
       { jti, expiresIn: "1h" }
     );
 
@@ -101,16 +98,12 @@ describe("Table Error Handling Test", () => {
       data: {
         username: `poor_user_${randomId}`,
         address: `0xpoor${randomId}`,
-        accounts: {
-          create: [
-            {
-              currency: "USDC",
-              type: "MAIN",
-              balance: 100, // Only 100 chips
-            },
-          ],
-        },
       },
+    });
+    await app.financialManager.grantChips(poorUser.id, 100, {
+      reason: "test_fixture",
+      operatorId: poorUser.id,
+      idempotencyKey: `test-grant:${poorUser.id}`,
     });
 
     const poorJti = `poor_jti_${randomId}`;
@@ -202,7 +195,9 @@ describe("Table Error Handling Test", () => {
     expect(createResponse.statusCode).toBe(200);
     const { tableId } = JSON.parse(createResponse.body);
 
-    // Try invalid action without being seated
+    // Try invalid action without being seated. The next-major route accepts
+    // only the canonical strict request, so this stale `{type}` payload is
+    // rejected before any engine work.
     const actionResponse = await app.inject({
       method: "POST",
       url: `/tables/${tableId}/action`,

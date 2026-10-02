@@ -75,10 +75,11 @@ describe("WebSocket connection limits", () => {
         ws.close();
       }
       await app.prisma.session.deleteMany({ where: { userId: user.id } });
-      await app.prisma.ledgerEntry.deleteMany({
-        where: { account: { userId: user.id } },
+      await app.prisma.chipLedgerEntry.deleteMany({
+        where: { account: { principalId: user.id } },
       });
-      await app.prisma.account.deleteMany({ where: { userId: user.id } });
+      await app.prisma.chipGrant.deleteMany({ where: { principalId: user.id } });
+      await app.prisma.chipAccount.deleteMany({ where: { principalId: user.id } });
       await app.prisma.user.delete({ where: { id: user.id } });
     }
   });
@@ -124,10 +125,11 @@ describe("WebSocket connection limits", () => {
     } finally {
       ws.close();
       await app.prisma.session.deleteMany({ where: { userId: user.id } });
-      await app.prisma.ledgerEntry.deleteMany({
-        where: { account: { userId: user.id } },
+      await app.prisma.chipLedgerEntry.deleteMany({
+        where: { account: { principalId: user.id } },
       });
-      await app.prisma.account.deleteMany({ where: { userId: user.id } });
+      await app.prisma.chipGrant.deleteMany({ where: { principalId: user.id } });
+      await app.prisma.chipAccount.deleteMany({ where: { principalId: user.id } });
       await app.prisma.user.delete({ where: { id: user.id } });
     }
   });
@@ -159,10 +161,11 @@ describe("WebSocket connection limits", () => {
     expect(decoded.jti).toBe(jti);
 
     await app.prisma.session.deleteMany({ where: { userId: user.id } });
-    await app.prisma.ledgerEntry.deleteMany({
-      where: { account: { userId: user.id } },
+    await app.prisma.chipLedgerEntry.deleteMany({
+      where: { account: { principalId: user.id } },
     });
-    await app.prisma.account.deleteMany({ where: { userId: user.id } });
+    await app.prisma.chipGrant.deleteMany({ where: { principalId: user.id } });
+    await app.prisma.chipAccount.deleteMany({ where: { principalId: user.id } });
     await app.prisma.user.delete({ where: { id: user.id } });
   });
 });

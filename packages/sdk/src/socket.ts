@@ -1,16 +1,20 @@
 /**
  * PokerSocket - WebSocket client for real-time game updates
  *
- * Provides automatic reconnection, heartbeat, and typed event handling
- * for real-time poker game state synchronization.
+ * Provides automatic reconnection, heartbeat, and typed event handling for the
+ * canonical live stream: the server sends full `OBSERVATION` messages (the
+ * authoritative per-seat decision boundary) on join and on every change. The
+ * client never invents a newer version from a notification; ordering is
+ * enforced with `version` + `eventSeq`.
  */
 
 import type {
-  PublicState,
   ClientMessage,
   JoinTableMessage,
   LeaveTableMessage,
   PingMessage,
+  SeatObservation,
+  PublicWireState,
 } from "@pokertools/types";
 
 import { safeParseServerMessage } from "@pokertools/types";
@@ -65,17 +69,12 @@ const DEFAULT_SOCKET_CONFIG = {
  *   token: "jwt-token",
  * });
  *
- * // Listen for events
- * socket.on("connect", () => console.log("Connected!"));
- * socket.on("stateUpdate", (tableId, state) => {
- *   console.log("State updated:", state);
+ * socket.on("observation", (tableId, observation) => {
+ *   console.log("Observation version:", observation.version, observation.eventSeq);
  * });
  *
- * // Connect
  * await socket.connect();
- *
- * // Join a table
- * await socket.join("table-123");
+ * const observation = await socket.join("table-123");
  *
  * // Later: disconnect
  * socket.disconnect();
@@ -112,11 +111,9 @@ export class PokerSocket {
   private shouldReconnect = true;
   private rejectConnection: ((error: Error) => void) | null = null;
 
-  // Latest state cache for each table
-  private stateCache = new Map<string, PublicState>();
-
-  // Version metadata per table (exposed safely via getTableVersion)
-  private tableVersions = new Map<string, number>();
+  // Latest canonical observation for each table. The full projection is the
+  // only source of client state; there is no version-only cache.
+  private observationCache = new Map<string, SeatObservation>();
 
   constructor(config: SocketConfig) {
     // Keep authentication material out of URLs so it is not captured by
@@ -243,8 +240,7 @@ export class PokerSocket {
     this.shouldReconnect = false;
     this.stopHeartbeat();
     this.clearPendingRequests("Connection closed");
-    this.stateCache.clear();
-    this.tableVersions.clear();
+    this.observationCache.clear();
     this.rejectConnection?.(new PokerSDKError("Connection closed", "CONNECTION_CLOSED"));
     this.rejectConnection = null;
 
@@ -278,9 +274,9 @@ export class PokerSocket {
   // ============================================================================
 
   /**
-   * Join a table to receive real-time updates
+   * Join a table and resolve with its first canonical observation.
    */
-  async join(tableId: string): Promise<PublicState> {
+  async join(tableId: string): Promise<SeatObservation> {
     if (this.connectionState !== "connected") {
       throw new PokerSDKError("Not connected", "NOT_CONNECTED");
     }
@@ -295,18 +291,17 @@ export class PokerSocket {
     this.joinedTables.add(tableId);
     this.send(message);
 
-    // Wait for snapshot response
+    // Wait for the first OBSERVATION for this table
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
-        this.pendingRequests.delete(requestId);
+        this.pendingRequests.delete(`observation:${tableId}`);
         reject(new PokerSDKError("Join timeout", "TIMEOUT"));
       }, 10000);
 
-      // Store resolver for snapshot message
-      this.pendingRequests.set(`snapshot:${tableId}`, {
-        resolve: (state) => {
+      this.pendingRequests.set(`observation:${tableId}`, {
+        resolve: (observation) => {
           clearTimeout(timeout);
-          resolve(state as PublicState);
+          resolve(observation as SeatObservation);
         },
         reject,
         timeout,
@@ -323,8 +318,7 @@ export class PokerSocket {
     }
 
     this.joinedTables.delete(tableId);
-    this.stateCache.delete(tableId);
-    this.tableVersions.delete(tableId);
+    this.observationCache.delete(tableId);
 
     const message: LeaveTableMessage = {
       type: "LEAVE",
@@ -342,18 +336,34 @@ export class PokerSocket {
   }
 
   /**
-   * Get cached state for a table
+   * Get the latest canonical observation for a table.
    */
-  getCachedState(tableId: string): PublicState | undefined {
-    return this.stateCache.get(tableId);
+  getCachedObservation(tableId: string): SeatObservation | undefined {
+    return this.observationCache.get(tableId);
   }
 
   /**
-   * Get latest known version for a table
-   * Returns undefined if no version has been received
+   * Get the latest canonical wire state for a table (ergonomic view).
+   * This is always the state of a full observation, never a version-only stub.
+   */
+  getCachedState(tableId: string): PublicWireState | undefined {
+    return this.observationCache.get(tableId)?.state;
+  }
+
+  /**
+   * Get latest known version for a table.
+   * Returns undefined if no observation has been received.
    */
   getTableVersion(tableId: string): number | undefined {
-    return this.tableVersions.get(tableId);
+    return this.observationCache.get(tableId)?.version;
+  }
+
+  /**
+   * Get latest known event sequence for a table.
+   * Returns undefined if no observation has been received.
+   */
+  getTableEventSeq(tableId: string): number | undefined {
+    return this.observationCache.get(tableId)?.eventSeq;
   }
 
   // ============================================================================
@@ -453,6 +463,20 @@ export class PokerSocket {
   }
 
   /**
+   * True when `candidate` is not newer than `current` by (version, eventSeq).
+   * Used to drop reordered or duplicated observations.
+   */
+  private isStaleObservation(current: SeatObservation, candidate: SeatObservation): boolean {
+    // Both counters are table-global PostgreSQL sequences. A different hand ID
+    // must never permit a delayed observation to rewind either counter.
+    if (candidate.eventSeq < current.eventSeq) return true;
+    if (candidate.version !== current.version) {
+      return candidate.version < current.version || candidate.eventSeq === current.eventSeq;
+    }
+    return candidate.eventSeq <= current.eventSeq;
+  }
+
+  /**
    * Handle incoming message
    */
   private handleMessage(data: string): void {
@@ -467,37 +491,34 @@ export class PokerSocket {
       this.log("Received:", message);
 
       switch (message.type) {
-        case "SNAPSHOT": {
-          // Cache state and track version
-          this.stateCache.set(message.tableId, message.state);
-          this.tableVersions.set(message.tableId, message.version);
+        case "OBSERVATION": {
+          const incoming = message.observation;
+          const cached = this.observationCache.get(message.tableId);
 
-          // Resolve pending join request
-          const pending = this.pendingRequests.get(`snapshot:${message.tableId}`);
+          // Async notifications can reorder. Never regress to an older
+          // (version, eventSeq) projection, and never advance a version
+          // without the full projection that carries it.
+          if (cached && this.isStaleObservation(cached, incoming)) {
+            this.log("Ignoring stale observation:", message.tableId, incoming.version);
+            break;
+          }
+
+          const isFirst = cached === undefined;
+          this.observationCache.set(message.tableId, incoming);
+
+          // Resolve a pending join with the first observation for the table
+          const pending = this.pendingRequests.get(`observation:${message.tableId}`);
           if (pending) {
-            this.pendingRequests.delete(`snapshot:${message.tableId}`);
-            pending.resolve(message.state);
+            this.pendingRequests.delete(`observation:${message.tableId}`);
+            pending.resolve(incoming);
           }
 
-          this.emit("snapshot", message.tableId, message.state);
-          break;
-        }
-
-        case "STATE_UPDATE": {
-          // Track version metadata (always available)
-          this.tableVersions.set(message.tableId, message.version);
-
-          // Only emit if we have a cached state (from a prior SNAPSHOT)
-          // Never emit a phantom partial PublicState
-          const cachedState = this.stateCache.get(message.tableId);
-          if (cachedState) {
-            // Update version in cache to keep it consistent
-            const updatedState = { ...cachedState, version: message.version };
-            this.stateCache.set(message.tableId, updatedState);
-            this.emit("stateUpdate", message.tableId, updatedState);
+          this.emit("observation", message.tableId, incoming);
+          if (isFirst) {
+            this.emit("snapshot", message.tableId, incoming.state);
+          } else {
+            this.emit("stateUpdate", message.tableId, incoming.state);
           }
-          // If no cached state, consumer should fetch via REST
-          // Version is still available via getTableVersion()
           break;
         }
 

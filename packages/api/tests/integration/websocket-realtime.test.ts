@@ -1,6 +1,7 @@
 /// <reference path="../../types/fastify.d.ts" />
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import WebSocket from "ws";
+import type { ObservationMessage } from "@pokertools/types";
 import {
   initTestContext,
   runCleanup,
@@ -12,6 +13,12 @@ import {
   waitFor,
   type TestContext,
 } from "../helpers/test-utils.js";
+
+const isObservation = (msg: any): msg is ObservationMessage =>
+  msg?.type === "OBSERVATION" && typeof msg.tableId === "string" && Boolean(msg.observation);
+
+const observations = (messages: any[]): ObservationMessage[] =>
+  messages.filter(isObservation) as ObservationMessage[];
 
 describe("WebSocket - Real-time Updates Integration Test", () => {
   let ctx: TestContext;
@@ -34,7 +41,7 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
     await runCleanup(ctx.cleanup);
   });
 
-  it("should receive real-time state updates via WebSocket", async () => {
+  it("should receive full canonical observations via WebSocket", async () => {
     const [player1, player2, player3] = ctx.users;
 
     // =========================================================================
@@ -50,11 +57,14 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
     // =========================================================================
     // STEP 2: Connect WebSocket Clients
     // =========================================================================
-    const player1Updates: any[] = [];
-    const player2Updates: any[] = [];
+    const player1Messages: any[] = [];
+    const player2Messages: any[] = [];
 
     const ws1 = new WebSocket(wsUrl, ["pokertools", `jwt.${player1.token}`]);
     const ws2 = new WebSocket(wsUrl, ["pokertools", `jwt.${player2.token}`]);
+
+    ws1.on("message", (data) => player1Messages.push(JSON.parse(data.toString())));
+    ws2.on("message", (data) => player2Messages.push(JSON.parse(data.toString())));
 
     // Wait for connections to open
     await Promise.all([
@@ -62,193 +72,133 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
       new Promise((resolve) => ws2.once("open", resolve)),
     ]);
 
-    // Set up message handlers
-    const player1Snapshots: any[] = [];
-    const player1StateUpdates: any[] = [];
-    const player2Snapshots: any[] = [];
-    const player2StateUpdates: any[] = [];
-
-    ws1.on("message", (data) => {
-      const message = JSON.parse(data.toString());
-      if (message.type === "SNAPSHOT") {
-        player1Snapshots.push(message);
-      }
-      if (message.type === "STATE_UPDATE") {
-        player1StateUpdates.push(message);
-      }
-      if (message.type === "STATE_UPDATE" || message.type === "SNAPSHOT") {
-        player1Updates.push(message);
-      }
-    });
-
-    ws2.on("message", (data) => {
-      const message = JSON.parse(data.toString());
-      if (message.type === "SNAPSHOT") {
-        player2Snapshots.push(message);
-      }
-      if (message.type === "STATE_UPDATE") {
-        player2StateUpdates.push(message);
-      }
-      if (message.type === "STATE_UPDATE" || message.type === "SNAPSHOT") {
-        player2Updates.push(message);
-      }
-    });
-
     // =========================================================================
     // STEP 3: Subscribe to Table
     // =========================================================================
-    ws1.send(
-      JSON.stringify({
-        type: "JOIN",
-        tableId: ctx.tableId,
-      })
+    ws1.send(JSON.stringify({ type: "JOIN", tableId: ctx.tableId }));
+    ws2.send(JSON.stringify({ type: "JOIN", tableId: ctx.tableId }));
+
+    await waitFor(
+      () => observations(player1Messages).length > 0 && observations(player2Messages).length > 0,
+      7000
     );
 
-    ws2.send(
-      JSON.stringify({
-        type: "JOIN",
-        tableId: ctx.tableId,
-      })
-    );
-
-    // Wait for SNAPSHOT messages after JOIN (sent immediately)
-    await waitFor(() => player1Updates.length > 0 && player2Updates.length > 0, 7000);
-
-    expect(player1Updates.length).toBeGreaterThan(0);
-    expect(player2Updates.length).toBeGreaterThan(0);
-
-    // =========================================================================
-    // STEP 4: Players Buy In (Should Trigger Updates)
-    // =========================================================================
-    const updateCountBefore = player1Updates.length;
-    await buyIn(ctx.app, player1.token, ctx.tableId, 1000, 0);
-
-    // Wait for additional updates after buy-in (STATE_UPDATE or SNAPSHOT)
-    await waitFor(() => player1Updates.length > updateCountBefore, 7000);
-
-    // =========================================================================
-    // STEP 5: Verify STATE_UPDATE is lightweight (no state field)
-    // =========================================================================
-    // Gather any STATE_UPDATE messages that arrived after buy-in
-    const buyInStateUpdates = player1StateUpdates.filter((u) => u.type === "STATE_UPDATE");
-
-    // Every STATE_UPDATE must NOT have a `state` field
-    for (const su of buyInStateUpdates) {
-      expect(su.state).toBeUndefined();
-      expect(su.type).toBe("STATE_UPDATE");
-      expect(su.tableId).toBeDefined();
-      expect(su.version).toBeTypeOf("number");
-      expect(su.timestamp).toBeTypeOf("number");
+    const firstP1 = observations(player1Messages)[0]!;
+    expect(firstP1.type).toBe("OBSERVATION");
+    expect(firstP1.tableId).toBe(ctx.tableId);
+    expect(firstP1.timestamp).toBeTypeOf("number");
+    // The observation is principal-scoped and carries the full masked projection.
+    // Before seating, the viewer is a spectator (null); never another principal.
+    expect([null, player1.id]).toContain(firstP1.observation.state.viewingPlayerId);
+    expect(firstP1.observation.state.deck).toEqual([]);
+    // No non-viewer seat ever exposes hole cards, even before seating.
+    for (const player of firstP1.observation.state.players) {
+      if (!player || player.id === player1.id) continue;
+      expect(player.hand).toBeNull();
     }
 
-    // State should come from SNAPSHOT or REST, not STATE_UPDATE
-    const p1Snapshot = player1Snapshots[player1Snapshots.length - 1];
-    expect(p1Snapshot.state).toBeDefined();
-    expect(p1Snapshot.state.viewingPlayerId).toBeDefined();
-
-    console.log(`✅ STATE_UPDATE is lightweight (no state field) - verified`);
+    // No legacy notification-only frames may appear on the wire.
+    for (const message of player1Messages) {
+      expect(["OBSERVATION", "ACK"]).toContain(message.type);
+    }
 
     // =========================================================================
-    // STEP 6: More Players Join and Deal
+    // STEP 4: Players Buy In (Should Trigger Full Observations)
     // =========================================================================
-    player1Updates.length = 0;
-    player2Updates.length = 0;
-    player1StateUpdates.length = 0;
-    player2StateUpdates.length = 0;
+    const updateCountBefore = player1Messages.length;
+    await buyIn(ctx.app, player1.token, ctx.tableId, 1000, 0);
 
+    await waitFor(() => player1Messages.length > updateCountBefore, 7000);
+
+    const afterBuyIn = observations(player1Messages).at(-1)!;
+    expect(afterBuyIn.observation.state.players.find((p) => p?.id === player1.id)?.stack).toBe(
+      1000
+    );
+    // Once seated, the observation is scoped to the authenticated principal.
+    expect(afterBuyIn.observation.state.viewingPlayerId).toBe(player1.id);
+    expect(afterBuyIn.observation.version).toBeGreaterThanOrEqual(firstP1.observation.version);
+
+    console.log(`✅ Full OBSERVATION projection received and masked`);
+
+    // =========================================================================
+    // STEP 5: More Players Join and Deal
+    // =========================================================================
     await buyIn(ctx.app, player2.token, ctx.tableId, 1000, 1);
     await buyIn(ctx.app, player3.token, ctx.tableId, 1000, 2);
 
-    // Wait for updates
-    await waitFor(() => player1Updates.length >= 2, 2000);
+    await executeAction(ctx.app, player1.token, ctx.tableId, { type: "DEAL" });
 
-    await executeAction(ctx.app, player1.token, ctx.tableId, {
-      type: "DEAL",
-    });
-
-    // Wait for deal update - verify via REST since STATE_UPDATE is lightweight
-    const tid = ctx.tableId!;
-    await waitFor(async () => {
-      const state = await getTableState(ctx.app, player1.token, tid);
-      return state.street === "PREFLOP";
-    }, 2000);
-
-    let dealState = await getTableState(ctx.app, player1.token, tid);
-    expect(dealState.street).toBe("PREFLOP");
-
-    console.log(`✅ Deal update received via WebSocket`);
-
-    // =========================================================================
-    // STEP 7: Execute Action and Verify Broadcast
-    // =========================================================================
-    player1Updates.length = 0;
-    player2Updates.length = 0;
-
-    // Get fresh state to ensure we have correct actionTo
-    dealState = await getTableState(ctx.app, player1.token, ctx.tableId);
-
-    // Verify actionTo is valid
-    if (dealState.actionTo === undefined || dealState.actionTo === null) {
-      throw new Error("actionTo is undefined after deal");
-    }
-
-    const actingPlayer = ctx.users[dealState.actionTo];
-    if (!actingPlayer) {
-      throw new Error(`No acting player found at seat ${dealState.actionTo}`);
-    }
-
-    await executeAction(ctx.app, actingPlayer.token, ctx.tableId, {
-      type: "FOLD",
-    });
-
-    // Wait for action update
-    await waitFor(() => player1Updates.length > 0, 2000);
-    await waitFor(() => player2Updates.length > 0, 2000);
-
-    expect(player1Updates.length).toBeGreaterThan(0);
-    expect(player2Updates.length).toBeGreaterThan(0);
-
-    console.log(`✅ Action update broadcast to all subscribers`);
-
-    // =========================================================================
-    // STEP 8: Unsubscribe from Table
-    // =========================================================================
-    ws1.send(
-      JSON.stringify({
-        type: "LEAVE",
-        tableId: ctx.tableId,
-      })
+    await waitFor(
+      () => observations(player1Messages).at(-1)?.observation.state.street === "PREFLOP",
+      3000
     );
+
+    const dealObservation = observations(player1Messages).at(-1)!;
+    expect(dealObservation.observation.state.street).toBe("PREFLOP");
+    expect(dealObservation.observation.state.viewingPlayerId).toBe(player1.id);
+    // Hidden information: the viewer sees only their own hole cards.
+    expect(
+      dealObservation.observation.state.players.find((p) => p?.id === player2.id)?.hand
+    ).toBeNull();
+
+    console.log(`✅ Deal observation received with masked hidden information`);
+
+    // =========================================================================
+    // STEP 6: Execute Action and Verify Broadcast
+    // =========================================================================
+    const actingSeat = dealObservation.observation.state.actionTo;
+    expect(actingSeat).not.toBeNull();
+    const actingPlayer = ctx.users[actingSeat!]!;
+
+    const p1BeforeAction = observations(player1Messages).length;
+    const p2BeforeAction = observations(player2Messages).length;
+
+    await executeAction(ctx.app, actingPlayer.token, ctx.tableId, { type: "FOLD" });
+
+    await waitFor(() => observations(player1Messages).length > p1BeforeAction, 3000);
+    await waitFor(() => observations(player2Messages).length > p2BeforeAction, 3000);
+
+    expect(observations(player1Messages).at(-1)!.observation.version).toBeGreaterThan(
+      dealObservation.observation.version
+    );
+
+    console.log(`✅ Full observation broadcast to all subscribers`);
+
+    // =========================================================================
+    // STEP 7: Unsubscribe from Table
+    // =========================================================================
+    ws1.send(JSON.stringify({ type: "LEAVE", tableId: ctx.tableId }));
 
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    player1Updates.length = 0;
-    player2Updates.length = 0;
+    const p1AfterLeave = player1Messages.length;
+    const p2AfterLeave = player2Messages.length;
 
-    // Player 2 still subscribed, execute another action
-    // Get fresh state to know who should act
+    // Player 2 still subscribed, execute another action if a turn remains.
     const currentState = await getTableState(ctx.app, player1.token, ctx.tableId);
 
-    if (currentState.actionTo !== undefined && currentState.street !== "SHOWDOWN") {
+    if (
+      currentState.actionTo !== null &&
+      currentState.actionTo !== undefined &&
+      currentState.street !== "SHOWDOWN"
+    ) {
       const nextPlayer = ctx.users[currentState.actionTo];
       if (nextPlayer) {
-        await executeAction(ctx.app, nextPlayer.token, ctx.tableId, {
-          type: "FOLD",
-        });
+        await executeAction(ctx.app, nextPlayer.token, ctx.tableId, { type: "FOLD" });
+
+        await waitFor(() => player2Messages.length > p2AfterLeave, 3000);
+
+        // Player 1 should NOT receive updates (unsubscribed)
+        expect(player1Messages.length).toBe(p1AfterLeave);
+        // Player 2 should receive updates (still subscribed)
+        expect(player2Messages.length).toBeGreaterThan(p2AfterLeave);
+
+        console.log(`✅ Unsubscribe verified - no updates to unsubscribed client`);
       }
-
-      await waitFor(() => player2Updates.length > 0, 2000);
-
-      // Player 1 should NOT receive update (unsubscribed)
-      expect(player1Updates.length).toBe(0);
-      // Player 2 should receive update (still subscribed)
-      expect(player2Updates.length).toBeGreaterThan(0);
-
-      console.log(`✅ Unsubscribe verified - no updates to unsubscribed client`);
     }
 
     // =========================================================================
-    // STEP 9: Close Connections
+    // STEP 8: Close Connections
     // =========================================================================
     ws1.close();
     ws2.close();
@@ -259,13 +209,10 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
     ]);
 
     console.log(`✅ WebSocket connections closed`);
-    console.log(`✅ WebSocket real-time update test completed successfully!`);
-  }, 15000); // Increase timeout for WebSocket operations
+  }, 20000);
 
   it("should handle connection errors gracefully", async () => {
-    const [player1] = ctx.users;
-
-    // Try to connect with invalid token in query string
+    // Try to connect with invalid token in subprotocol
     const ws = new WebSocket(wsUrl, ["pokertools", "jwt.invalid-token"]);
 
     // WebSocket should close with auth error
@@ -297,7 +244,6 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
       bigBlind: 20,
     });
 
-    // Connect with token in query parameter
     const ws = new WebSocket(wsUrl, ["pokertools", `jwt.${player1.token}`]);
 
     // Set up message handler BEFORE waiting for open to avoid race conditions
@@ -312,48 +258,37 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     // Subscribe to both tables sequentially to ensure proper ordering
-    ws.send(
-      JSON.stringify({
-        type: "JOIN",
-        tableId: table1,
-      })
-    );
-
-    // Wait a bit before sending second subscription
+    ws.send(JSON.stringify({ type: "JOIN", tableId: table1 }));
     await new Promise((resolve) => setTimeout(resolve, 50));
+    ws.send(JSON.stringify({ type: "JOIN", tableId: table2 }));
 
-    ws.send(
-      JSON.stringify({
-        type: "JOIN",
-        tableId: table2,
-      })
-    );
-
-    // Wait for messages (SNAPSHOT or STATE_UPDATE) from both tables
+    // Wait for observations from both tables
     await waitFor(() => {
-      const table1Updates = updates.filter((u) => u.tableId === table1);
-      const table2Updates = updates.filter((u) => u.tableId === table2);
+      const table1Updates = observations(updates).filter((u) => u.tableId === table1);
+      const table2Updates = observations(updates).filter((u) => u.tableId === table2);
       return table1Updates.length > 0 && table2Updates.length > 0;
-    }, 5000); // Increased timeout for multi-table subscription
+    }, 5000);
 
-    console.log(`✅ Received initial messages from both tables`);
+    console.log(`✅ Received initial observations from both tables`);
 
     // Trigger updates on both tables to verify broadcasts
-    const updatesBefore = updates.length;
+    const updatesBefore = observations(updates).length;
     await buyIn(ctx.app, player1.token, table1, 500, 0);
     await buyIn(ctx.app, player1.token, table2, 500, 1);
 
-    // Wait for additional updates after buy-ins (may be SNAPSHOT or STATE_UPDATE)
-    await waitFor(() => updates.length > updatesBefore + 1, 3000);
+    await waitFor(() => observations(updates).length > updatesBefore, 5000);
 
-    const table1Updates = updates.filter((u) => u.tableId === table1);
-    const table2Updates = updates.filter((u) => u.tableId === table2);
+    const table1Updates = observations(updates).filter((u) => u.tableId === table1);
+    const table2Updates = observations(updates).filter((u) => u.tableId === table2);
 
     expect(table1Updates.length).toBeGreaterThan(0);
     expect(table2Updates.length).toBeGreaterThan(0);
+    // After buy-in, observations for both tables are scoped to the principal.
+    expect(table1Updates.at(-1)!.observation.state.viewingPlayerId).toBe(player1.id);
+    expect(table2Updates.at(-1)!.observation.state.viewingPlayerId).toBe(player1.id);
 
     console.log(
-      `✅ Received updates from both tables: Table1=${table1Updates.length}, Table2=${table2Updates.length}`
+      `✅ Received observations from both tables: Table1=${table1Updates.length}, Table2=${table2Updates.length}`
     );
 
     ws.close();
@@ -361,21 +296,19 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
     // Cleanup
     await cleanupTestTable(ctx.app, table1);
     await cleanupTestTable(ctx.app, table2);
-  }, 10000);
+  }, 15000);
 
-  it("STATE_UPDATE messages must be lightweight (no state field - regression)", async () => {
+  it("OBSERVATION frames carry a full masked projection (no partial/version-only frames)", async () => {
     const [player1, player2] = ctx.users;
 
-    // Create table
     const testTableId = await createTable(ctx.app, player1.token, {
-      name: "Lightweight Protocol Test",
+      name: "Full Projection Protocol Test",
       mode: "CASH",
       smallBlind: 5,
       bigBlind: 10,
     });
 
     try {
-      // Connect WebSocket
       const ws = new WebSocket(wsUrl, ["pokertools", `jwt.${player1.token}`]);
       await new Promise((resolve) => ws.once("open", resolve));
 
@@ -384,43 +317,41 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
         allMessages.push(JSON.parse(data.toString()));
       });
 
-      // Join table
       ws.send(JSON.stringify({ type: "JOIN", tableId: testTableId }));
-      await waitFor(() => allMessages.length > 0, 7000);
+      await waitFor(() => observations(allMessages).length > 0, 7000);
 
-      // Verify SNAPSHOT has state
-      const snapshot = allMessages.find((m) => m.type === "SNAPSHOT");
-      expect(snapshot).toBeDefined();
-      expect(snapshot.state).toBeDefined();
+      const first = observations(allMessages)[0]!;
+      expect(first.observation.turnId).toBeTypeOf("string");
+      expect(first.observation.version).toBeTypeOf("number");
+      expect(first.observation.eventSeq).toBeTypeOf("number");
+      expect(Array.isArray(first.observation.legalActions)).toBe(true);
+      expect([null, player1.id]).toContain(first.observation.state.viewingPlayerId);
+      expect(first.observation.state.deck).toEqual([]);
 
-      // Buy in to trigger STATE_UPDATE
+      // Buy in both players to trigger a broadcast.
       await buyIn(ctx.app, player1.token, testTableId, 500, 0);
       await buyIn(ctx.app, player2.token, testTableId, 500, 1);
 
-      // Wait for STATE_UPDATE messages
-      await waitFor(() => {
-        const updates = allMessages.filter((m) => m.type === "STATE_UPDATE");
-        return updates.length > 0;
-      }, 7000);
+      await waitFor(() => observations(allMessages).length > 1, 7000);
 
-      // Verify EVERY STATE_UPDATE is lightweight
-      const stateUpdates = allMessages.filter((m) => m.type === "STATE_UPDATE");
-      expect(stateUpdates.length).toBeGreaterThan(0);
+      // Every frame is a full OBSERVATION; no STATE_UPDATE/SNAPSHOT partial frame.
+      expect(allMessages.every((m) => m.type === "OBSERVATION" || m.type === "ACK")).toBe(true);
 
-      for (const su of stateUpdates) {
-        // Must have lightweight fields
-        expect(su.type).toBe("STATE_UPDATE");
-        expect(su.tableId).toBeTypeOf("string");
-        expect(su.version).toBeTypeOf("number");
-        expect(su.timestamp).toBeTypeOf("number");
+      // After buy-in, the latest projection is scoped to the principal.
+      expect(observations(allMessages).at(-1)!.observation.state.viewingPlayerId).toBe(player1.id);
 
-        // Must NOT have state
-        expect(su.state).toBeUndefined();
-
-        // Must NOT have any other fields
-        const allowedKeys = ["type", "tableId", "version", "timestamp"];
-        const actualKeys = Object.keys(su).sort();
-        expect(actualKeys.sort()).toEqual(allowedKeys.sort());
+      for (const observation of observations(allMessages)) {
+        expect(observation.type).toBe("OBSERVATION");
+        expect(observation.tableId).toBeTypeOf("string");
+        expect(observation.observation.state).toBeDefined();
+        expect([null, player1.id]).toContain(observation.observation.state.viewingPlayerId);
+        expect(observation.observation.state.deck).toEqual([]);
+        // No other player's hole cards are ever present in the viewer's projection.
+        for (const player of observation.observation.state.players) {
+          if (!player || player.id === player1.id) continue;
+          expect(player.hand).toBeNull();
+        }
+        expect(observation.timestamp).toBeTypeOf("number");
       }
 
       ws.close();

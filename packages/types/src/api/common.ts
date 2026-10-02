@@ -1,2 +1,4 @@
-export type GameMode = "CASH" | "TOURNAMENT";
-export type TableStatus = "WAITING" | "ACTIVE" | "PAUSED" | "CLOSED";
+import type { GameModeWire, TableStatusWire } from "../canonical/rest";
+
+export type GameMode = GameModeWire;
+export type TableStatus = TableStatusWire;

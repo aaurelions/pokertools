@@ -1,13 +1,14 @@
-import { createPrismaClient } from "./utils/prisma-client.js";
-import Redis from "ioredis";
 import pino from "pino";
 import { config } from "./config.js";
-import { BlockchainService } from "./services/blockchain-service.js";
-import { SweeperService } from "./services/sweeper-service.js";
-import { WithdrawalBot } from "./services/withdrawal-bot.js";
-import { GasMonitor } from "./services/gas-monitor.js";
-import { TransactionMonitor } from "./services/transaction-monitor.js";
+import { createPrismaClient } from "./utils/prisma-client.js";
+import { buildCustodyRuntime } from "./runtime.js";
 
+/**
+ * Canonical custody entrypoint.
+ *
+ * Starts the canonical withdrawal worker only. The legacy Telegram operator
+ * bot and its unsafe payout paths have been removed from the custody package.
+ */
 const logger = pino({
   level: config.LOG_LEVEL,
   transport:
@@ -16,60 +17,47 @@ const logger = pino({
       : undefined,
 });
 
-function main() {
-  logger.info("🚀 Starting Admin Service...");
+function main(): void {
+  logger.info("Starting canonical custody worker...");
 
-  // 1. Initialize Infrastructure
   const prisma = createPrismaClient({
     log:
       config.NODE_ENV === "development"
-        ? [{ emit: "stdout", level: "query" }]
+        ? [{ emit: "stdout", level: "error" }]
         : [{ emit: "stdout", level: "error" }],
   });
 
-  const redis = new Redis(config.REDIS_URL, {
-    maxRetriesPerRequest: 3,
-    retryStrategy: (times) => {
-      const delay = Math.min(times * 50, 2000);
-      return delay;
+  void buildCustodyRuntime({
+    prisma,
+    logger,
+    config: {
+      databaseUrl: config.DATABASE_URL,
+      workerIntervalMs: config.CUSTODY_WORKER_INTERVAL_MS,
+      reconcileIntervalMs: config.CUSTODY_RECONCILE_INTERVAL_MS,
+      quorumThreshold: config.CUSTODY_QUORUM_THRESHOLD,
+      minQuorum: config.CUSTODY_MIN_QUORUM,
+      treasurySigningKeysJson: config.TREASURY_SIGNING_KEYS_JSON,
     },
-  });
+  })
+    .then((runtime) => {
+      runtime.worker.start();
 
-  redis.on("error", (err) => logger.error(err, "Redis Error"));
-  redis.on("connect", () => logger.info("✅ Redis Connected"));
+      const shutdown = (signal: string) => {
+        logger.info({ signal }, "Shutting down custody worker...");
+        runtime.worker.stop();
+        void prisma.$disconnect().finally(() => process.exit(0));
+      };
 
-  // 2. Initialize Services
-  const chainService = new BlockchainService(prisma, logger, redis);
-
-  const sweeper = new SweeperService(prisma, chainService, logger);
-  const bot = new WithdrawalBot(prisma, redis, chainService, logger);
-  const gasMonitor = new GasMonitor(prisma, chainService, bot.bot, logger);
-  const txMonitor = new TransactionMonitor(prisma, chainService, logger);
-
-  // 3. Start Event Loops
-  try {
-    // Start all services (fire and forget)
-    void sweeper.startCron().catch((e) => logger.error(e, "Sweeper Fail"));
-    gasMonitor.start();
-    txMonitor.start();
-    void bot.start().catch((e) => logger.error(e, "Bot Fail"));
-
-    logger.info("✅ All services started successfully");
-  } catch (error) {
-    logger.fatal(error, "Startup Failed");
-    process.exit(1);
-  }
-
-  const shutdown = async () => {
-    logger.info("Shutting down...");
-    if (bot) await bot.stop().catch((e) => logger.error(e, "Bot stop failed"));
-    void prisma.$disconnect();
-    void redis.quit();
-    process.exit(0);
-  };
-
-  process.on("SIGTERM", () => void shutdown());
-  process.on("SIGINT", () => void shutdown());
+      process.on("SIGTERM", () => shutdown("SIGTERM"));
+      process.on("SIGINT", () => shutdown("SIGINT"));
+    })
+    .catch((error) => {
+      logger.error(
+        { error: error instanceof Error ? error.message : String(error) },
+        "Failed to start canonical custody worker"
+      );
+      process.exit(1);
+    });
 }
 
 void main();

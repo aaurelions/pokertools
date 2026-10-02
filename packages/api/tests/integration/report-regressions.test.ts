@@ -46,7 +46,9 @@ describe("Report regression coverage", () => {
     expect(JSON.parse(below.body).error).toBe("BUY_IN_BELOW_MINIMUM");
     expect(above.statusCode).toBe(400);
     expect(JSON.parse(above.body).error).toBe("BUY_IN_ABOVE_MAXIMUM");
-    expect((await ctx.app.financialManager.getBalances(ctx.users[0].id)).main).toBe(10_000);
+    expect(
+      Number((await ctx.app.financialManager.getChipBalances(ctx.users[0].id)).available)
+    ).toBe(10_000);
   });
 
   it("enforces max buy-in for add-chips using current stack plus pending add-ons", async () => {
@@ -77,7 +79,9 @@ describe("Report regression coverage", () => {
     expect(buyIn.statusCode).toBe(200);
     expect(rejected.statusCode).toBe(400);
     expect(JSON.parse(rejected.body).error).toBe("ADD_CHIPS_ABOVE_MAXIMUM");
-    expect((await ctx.app.financialManager.getBalances(ctx.users[0].id)).main).toBe(8_500);
+    expect(
+      Number((await ctx.app.financialManager.getChipBalances(ctx.users[0].id)).available)
+    ).toBe(8_500);
   });
 
   it("lists active tournament tables by default and supports mode filtering", async () => {

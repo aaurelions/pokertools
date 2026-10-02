@@ -112,14 +112,14 @@ describe("Worker Jobs - Async Processing Integration Test", () => {
     // =========================================================================
     // STEP 4: Verify Ledger Entries Created
     // =========================================================================
-    const ledgerEntries = await ctx.app.prisma.ledgerEntry.findMany({
+    const ledgerEntries = await ctx.app.prisma.chipLedgerEntry.findMany({
       where: {
         referenceId: handId,
       },
     });
 
     if (ledgerEntries.length > 0) {
-      console.log(`✅ Found ${ledgerEntries.length} ledger entries for hand ${handId}`);
+      console.log(`✅ Found ${ledgerEntries.length} chip journal entries for hand ${handId}`);
 
       // Check for HAND_WIN and HAND_LOSS entries
       const winEntries = ledgerEntries.filter((e) => e.type === "HAND_WIN");
@@ -127,36 +127,25 @@ describe("Worker Jobs - Async Processing Integration Test", () => {
 
       console.log(`✅ Win entries: ${winEntries.length}, Loss entries: ${lossEntries.length}`);
     } else {
-      console.log(`⚠️  No ledger entries found yet (worker may still be processing)`);
+      console.log(`⚠️  No chip journal entries found yet (worker may still be processing)`);
     }
 
     // =========================================================================
     // STEP 5: Check Rake Collection
     // =========================================================================
-    if (state.config.rake && state.config.rake > 0) {
-      // Find House account
-      const houseUser = await ctx.app.prisma.user.findFirst({
+    if (state.config.rakePercent && state.config.rakePercent > 0) {
+      // Rake is credited to the operator account in the canonical chip journal.
+      const rakeEntries = await ctx.app.prisma.chipLedgerEntry.findMany({
         where: {
-          role: "ADMIN",
+          type: "RAKE",
+          referenceId: handId,
         },
       });
 
-      if (houseUser) {
-        const rakeEntries = await ctx.app.prisma.ledgerEntry.findMany({
-          where: {
-            account: {
-              userId: houseUser.id,
-            },
-            type: "RAKE",
-            referenceId: handId,
-          },
-        });
-
-        if (rakeEntries.length > 0) {
-          const totalRake = rakeEntries.reduce((sum, entry) => sum + entry.amount, 0);
-          expect(totalRake).toBeGreaterThan(0);
-          console.log(`✅ House collected ${totalRake} in rake`);
-        }
+      if (rakeEntries.length > 0) {
+        const totalRake = rakeEntries.reduce((sum, entry) => sum + entry.amount, 0n);
+        expect(totalRake).toBeGreaterThan(0n);
+        console.log(`✅ Operator collected ${totalRake} in rake`);
       }
     }
   }, 15000);
@@ -249,26 +238,17 @@ describe("Worker Jobs - Async Processing Integration Test", () => {
     });
 
     expect(tableRecord).toBeTruthy();
+    // PostgreSQL is the authority: every accepted action commits the snapshot
+    // in the same transaction, so the durable state must be present.
+    expect(tableRecord?.state).toBeTruthy();
+    const persistedState = JSON.parse(tableRecord!.state as string);
+    expect(persistedState).toBeTruthy();
+    expect(persistedState.players).toBeTruthy();
 
-    // Note: persist-snapshot worker may not be running in test environment
-    // This is a write-behind optimization, Redis already has the canonical state
-    if (tableRecord?.state) {
-      const persistedState = JSON.parse(tableRecord.state);
-      expect(persistedState).toBeTruthy();
-      expect(persistedState.players).toBeTruthy();
-
-      console.log(`✅ Table state persisted to database`);
-      console.log(
-        `✅ Persisted state has ${persistedState.players.filter((p: any) => p !== null).length} players`
-      );
-    } else {
-      console.log(
-        `ℹ️  persist-snapshot worker not processing (worker may not be running in test environment)`
-      );
-      console.log(
-        `   Redis state is canonical - database persistence is write-behind optimization`
-      );
-    }
+    console.log(`✅ Table state persisted to database`);
+    console.log(
+      `✅ Persisted state has ${persistedState.players.filter((p: any) => p !== null).length} players`
+    );
 
     await cleanupTestTable(ctx.app, tableId);
   }, 10000);

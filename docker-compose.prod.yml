@@ -14,11 +14,15 @@
 #                       │
 #                  ┌────┴────┐     ┌──────────┐
 #                  │  Redis  │     │ Custody  │
-#                  │  :6379  │     │(sweeper) │
-#                  └─────────┘     └──────────┘
+#                  │  :6379  │     │(signer/  │
+#                  └─────────┘     │ finality)│
+#                                  └──────────┘
 #
 # Only Caddy is publicly accessible (ports 80/443). All other services
 # communicate over an internal Docker bridge network.
+#
+# Custody signing material is isolated in its own env file (`.env.custody`);
+# the public API environment never receives treasury keys or mnemonic material.
 #
 # Usage:
 #   cp .env.example .env.production   # then fill in secrets
@@ -113,6 +117,15 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # PUBLIC API ENVIRONMENT — signing material is deliberately absent here.
+    #
+    # The custody worker environment is supplied from a separate env file
+    # (`.env.custody`, see `deploy/.env.custody.example`). Docker Compose does
+    # not merge `environment` with `env_file` when the same key is set in
+    # `environment`, and the API service below declares ONLY non-signing keys.
+    # The API never receives TREASURY_SIGNING_KEYS_JSON, MASTER_MNEMONIC,
+    # WALLET_XPRIV_ENCRYPTION_SECRET or any private-key material, even when a
+    # single shared root `.env.production` holds those fields for custody.
     environment:
       NODE_ENV: production
       PORT: "3000"
@@ -122,18 +135,13 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379}
       JWT_SECRET: "${JWT_SECRET:?err: JWT_SECRET must be set}"
       COOKIE_SECRET: "${COOKIE_SECRET:?err: COOKIE_SECRET must be set}"
-      WALLET_ENCRYPTION_SECRET: "${WALLET_ENCRYPTION_SECRET:?err: WALLET_ENCRYPTION_SECRET must be set}"
-      WALLET_XPRIV_ENCRYPTION_SECRET: ${WALLET_XPRIV_ENCRYPTION_SECRET:-}
-      PBKDF2_ITERATIONS: ${PBKDF2_ITERATIONS:-600000}
       CORS_ORIGIN: ${CORS_ORIGIN:-}
       METRICS_TOKEN: ${METRICS_TOKEN:-}
       ALLOWED_SIWE_CHAIN_IDS: ${ALLOWED_SIWE_CHAIN_IDS:-1,31337}
-      DEFAULT_CURRENCY: ${DEFAULT_CURRENCY:-USDC}
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-604800}
       RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-100}
       AUTH_NONCE_RATE_LIMIT_MAX: ${AUTH_NONCE_RATE_LIMIT_MAX:-5}
       AUTH_LOGIN_RATE_LIMIT_MAX: ${AUTH_LOGIN_RATE_LIMIT_MAX:-10}
-      MAX_WITHDRAWAL_AMOUNT_CENTS: ${MAX_WITHDRAWAL_AMOUNT_CENTS:-1000000}
       TABLE_REDIS_TTL_SECONDS: ${TABLE_REDIS_TTL_SECONDS:-86400}
       TABLE_LOCK_TTL_MS: ${TABLE_LOCK_TTL_MS:-10000}
       ACTION_TIMEOUT_SECONDS: ${ACTION_TIMEOUT_SECONDS:-30}
@@ -200,15 +208,13 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379}
       JWT_SECRET: "${JWT_SECRET:?err: JWT_SECRET must be set}"
       COOKIE_SECRET: "${COOKIE_SECRET:?err: COOKIE_SECRET must be set}"
-      WALLET_ENCRYPTION_SECRET: "${WALLET_ENCRYPTION_SECRET:?err: WALLET_ENCRYPTION_SECRET must be set}"
-      WALLET_XPRIV_ENCRYPTION_SECRET: ${WALLET_XPRIV_ENCRYPTION_SECRET:-}
-      PBKDF2_ITERATIONS: ${PBKDF2_ITERATIONS:-600000}
       ALLOWED_SIWE_CHAIN_IDS: ${ALLOWED_SIWE_CHAIN_IDS:-1,31337}
-      DEFAULT_CURRENCY: ${DEFAULT_CURRENCY:-USDC}
       TABLE_REDIS_TTL_SECONDS: ${TABLE_REDIS_TTL_SECONDS:-86400}
       TABLE_LOCK_TTL_MS: ${TABLE_LOCK_TTL_MS:-10000}
       ACTION_TIMEOUT_SECONDS: ${ACTION_TIMEOUT_SECONDS:-30}
-      DEPOSIT_MONITOR_INTERVAL_MS: ${DEPOSIT_MONITOR_INTERVAL_MS:-15000}
+      # Canonical deposit monitor (deep-finality / deposit reorg). The legacy
+      # trust-the-monitor deposit flow is not scheduled.
+      CANONICAL_DEPOSIT_MONITOR_INTERVAL_MS: ${CANONICAL_DEPOSIT_MONITOR_INTERVAL_MS:-30000}
       RECONCILIATION_INTERVAL_MS: ${RECONCILIATION_INTERVAL_MS:-300000}
       TOURNAMENT_BLIND_INTERVAL_MS: ${TOURNAMENT_BLIND_INTERVAL_MS:-900000}
       TOURNAMENT_BLIND_SCAN_INTERVAL_MS: ${TOURNAMENT_BLIND_SCAN_INTERVAL_MS:-15000}
@@ -252,41 +258,22 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # Signing material and custody tuning live ONLY in this separate env file.
+    # The public API service never reads `.env.custody`. `env_file` supplies
+    # `TREASURY_SIGNING_KEYS_JSON` (and optional custody cadence/quorum
+    # overrides); when the file is absent the custody entrypoint falls back to
+    # its code defaults and runs monitoring-only. The explicit `environment`
+    # map below deliberately does NOT declare any signing or custody-tuning
+    # key, so a value set in `.env.custody` is never blanked by an empty root
+    # interpolation.
+    env_file:
+      - path: ./.env.custody
+        required: false
     environment:
       NODE_ENV: production
       LOG_LEVEL: ${LOG_LEVEL:-info}
       DATABASE_URL: "${DATABASE_URL:?err: DATABASE_URL must be set}"
       REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379}
-      DEFAULT_CURRENCY: ${DEFAULT_CURRENCY:-USDC}
-      JWT_SECRET: "${JWT_SECRET:?err: JWT_SECRET must be set}"
-      WALLET_ENCRYPTION_SECRET: "${WALLET_ENCRYPTION_SECRET:?err: WALLET_ENCRYPTION_SECRET must be set}"
-      WALLET_XPRIV_ENCRYPTION_SECRET: "${WALLET_XPRIV_ENCRYPTION_SECRET:?err: WALLET_XPRIV_ENCRYPTION_SECRET must be set}"
-      PBKDF2_ITERATIONS: ${PBKDF2_ITERATIONS:-600000}
-      MASTER_MNEMONIC: "${MASTER_MNEMONIC:?err: MASTER_MNEMONIC must be set}"
-      HOT_WALLET_DERIVATION_PATH: ${HOT_WALLET_DERIVATION_PATH:-m/44'/60'/0'/0/0}
-      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:?err: TELEGRAM_BOT_TOKEN must be set}"
-      TELEGRAM_ADMIN_CHAT_ID: "${TELEGRAM_ADMIN_CHAT_ID:?err: TELEGRAM_ADMIN_CHAT_ID must be set}"
-      BATCH_SWEEPER_ADDRESS_MAINNET: ${BATCH_SWEEPER_ADDRESS_MAINNET:-}
-      BATCH_SWEEPER_ADDRESS_POLYGON: ${BATCH_SWEEPER_ADDRESS_POLYGON:-}
-      BATCH_SWEEPER_ADDRESS_LOCAL: ${BATCH_SWEEPER_ADDRESS_LOCAL:-}
-      SWEEPER_CONTRACT_MAP: ${SWEEPER_CONTRACT_MAP:-}
-      MAX_GAS_PRICE_GWEI: ${MAX_GAS_PRICE_GWEI:-50}
-      MIN_SWEEP_VALUE_RAW_UNITS: ${MIN_SWEEP_VALUE_RAW_UNITS:-10}
-      LOW_GAS_THRESHOLD_ETH: ${LOW_GAS_THRESHOLD_ETH:-0.1}
-      MAX_SINGLE_WITHDRAWAL_USD: ${MAX_SINGLE_WITHDRAWAL_USD:-5000}
-      MAX_DAILY_WITHDRAWAL_USD: ${MAX_DAILY_WITHDRAWAL_USD:-50000}
-      RPC_RETRY_COUNT: ${RPC_RETRY_COUNT:-3}
-      RPC_RETRY_DELAY_MS: ${RPC_RETRY_DELAY_MS:-1000}
-      RPC_TIMEOUT_MS: ${RPC_TIMEOUT_MS:-10000}
-      CIRCUIT_BREAKER_FAILURE_THRESHOLD: ${CIRCUIT_BREAKER_FAILURE_THRESHOLD:-5}
-      CIRCUIT_BREAKER_OPEN_MS: ${CIRCUIT_BREAKER_OPEN_MS:-30000}
-      WITHDRAWAL_SIGNATURE_MAX_AGE_MS: ${WITHDRAWAL_SIGNATURE_MAX_AGE_MS:-300000}
-      WITHDRAWAL_POLL_INTERVAL_MS: ${WITHDRAWAL_POLL_INTERVAL_MS:-3000}
-      RECOVERY_SCAN_INTERVAL_MS: ${RECOVERY_SCAN_INTERVAL_MS:-300000}
-      TRANSACTION_MONITOR_INTERVAL_MS: ${TRANSACTION_MONITOR_INTERVAL_MS:-60000}
-      SWEEP_INTERVAL_MS: ${SWEEP_INTERVAL_MS:-600000}
-      GAS_MONITOR_INTERVAL_MS: ${GAS_MONITOR_INTERVAL_MS:-1800000}
-      STUCK_WITHDRAWAL_MAX_AGE_MS: ${STUCK_WITHDRAWAL_MAX_AGE_MS:-21600000}
     networks:
       - internal
     working_dir: /app/packages/custody

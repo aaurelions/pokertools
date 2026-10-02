@@ -17,6 +17,9 @@ dump.rdb
 .env
 .env.local
 .env.*.local
+# Production custody signing environment (never commit key material)
+.env.custody
+.env.production
 
 # Logs
 logs/

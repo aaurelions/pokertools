@@ -14,6 +14,7 @@ module.exports = tseslint.config(
       "**/*.js",
       "**/*.d.ts",
       "**/generated/",
+      "**/.runtime/",
       "packages/api/generated/**",
       "packages/api/prisma.config.ts",
       "packages/api/prisma/**/*.ts",
@@ -40,7 +41,12 @@ module.exports = tseslint.config(
         ...globals.jest,
       },
       parserOptions: {
-        projectService: { allowDefaultProject: ["packages/custody/vitest.config.ts"] },
+        projectService: {
+          allowDefaultProject: [
+            "packages/custody/vitest.config.ts",
+            "packages/e2e/vitest.finance.config.ts",
+          ],
+        },
         tsconfigRootDir: __dirname,
       },
     },

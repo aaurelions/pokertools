@@ -1,10 +1,17 @@
-import { PublicState } from "./public-state";
+import { z } from "zod";
+import { SeatObservationSchema, type SeatObservation } from "./canonical";
 
 /**
  * WebSocket Protocol Definitions
  *
- * This file defines the complete WebSocket message protocol for real-time
- * poker game communication. All messages are strongly typed discriminated unions.
+ * The live private stream is canonical: after `JOIN`, the server sends a full
+ * `OBSERVATION` (the authoritative per-seat decision boundary) and re-sends a
+ * full `OBSERVATION` whenever the underlying state changes. There is no
+ * notification-only `STATE_UPDATE` frame on the wire; clients never advance a
+ * cached version without a fresh full projection.
+ *
+ * All server messages are validated against strict runtime schemas. Client
+ * messages (`JOIN`/`LEAVE`/`PING`) are strict as well.
  */
 
 // ============================================================================
@@ -47,26 +54,17 @@ export type ClientMessage = JoinTableMessage | LeaveTableMessage | PingMessage;
 // ============================================================================
 
 /**
- * State snapshot sent when client joins a table
- * or when requested via REST API
+ * Full canonical observation for the authenticated principal.
+ *
+ * Sent on join and on every state change. `requestId` echoes the joining
+ * request when the observation is the direct JOIN response.
  */
-export interface SnapshotMessage {
-  readonly type: "SNAPSHOT";
+export interface ObservationMessage {
+  readonly type: "OBSERVATION";
   readonly tableId: string;
-  readonly state: PublicState;
-  readonly version: number; // State version for cache tracking
-  readonly timestamp: number; // Server timestamp
-}
-
-/**
- * Lightweight notification that state has changed
- * Client should fetch full state via REST if needed
- */
-export interface StateUpdateMessage {
-  readonly type: "STATE_UPDATE";
-  readonly tableId: string;
-  readonly version: number; // New state version
+  readonly observation: SeatObservation;
   readonly timestamp: number;
+  readonly requestId?: string;
 }
 
 /**
@@ -116,12 +114,7 @@ export interface ActionNotificationMessage {
  * Union of all server-to-client messages
  */
 export type ServerMessage =
-  | SnapshotMessage
-  | StateUpdateMessage
-  | ErrorMessage
-  | AckMessage
-  | PongMessage
-  | ActionNotificationMessage;
+  ObservationMessage | ErrorMessage | AckMessage | PongMessage | ActionNotificationMessage;
 
 // ============================================================================
 // Type Guards
@@ -149,8 +142,7 @@ export function isServerMessage(msg: unknown): msg is ServerMessage {
   if (typeof msg !== "object" || msg === null) return false;
   const { type } = msg as { type?: string };
   return (
-    type === "SNAPSHOT" ||
-    type === "STATE_UPDATE" ||
+    type === "OBSERVATION" ||
     type === "ERROR" ||
     type === "ACK" ||
     type === "PONG" ||
@@ -162,21 +154,19 @@ export function isServerMessage(msg: unknown): msg is ServerMessage {
 // Zod Schemas for Runtime Validation
 // ============================================================================
 
-import { z } from "zod";
-
-export const JoinTableMessageSchema = z.object({
+export const JoinTableMessageSchema = z.strictObject({
   type: z.literal("JOIN"),
   tableId: z.string().min(1),
   requestId: z.string().optional(),
 });
 
-export const LeaveTableMessageSchema = z.object({
+export const LeaveTableMessageSchema = z.strictObject({
   type: z.literal("LEAVE"),
   tableId: z.string().min(1),
   requestId: z.string().optional(),
 });
 
-export const PingMessageSchema = z.object({
+export const PingMessageSchema = z.strictObject({
   type: z.literal("PING"),
   requestId: z.string().min(1),
   timestamp: z.number().optional(),
@@ -212,19 +202,12 @@ export function safeParseClientMessage(
 // Server Message Zod Schemas
 // ============================================================================
 
-export const SnapshotMessageSchema = z.object({
-  type: z.literal("SNAPSHOT"),
+export const ObservationMessageSchema = z.strictObject({
+  type: z.literal("OBSERVATION"),
   tableId: z.string().min(1),
-  state: z.record(z.string(), z.unknown()),
-  version: z.number(),
+  observation: SeatObservationSchema,
   timestamp: z.number(),
-});
-
-export const StateUpdateMessageSchema = z.object({
-  type: z.literal("STATE_UPDATE"),
-  tableId: z.string().min(1),
-  version: z.number(),
-  timestamp: z.number(),
+  requestId: z.string().optional(),
 });
 
 export const ErrorMessageSchema = z.object({
@@ -257,8 +240,7 @@ export const ActionNotificationMessageSchema = z.object({
 });
 
 export const ServerMessageSchema = z.discriminatedUnion("type", [
-  SnapshotMessageSchema,
-  StateUpdateMessageSchema,
+  ObservationMessageSchema,
   ErrorMessageSchema,
   AckMessageSchema,
   PongMessageSchema,
@@ -269,7 +251,7 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
  * Parse and validate a server message (throws on invalid)
  */
 export function parseServerMessage(data: unknown): ServerMessage {
-  return ServerMessageSchema.parse(data) as unknown as ServerMessage;
+  return ServerMessageSchema.parse(data);
 }
 
 /**
@@ -280,7 +262,7 @@ export function safeParseServerMessage(
 ): { success: true; data: ServerMessage } | { success: false; error: z.ZodError } {
   const result = ServerMessageSchema.safeParse(data);
   if (result.success) {
-    return { success: true, data: result.data as unknown as ServerMessage };
+    return { success: true, data: result.data };
   }
   return { success: false, error: result.error };
 }

@@ -139,9 +139,9 @@ fi
 # Verify that the schema was actually applied by checking if key tables exist
 # This helps catch cases where db push appears to succeed but doesn't create tables
 if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_FILE" ]; then
-  TABLE_COUNT=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='AdminWallet';" 2>/dev/null || echo "0")
+  TABLE_COUNT=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='Asset';" 2>/dev/null || echo "0")
   if [ "$TABLE_COUNT" = "0" ]; then
-    echo "⚠️  Warning: AdminWallet table not found after db push"
+    echo "⚠️  Warning: Asset table not found after db push"
     echo "   Attempting to verify all tables..."
     sqlite3 "$DB_FILE" "SELECT name FROM sqlite_master WHERE type='table';" 2>/dev/null || true
     echo "   Re-running db push without --skip-generate to ensure schema is applied..."

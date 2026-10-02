@@ -17,31 +17,72 @@ datasource db {
 model User {
   id       String @id @default(cuid())
   username String @unique
-  address  String @unique // Ethereum address (lowercase)
-  role     Role   @default(PLAYER)
+  // Nullable so SERVICE principals never need a fabricated wallet address.
+  // Wallet-backed identities always populate it (lowercase).
+  address  String? @unique
+  role     Role    @default(PLAYER)
+  // Distinguishes wallet-backed humans from machine/service principals.
+  // The User row remains the canonical backing identity for both.
+  kind     PrincipalKind @default(WALLET)
 
   // Relations
-  accounts          Account[]
   sessions          Session[]
-  wallets           UserWallet[]
-  paymentTx         PaymentTransaction[]
   notesWritten      PlayerNote[]         @relation("NoteAuthor")
   notesReceived     PlayerNote[]         @relation("NoteTarget")
   auditLogs         AuditLog[]
   idempotency       IdempotencyRecord[]
   tournamentEntries TournamentEntry[]
   createdTournaments Tournament[]        @relation("TournamentCreator")
+  serviceIdentity   ServiceCredential?   @relation("ServiceIdentity")
+  createdServiceCredentials ServiceCredential[] @relation("ServiceCredentialCreator")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([address])
+  @@index([kind])
 }
 
 enum Role {
   PLAYER
   ADMIN
-  BOT
+}
+
+// Canonical principal kinds. Wallet = SIWE-authenticated user with an address.
+// Service = opaque credential-backed machine identity with explicit scopes.
+enum PrincipalKind {
+  WALLET
+  SERVICE
+}
+
+// Revocable, scoped machine credential. Only the SHA-256 hash of the secret is
+// persisted; the plaintext 256-bit secret is returned exactly once on creation.
+// Restrictions are optional and additive: a credential restricted to a tableId
+// or seat can never act outside that resource.
+model ServiceCredential {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  user        User     @relation("ServiceIdentity", fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  keyHash     String   @unique
+  // JSON array of table scopes: "table:observe" | "table:act" | "table:chat".
+  scopes      Json
+  // Optional resource restrictions.
+  tableId     String?
+  seat        Int?
+  revoked     Boolean  @default(false)
+  createdById String?
+  createdBy   User?    @relation("ServiceCredentialCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  expiresAt   DateTime?
+  lastUsedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+  @@index([createdById])
+  @@index([revoked])
+  @@index([tableId])
 }
 
 model Session {
@@ -55,152 +96,6 @@ model Session {
 
   @@index([userId])
   @@index([jti])
-}
-
-// ============================================================================
-// FINANCIAL LEDGER (Double-Entry Accounting)
-// ============================================================================
-
-model Account {
-  id       String      @id @default(cuid())
-  userId   String
-  user     User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  currency String      @default("USDC")
-  type     AccountType
-
-  // Cached balance in cents (1 chip = 1 cent). Source of truth is sum(entries).
-  // BigInt prevents overflow beyond $21M; arithmetic must use bigint internally.
-  balance BigInt @default(0)
-
-  entries LedgerEntry[]
-
-  @@unique([userId, currency, type])
-  @@index([userId])
-}
-
-enum AccountType {
-  MAIN // Available for withdrawal/transfer
-  IN_PLAY // Locked on tables
-  PENDING_WITHDRAWAL // Funds held for pending withdrawal (recoverable)
-  // System accounts owned by the HOUSE user. They are the counterparty for
-  // external money flows and tournament escrow so the ledger is fully
-  // double-entry: SUM(all account balances) == 0 at all times.
-  HOUSE_RESERVE // Counterparty for deposits/withdrawals (external on-chain flows)
-  TOURNAMENT_ESCROW // Counterparty for tournament buy-ins/payouts (prize pool custody)
-}
-
-model LedgerEntry {
-  id        String  @id @default(cuid())
-  accountId String
-  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  amount    BigInt // Positive = Credit, Negative = Debit
-  type      TxType
-
-  // Polymorphic reference (TableID, HandID, or PaymentTransactionID)
-  referenceId String?
-  metadata    Json?
-
-  // Optional: direct link to external payment if this entry represents a deposit/withdraw
-  paymentTx PaymentTransaction?
-
-  createdAt DateTime @default(now())
-
-  @@index([accountId])
-  @@index([referenceId])
-  @@index([createdAt])
-}
-
-enum TxType {
-  DEPOSIT
-  WITHDRAWAL
-  BUY_IN
-  CASH_OUT
-  RAKE
-  REFUND
-  HAND_WIN
-  HAND_LOSS
-  SWEEP
-  TOURNAMENT_BUY_IN
-  TOURNAMENT_FEE
-  TOURNAMENT_PAYOUT
-}
-
-// ============================================================================
-// EXTERNAL PAYMENTS (Crypto Bridge)
-// ============================================================================
-
-// Unified table for Money In (Deposit) and Money Out (Withdrawal)
-model PaymentTransaction {
-  id     String      @id @default(cuid())
-  userId String
-  user   User        @relation(fields: [userId], references: [id])
-  type   PaymentType // DEPOSIT or WITHDRAWAL
-
-  // Blockchain Data
-  blockchainId String
-  blockchain   Blockchain @relation(fields: [blockchainId], references: [id])
-  tokenId      String
-  token        Token      @relation(fields: [tokenId], references: [id])
-
-  // Transaction Details
-  txHash      String? // Nullable initially for withdrawals (until broadcast)
-  address     String // From address (Deposit) or To address (Withdrawal)
-  blockNumber String? // BigInt string
-  blockHash   String? // Block hash for canonicality verification (reorg protection)
-
-  // Amounts
-  amountRaw    String // BigInt from blockchain (wei/satoshi)
-  amountCredit BigInt // Converted game chips (cents)
-  fee          String? // Network fee used (BigInt string)
-
-  // Lifecycle
-  status PaymentStatus @default(PENDING)
-
-  // Recovery state for withdrawal audit trail (null for deposits)
-  recoveryState RecoveryState?
-
-  // Optional client-supplied idempotency key for withdrawal requests.
-  // Nullable so inbound deposits and older rows are unaffected; unique so retries
-  // cannot create duplicate debits/withdrawal requests.
-  idempotencyKey String? @unique
-
-  // Accounting Link (Once confirmed, a LedgerEntry is created)
-  ledgerEntryId String?      @unique
-  ledgerEntry   LedgerEntry? @relation(fields: [ledgerEntryId], references: [id])
-
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  confirmedAt DateTime?
-
-  // Enforce uniqueness on inbound txHash to prevent replay attacks
-  @@unique([blockchainId, txHash])
-  @@index([userId, type])
-  @@index([status])
-  @@index([recoveryState])
-  @@index([blockHash])
-}
-
-enum PaymentType {
-  DEPOSIT
-  WITHDRAWAL
-}
-
-enum PaymentStatus {
-  PENDING // Detected/Requested
-  PROCESSING // In Mempool/Broadcasting
-  CONFIRMED // Finalized on chain & Ledger Credited
-  FAILED // Reverted on chain
-  REJECTED // Admin rejected withdrawal
-  CANCELLED // User cancelled
-}
-
-enum RecoveryState {
-  AWAITING_BROADCAST // Queued, waiting for admin bot to broadcast
-  BROADCASTING // Transaction sent to mempool
-  BROADCAST_FAILED // RPC error or nonce issue during broadcast
-  STUCK_IN_MEMPOOL // Broadcast but not mined for too long (gas too low)
-  REORGED // Was confirmed but chain reorganized
-  RECOVERY_REFUNDED // Funds returned to user after recovery
 }
 
 // ============================================================================
@@ -219,7 +114,18 @@ model Table {
   // Engine State Snapshot
   state Json?
 
+  // Authoritative optimistic-concurrency and event-ordering cursors.
+  // Every engine mutation is applied with a compare-and-set on stateVersion and
+  // appends public events ordered by eventSeq. Redis is only a cache.
+  stateVersion Int @default(0)
+  eventSeq     Int @default(0)
+
   handHistories HandHistory[]
+
+  // Game authority records (events/idempotency/outbox).
+  gameEvents     GameEvent[]
+  actionRequests GameActionRequest[]
+  outbox         GameOutbox[]
 
   // Inverse of Tournament.table (the primary/final table 1:1 relation — Tournament owns the FK)
   tournament Tournament? @relation("PrimaryTable")
@@ -231,11 +137,17 @@ model Table {
   // Entries currently seated at this table
   entriesAtTable     TournamentEntry[]
 
+  // Optional exact chip<->asset conversion policy. Null means the table runs
+  // on the durable PLAY_CHIPS economy (integer chips, no implied asset value).
+  economicPolicyId String?
+  economicPolicy   EconomicPolicy? @relation("TableEconomicPolicy", fields: [economicPolicyId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([status])
   @@index([tournamentId])
+  @@index([economicPolicyId])
 }
 
 // ============================================================================
@@ -271,6 +183,14 @@ model Tournament {
 
   entries TournamentEntry[]
 
+  // Append-only canonical tournament audit (start/reconcile/close/settle).
+  tournamentEvents TournamentEvent[]
+
+  // Optional exact chip<->asset conversion policy. Null means the tournament
+  // runs on the durable PLAY_CHIPS economy (integer chips, no implied value).
+  economicPolicyId String?
+  economicPolicy   EconomicPolicy? @relation("TournamentEconomicPolicy", fields: [economicPolicyId], references: [id], onDelete: SetNull)
+
   startsAt           DateTime?
   startedAt          DateTime?
   lastBlindAdvancedAt DateTime?
@@ -280,6 +200,7 @@ model Tournament {
 
   @@index([status, createdAt])
   @@index([creatorId])
+  @@index([economicPolicyId])
 }
 
 model TournamentEntry {
@@ -351,85 +272,6 @@ model HandHistory {
 }
 
 // ============================================================================
-// CRYPTO INFRASTRUCTURE
-// ============================================================================
-
-model Blockchain {
-  id               String  @id @default(cuid())
-  name             String  @unique
-  chainId          Int     @unique
-  rpcUrl           String
-  rpcUrlBackup     String?
-  explorerUrl      String
-  nativeCurrency   Json // { name, symbol, decimals }
-  isEnabled        Boolean @default(true)
-  confirmations    Int     @default(12)
-  lastScannedBlock String? // BigInt string
-
-  tokens       Token[]
-  transactions PaymentTransaction[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model Token {
-  id           String     @id @default(cuid())
-  blockchainId String
-  blockchain   Blockchain @relation(fields: [blockchainId], references: [id])
-
-  address    String
-  symbol     String
-  name       String
-  decimals   Int
-  minDeposit String // BigInt string
-  isEnabled  Boolean @default(true)
-
-  transactions PaymentTransaction[]
-
-  @@unique([blockchainId, address])
-}
-
-model AdminWallet {
-  id             String       @id @default(cuid())
-  label          String
-  xpub           String // Encrypted (API-side: public key derivation only)
-  xpriv          String // Encrypted (Admin-side: private key for signing, separate secret)
-  derivationPath String       @default("m/44'/60'/0'/0")
-  currentIndex   Int          @default(0)
-  isActive       Boolean      @default(true)
-  users          UserWallet[]
-  createdAt      DateTime     @default(now())
-}
-
-model UserWallet {
-  id              String      @id @default(cuid())
-  userId          String
-  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  adminWalletId   String
-  adminWallet     AdminWallet @relation(fields: [adminWalletId], references: [id])
-  derivationIndex Int
-  address         String
-
-  // Only track active listening sessions for deposits
-  depositSessions DepositSession[]
-
-  @@unique([userId, adminWalletId])
-  @@index([address])
-}
-
-model DepositSession {
-  id           String     @id @default(cuid())
-  userId       String
-  userWalletId String
-  userWallet   UserWallet @relation(fields: [userWalletId], references: [id])
-  expiresAt    DateTime
-  createdAt    DateTime   @default(now())
-
-  @@index([expiresAt])
-}
-
-// ============================================================================
 // SOCIAL & NOTES
 // ============================================================================
 
@@ -493,4 +335,607 @@ model AuditLog {
   @@index([actorId, createdAt])
   @@index([action, createdAt])
   @@index([resource])
+}
+
+// ============================================================================
+// CANONICAL ATOMIC MULTI-ASSET FINANCIAL LEDGER
+//
+// Append-only, double-entry journal with a cached balance projection. Amounts
+// are canonical non-negative/signed decimal strings (atomic units), never
+// cents/chips. Chips remain a separate, legacy gameplay unit.
+//
+// The database schema here is the portable (SQLite/test) mirror. PostgreSQL
+// enforces immutability, per-transaction sum-zero and same-asset integrity via
+// triggers/constraints in migrations/postgres/002_financial_invariants.sql.
+// ============================================================================
+
+enum AssetStatus {
+  ACTIVE
+  DEGRADED
+  FROZEN
+}
+
+/// Canonical asset identity: `eip155:<chainId>/erc20:<lowercase token address>`.
+model Asset {
+  id              String      @id // canonical asset id
+  chainId         Int
+  tokenAddress    String
+  symbol          String
+  decimals        Int
+  status          AssetStatus @default(ACTIVE)
+  confirmations   Int         @default(12)
+  deepFinality    Int         @default(24)
+  treasuryAddress String
+  rpcUrls         Json
+  minGasAtomic    String
+  /// Durable per-asset serialization/fencing token. Every journal post and
+  /// projection rebuild increments it inside its transaction, so writers for
+  /// the same asset are ordered and rebuild cannot overwrite a concurrent post.
+  ledgerVersion   Int         @default(0)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  accounts            AtomicAccount[]
+  journalTransactions JournalTransaction[]
+  depositClaims       DepositClaimRecord[]
+  withdrawalIntents   WithdrawalIntentRecord[]
+  reconciliations     TreasuryReconciliation[]
+
+  @@unique([chainId, tokenAddress])
+  @@index([status])
+}
+
+enum AtomicAccountClass {
+  USER_AVAILABLE
+  IN_PLAY_RESERVE
+  TOURNAMENT_RESERVE
+  PENDING_WITHDRAWAL
+  TREASURY_RESERVE
+  OPERATOR
+  INCIDENT_OBLIGATION
+}
+
+/// Cached balance projection for one (asset, owner, class) triple.
+/// `ownerId` is null for system/treasury classes; `ownerKey` makes the unique
+/// constraint deterministic across NULLs. `version` drives compare-and-swap.
+model AtomicAccount {
+  id            String             @id @default(cuid())
+  assetId       String
+  ownerId       String? // principal (User.id) for user-owned classes
+  ownerKey      String // ownerId ?? "@system"
+  class         AtomicAccountClass
+  balanceAtomic String             @default("0")
+  version       Int                @default(0)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  asset    Asset            @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  postings JournalPosting[]
+
+  @@unique([id, assetId])
+  @@unique([assetId, ownerKey, class])
+  @@index([assetId])
+  @@index([ownerId])
+  @@index([assetId, class])
+}
+
+/// One immutable, balanced journal transaction. `requestId` is globally unique
+/// so retries are idempotent; the postings must sum to zero at commit.
+model JournalTransaction {
+  id          String   @id @default(cuid())
+  assetId     String
+  requestId   String   @unique
+  payloadHash String
+  /// Sealed exactly once, in the same transaction that inserts its postings.
+  /// PostgreSQL rejects any posting insert into a sealed transaction, so
+  /// already-committed journal groups cannot be extended later.
+  sealed      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  asset    Asset            @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  postings JournalPosting[]
+
+  @@unique([id, assetId])
+  @@index([assetId, createdAt])
+}
+
+/// A signed posting. The composite FKs force the posting, its transaction and
+/// its account to share the same asset.
+model JournalPosting {
+  id            String   @id @default(cuid())
+  transactionId String
+  assetId       String
+  accountId     String
+  amountAtomic  String // signed canonical decimal string
+  createdAt     DateTime @default(now())
+
+  transaction JournalTransaction @relation(fields: [transactionId, assetId], references: [id, assetId], onDelete: Restrict)
+  account     AtomicAccount      @relation(fields: [accountId, assetId], references: [id, assetId], onDelete: Restrict)
+
+  @@index([transactionId])
+  @@index([accountId])
+  @@index([assetId])
+}
+
+enum DepositClaimStatus {
+  OBSERVED
+  CONFIRMED
+  CREDITED
+  ORPHANED
+  FAILED
+}
+
+enum DepositProvenance {
+  DIRECT_TREASURY
+  SWEEP
+  MIGRATION
+}
+
+/// Exact on-chain deposit log identity: (chainId, txHash, logIndex).
+model DepositClaimRecord {
+  id                String             @id @default(cuid())
+  assetId           String
+  principalId       String
+  chainId           Int
+  txHash            String
+  logIndex          Int
+  amountAtomic      String
+  blockNumber       String?
+  blockHash         String?
+  confirmations     Int                @default(0)
+  status            DepositClaimStatus @default(OBSERVED)
+  provenance        DepositProvenance  @default(DIRECT_TREASURY)
+  creditedJournalId String?            @unique
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Restrict)
+
+  @@unique([chainId, txHash, logIndex])
+  @@index([principalId, assetId])
+  @@index([status])
+}
+
+enum WithdrawalIntentState {
+  RESERVED
+  BLOCKED_GAS
+  SIGNED
+  PERSISTED
+  BROADCAST
+  AMBIGUOUS
+  PENDING_CONFIRMATION
+  CONFIRMED
+  FINALIZED
+  REORGED
+  FAILED
+}
+
+/// Durable EIP-712 withdrawal intent. `id` IS the canonical intentId; there is
+/// no redundant intentId column. `nonce`/`deadline` are DB BigInt but safe
+/// integers on the wire. `broadcastNonce` is the treasury nonce the custody
+/// agent used (do not introduce a second treasuryNonce field).
+model WithdrawalIntentRecord {
+  id                 String                @id @default(cuid())
+  principalId        String
+  assetId            String
+  chainId            Int
+  destination        String
+  amountAtomic       String
+  nonce              BigInt
+  deadline           BigInt
+  signature          String
+  state              WithdrawalIntentState @default(RESERVED)
+  reservedJournalId  String?               @unique
+  payloadHash        String?
+  // Signed-bytes provenance committed before broadcast (custody consumes).
+  signedRawTx        String?
+  signedCallData     String?
+  signedValueAtomic  String?
+  txHash             String?               @unique
+  broadcastNonce     BigInt?
+  receiptBlockNumber String?
+  receiptBlockHash   String?
+  confirmedJournalId String?               @unique
+  reorgJournalId     String?               @unique
+  replacementPolicy  String                @default("NO_AUTOMATIC_REPLACEMENT")
+  // Authorized provenance captured at reservation so mutable asset config can
+  // never swap the domain route after the user signed.
+  treasuryAddress    String?
+  tokenAddress       String?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Restrict)
+
+  @@unique([assetId, principalId, nonce])
+  @@index([principalId])
+  @@index([state])
+  @@index([txHash])
+}
+
+enum IncidentKind {
+  // Mandatory canonical kinds.
+  DEPOSIT_REORG
+  WITHDRAWAL_REORG
+  RPC_DISAGREEMENT
+  TREASURY_SHORTFALL
+  GAS_STARVATION
+  AMBIGUOUS_CUSTODY_STATE
+  // Additional operational kinds (superset; not renamed equivalents).
+  AMBIGUOUS_BROADCAST
+  NONCE_CONFLICT
+  RECONCILIATION_MISMATCH
+  RPC_QUORUM_FAILURE
+  NATIVE_GAS_LOW
+  LEDGER_IMBALANCE
+  CUSTODY_FAILURE
+}
+
+enum IncidentSeverity {
+  WARNING
+  CRITICAL
+}
+
+enum IncidentStatus {
+  OPEN
+  INVESTIGATING
+  RESOLVED
+}
+
+/// Durable financial incident. Incidents never reverse credits; they record a
+/// discrepancy and require explicit operator resolution with evidence.
+model FinancialIncident {
+  id               String            @id @default(cuid())
+  kind             IncidentKind
+  severity         IncidentSeverity  @default(WARNING)
+  status           IncidentStatus    @default(OPEN)
+  assetId          String?
+  chainId          Int?
+  affectedId       String?
+  evidence         Json
+  createdAt        DateTime          @default(now())
+  resolvedAt       DateTime?
+  operatorId       String?
+  operatorEvidence Json?
+  /// Optimistic concurrency token for resolution / route-state transitions.
+  version          Int               @default(0)
+  updatedAt        DateTime          @updatedAt
+
+  @@index([status, createdAt])
+  @@index([assetId])
+  @@index([kind])
+}
+
+enum ReconciliationStatus {
+  MATCHED
+  MISMATCH
+  UNVERIFIED
+}
+
+/// Persisted treasury reconciliation evidence for one asset at one block.
+model TreasuryReconciliation {
+  id               String               @id @default(cuid())
+  assetId          String
+  chainId          Int
+  observedAtomic   String
+  ledgerAtomic     String
+  differenceAtomic String
+  blockNumber      String?
+  status           ReconciliationStatus @default(UNVERIFIED)
+  evidence         Json
+  incidentId       String?
+  createdAt        DateTime             @default(now())
+
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Restrict)
+
+  @@index([assetId, createdAt])
+  @@index([status])
+}
+
+// ============================================================================
+// GAME AUTHORITY (PostgreSQL-authoritative mutations, events, outbox)
+// ============================================================================
+
+// Immutable, strictly ordered public table events. Ordering is (tableId, eventSeq).
+// The payload is a public projection only: it never contains deck order, undealt
+// cards, or another player's hole cards. `hash` chains to the previous event
+// (previousHash + canonical payload), giving practical tamper evidence over the
+// sequence. Rows are inserted inside the same transaction as the mutation.
+model GameEvent {
+  id           String   @id @default(cuid())
+  tableId      String
+  table        Table    @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  eventSeq     Int
+  version      Int
+  turnId       String?
+  requestId    String?
+  actionId     String?
+  type         String
+  payload      Json
+  previousHash String?
+  hash         String
+  occurredAt   DateTime @default(now())
+
+  @@unique([tableId, eventSeq])
+  @@index([tableId, occurredAt])
+  @@index([type])
+}
+
+// Durable idempotency record for canonical action requests, keyed by
+// (tableId, requestId). Stores the request hash plus the exact masked response
+// and accepted version, so an identical duplicate replays the original result
+// even after the turn has advanced. A different payload under the same
+// requestId is rejected as a conflict.
+model GameActionRequest {
+  id              String   @id @default(cuid())
+  tableId         String
+  table           Table    @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  requestId       String
+  principalId     String
+  turnId          String
+  actionId        String
+  expectedVersion Int
+  requestHash     String
+  status          String   @default("PROCESSING") // PROCESSING | COMPLETED | REJECTED
+  response        Json?
+  resultVersion   Int?
+  eventSeq        Int?
+  errorCode       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([tableId, requestId])
+  @@index([tableId, principalId])
+  @@index([tableId, turnId])
+  @@index([status])
+}
+
+// Transactional outbox. Rows are written in the same DB transaction as the game
+// mutation, so a committed action always has durable side-effect intents that
+// survive process crashes and Redis loss. `dedupeKey` is deterministic
+// (table/hand/version scoped), making dispatch logically idempotent.
+model GameOutbox {
+  id          String   @id @default(cuid())
+  tableId     String
+  table       Table    @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  kind        String
+  dedupeKey   String   @unique
+  payload     Json
+  status      String   @default("PENDING") // PENDING | DISPATCHED | FAILED
+  attempts    Int      @default(0)
+  availableAt DateTime @default(now())
+  lastError   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status, availableAt])
+  @@index([tableId, status])
+}
+
+// Append-only, ordered canonical tournament audit. Records the accepted facts
+// of tournament lifecycle transitions (start / reconcile / table close / final
+// settlement) including settlement payout references. `stateFingerprint` is a
+// stable fingerprint of the accepted state, so a repeated reconcile or settle
+// cannot append a spurious event or duplicate an economic payout. `hash` chains
+// to `previousHash` over the canonical payload, giving tamper evidence over the
+// per-tournament sequence. Rows are written inside the same DB transaction as
+// the accepted facts where possible.
+model TournamentEvent {
+  id               String     @id @default(cuid())
+  tournamentId     String
+  tournament       Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  eventSeq         Int
+  type             String
+  payload          Json
+  stateFingerprint String
+  requestRef       String?
+  previousHash     String?
+  hash             String
+  occurredAt       DateTime   @default(now())
+
+  @@unique([tournamentId, eventSeq])
+  @@unique([tournamentId, stateFingerprint])
+  @@index([tournamentId, occurredAt])
+  @@index([type])
+}
+
+// ============================================================================
+// GAME ECONOMY — chips (integer gameplay units) vs atomic assets
+//
+// Engine chips are integer, independent gameplay units. They are NOT cents and
+// carry no implicit asset value. PLAY_CHIPS tables/tournaments settle against a
+// durable principal ChipAccount balance plus append-only journal/grants.
+//
+// An ASSET-backed table/tournament additionally references a persisted
+// EconomicPolicy. Conversion between chips and atomic asset amounts is explicit,
+// exact (an integer atomic amount must result) and persisted as a
+// ChipAssetConversion linked to an immutable AtomicLedger journal request.
+// ============================================================================
+
+enum ChipAccountKind {
+  AVAILABLE
+  TABLE_RESERVE
+  TOURNAMENT_RESERVE
+  OPERATOR
+}
+
+/// Durable chip account. `balance` is an integer chip count. AVAILABLE accounts
+/// hold a principal's spendable chips; *_RESERVE accounts escrow chips for a
+/// table/tournament (`scopeKey`); OPERATOR accounts receive rake/fees. `version`
+/// drives compare-and-swap and every mutation is paired with a journal row.
+model ChipAccount {
+  id          String          @id @default(cuid())
+  principalId String
+  kind        ChipAccountKind
+  scopeKey    String          @default("@owner") // table/tournament id, or @owner/@system
+  balance     BigInt          @default(0)
+  version     Int             @default(0)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  entries ChipLedgerEntry[]
+
+  @@unique([principalId, kind, scopeKey])
+  @@index([principalId])
+  @@index([kind, scopeKey])
+}
+
+enum ChipEntryType {
+  GRANT
+  TRANSFER_IN
+  TRANSFER_OUT
+  BUY_IN
+  CASH_OUT
+  HAND_WIN
+  HAND_LOSS
+  RAKE
+  TOURNAMENT_BUY_IN
+  TOURNAMENT_FEE
+  TOURNAMENT_PAYOUT
+  TOURNAMENT_REFUND
+}
+
+/// Append-only chip journal. `amount` is a signed integer chip delta and
+/// `balanceAfter` is the cached account balance immediately after applying it.
+/// Never use this table for asset atomic amounts.
+model ChipLedgerEntry {
+  id             String        @id @default(cuid())
+  accountId      String
+  account        ChipAccount   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  amount         BigInt
+  balanceAfter   BigInt
+  type           ChipEntryType
+  referenceId    String?
+  idempotencyKey String?       @unique
+  metadata       Json?
+  createdAt      DateTime      @default(now())
+
+  @@index([accountId, createdAt])
+  @@index([referenceId])
+  @@index([type])
+}
+
+/// Operator-issued chip grant. Only an explicit operator/fixture grant funds a
+/// PLAY_CHIPS account; there is no implicit wallet or finance withdrawal path.
+model ChipGrant {
+  id             String   @id @default(cuid())
+  principalId    String
+  amount         BigInt
+  reason         String
+  operatorId     String
+  idempotencyKey String   @unique
+  ledgerEntryId  String?  @unique
+  createdAt      DateTime @default(now())
+
+  @@index([principalId, createdAt])
+}
+
+enum EconomicPolicyStatus {
+  DRAFT
+  ACTIVE
+  FROZEN
+  RETIRED
+}
+
+/// Persisted exact chip<->asset conversion policy. `atomic = chips *
+/// atomicDenominator / chipsNumerator` and must divide exactly (no rounding).
+model EconomicPolicy {
+  id                String               @id @default(cuid())
+  name              String
+  assetId           String
+  chipsNumerator    BigInt
+  atomicDenominator BigInt
+  version           Int                  @default(1)
+  status            EconomicPolicyStatus @default(DRAFT)
+  createdBy         String?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  tables      Table[]               @relation("TableEconomicPolicy")
+  tournaments Tournament[]          @relation("TournamentEconomicPolicy")
+  conversions ChipAssetConversion[]
+  settlements ChipAssetSettlement[]
+
+  @@unique([name, version])
+  @@index([status])
+  @@index([assetId])
+}
+
+enum ChipAssetConversionDirection {
+  CHIPS_TO_ATOMIC   // user available -> in-play/tournament reserve
+  ATOMIC_TO_CHIPS   // reserve -> user available
+  SETTLEMENT_WIN    // atomic liability into a winner's in-play reserve
+  SETTLEMENT_LOSS   // atomic liability out of a loser's in-play reserve
+  TOURNAMENT_FEE    // user available -> operator
+  TOURNAMENT_PAYOUT // tournament reserve -> user available
+}
+
+enum ChipAssetConversionStatus {
+  PENDING
+  COMMITTED
+  FAILED
+}
+
+/// Persisted evidence of one exact conversion between a chip operation and an
+/// atomic journal transaction. `journalRequestId` is the AtomicLedger
+/// idempotency key AND is unique here, so a concurrent replay can never create
+/// two conversion rows for the same journal operation.
+model ChipAssetConversion {
+  id               String                      @id @default(cuid())
+  principalId      String
+  economicPolicyId String
+  economicPolicy   EconomicPolicy              @relation(fields: [economicPolicyId], references: [id], onDelete: Restrict)
+  direction        ChipAssetConversionDirection
+  scopeType        String // TABLE | TOURNAMENT
+  scopeId          String
+  chipAmount       BigInt
+  atomicAmount     String // canonical non-negative decimal string
+  assetId          String
+  journalRequestId String                      @unique
+  status           ChipAssetConversionStatus   @default(PENDING)
+  idempotencyKey   String?                     @unique
+  metadata         Json?
+  createdAt        DateTime                    @default(now())
+  updatedAt        DateTime                    @updatedAt
+
+  @@index([principalId])
+  @@index([scopeType, scopeId])
+  @@index([assetId])
+}
+
+/// Persisted, idempotent record of one ASSET-backed hand settlement. The
+/// `breakdown` maps each principal to its exact chip and atomic net delta, so
+/// every engine chip delta has a durable policy reference even though the
+/// on-chain movement is a single balanced journal transaction.
+model ChipAssetSettlement {
+  id               String         @id @default(cuid())
+  economicPolicyId String
+  economicPolicy   EconomicPolicy @relation(fields: [economicPolicyId], references: [id], onDelete: Restrict)
+  assetId          String
+  scopeType        String // TABLE | TOURNAMENT
+  scopeId          String
+  referenceId      String // hand id / tournament id
+  journalRequestId String         @unique
+  rakeAtomic       String         @default("0")
+  breakdown        Json
+  createdAt        DateTime       @default(now())
+
+  @@unique([scopeType, scopeId, referenceId])
+  @@index([assetId])
+}
+
+/// Public-key-only operational evidence written by the isolated custody worker.
+/// Readiness requires fresh evidence for each configured chain/treasury route.
+model CustodyHeartbeat {
+  id            String   @id @default(cuid())
+  chainId       Int
+  signerAddress String
+  signerReady   Boolean
+  gasReady      Boolean
+  workerId      String
+  observedAt    DateTime
+  createdAt     DateTime @default(now())
+
+  @@unique([chainId, signerAddress, workerId])
+  @@index([chainId, signerAddress, observedAt])
 }

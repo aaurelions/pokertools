@@ -69,16 +69,14 @@ describe("Authentication & Authorization Lifecycle Test", () => {
       data: {
         username: `test_auth_${randomId}`,
         address: `0xtest${randomId}`,
-        accounts: {
-          create: [
-            {
-              currency: "USDC",
-              type: "MAIN",
-              balance: 5000,
-            },
-          ],
-        },
       },
+    });
+
+    // Canonical chip funding (the legacy cents Account/LedgerEntry model is gone).
+    await app.financialManager.grantChips(testUser.id, 5000, {
+      reason: "test_fixture",
+      operatorId: testUser.id,
+      idempotencyKey: `auth-lifecycle-grant:${testUser.id}`,
     });
 
     const jti = `test_jti_${randomId}`;
@@ -206,9 +204,6 @@ describe("Authentication & Authorization Lifecycle Test", () => {
       data: {
         username: `owner_${randomId}`,
         address: `0xowner${randomId}`,
-        accounts: {
-          create: [{ currency: "USDC", type: "MAIN", balance: 10000 }],
-        },
       },
     });
 
@@ -216,11 +211,16 @@ describe("Authentication & Authorization Lifecycle Test", () => {
       data: {
         username: `other_${randomId}`,
         address: `0xother${randomId}`,
-        accounts: {
-          create: [{ currency: "USDC", type: "MAIN", balance: 10000 }],
-        },
       },
     });
+
+    for (const id of [user1.id, user2.id]) {
+      await app.financialManager.grantChips(id, 10000, {
+        reason: "test_fixture",
+        operatorId: id,
+        idempotencyKey: `auth-lifecycle-grant-${id}`,
+      });
+    }
 
     const jti1 = `jti1_${randomId}`;
     const jti2 = `jti2_${randomId}`;

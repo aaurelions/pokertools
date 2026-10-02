@@ -17,11 +17,9 @@
     "contracts:build": "forge build",
     "contracts:test": "forge test",
     "db:prepare": "npm run db:ensure:test --workspace=@pokertools/api",
-    "pretest": "npm run db:prepare",
-    "test": "vitest run tests/blockchain-service.test.ts tests/withdrawal-bot.test.ts tests/process-safety.test.ts",
-    "pretest:e2e": "npm run contracts:build && npm run db:prepare",
-    "test:e2e": "vitest run tests/e2e/full-lifecycle.test.ts",
-    "test:stand-alone": "npm run infra:up --workspace=@pokertools/api && npm run test:e2e; npm run infra:down --workspace=@pokertools/api",
+    "test": "vitest run tests/core tests/process-safety.test.ts",
+    "test:workflow": "vitest run tests/core/withdrawal-workflow.test.ts",
+    "typecheck:workflow": "tsc --noEmit",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts"
   },
@@ -38,6 +36,7 @@
     "npm": ">=10.0.0"
   },
   "dependencies": {
+    "@pokertools/api": "1.0.20",
     "@pokertools/types": "1.0.20",
     "@prisma/adapter-better-sqlite3": "^7.10.0",
     "@prisma/adapter-pg": "^7.10.0",

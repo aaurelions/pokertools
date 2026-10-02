@@ -12,13 +12,87 @@ function setup() {
   return { client, fetch };
 }
 
+const wireState = {
+  config: { smallBlind: 5, bigBlind: 10, maxPlayers: 2 },
+  players: [null, null],
+  maxPlayers: 2,
+  handNumber: 1,
+  buttonSeat: null,
+  bigBlindSeat: null,
+  deck: [],
+  board: [],
+  street: "PREFLOP",
+  pots: [],
+  currentBets: {},
+  minRaise: 10,
+  lastRaiseAmount: 0,
+  actionTo: null,
+  lastAggressorSeat: null,
+  activePlayers: [],
+  winners: null,
+  rakeThisHand: 0,
+  smallBlind: 5,
+  bigBlind: 10,
+  ante: 0,
+  blindLevel: 0,
+  timeBanks: {},
+  timeBankActiveSeat: null,
+  actionHistory: [],
+  timestamp: 1700000000000,
+  handId: "h1",
+  viewingPlayerId: null,
+  version: 1,
+};
+
+const receipt = {
+  requestId: "req-stable",
+  tableId: "t1",
+  handId: "h1",
+  turnId: "turn-1",
+  actionId: "act-fold",
+  version: 2,
+  eventSeq: 3,
+  acceptedAt: 1700000000000,
+};
+
+const actionResult = {
+  receipt,
+  observation: {
+    tableId: "t1",
+    handId: "h1",
+    turnId: "turn-1",
+    version: 2,
+    eventSeq: 3,
+    state: { ...wireState, version: 2 },
+    legalActions: [],
+  },
+};
+
+const actionRequest = {
+  requestId: "req-stable",
+  turnId: "turn-1",
+  expectedVersion: 1,
+  actionId: "act-fold",
+};
+
 afterEach(() => vi.useRealTimers());
 
 describe("HTTP reliability", () => {
-  it("does not replay unprotected game actions after a lost response", async () => {
+  it("bounds automatic retries for reads", async () => {
+    const { client, fetch } = setup();
+    fetch
+      .mockRejectedValueOnce(new Error("Network error"))
+      .mockRejectedValueOnce(new Error("Network error"))
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ tables: [] }) });
+
+    await expect(client.getTables()).resolves.toEqual([]);
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not replay an unprotected mutation after a lost response", async () => {
     const { client, fetch } = setup();
     fetch.mockRejectedValue(new Error("Connection lost after server committed"));
-    await expect(client.call("t1")).rejects.toThrow(/Connection lost/);
+    await expect(client.saveNote("p1", "hello")).rejects.toThrow(/Connection lost/);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
@@ -30,6 +104,51 @@ describe("HTTP reliability", () => {
     await client.buyIn("t1", { amount: 100, seat: 0, idempotencyKey: "one-operation" });
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(fetch.mock.calls[0][1].body).toBe(fetch.mock.calls[1][1].body);
+  });
+
+  it("replays a canonical action with the identical serialized body and requestId", async () => {
+    const { client, fetch } = setup();
+    fetch
+      .mockRejectedValueOnce(new Error("Lost response"))
+      .mockResolvedValueOnce({ ok: true, json: async () => actionResult });
+
+    await expect(client.action("t1", actionRequest)).resolves.toEqual(actionResult);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls[0][1].body).toBe(fetch.mock.calls[1][1].body);
+    expect(JSON.parse(fetch.mock.calls[1][1].body).requestId).toBe("req-stable");
+  });
+
+  it("replays a signed withdrawal by its stable EIP-712 intent identity", async () => {
+    const { client, fetch } = setup();
+    const submission = {
+      intent: {
+        intentId: "intent-1",
+        principalId: "p1",
+        assetId: "eip155:31337/erc20:0x5fbdb2315678afecb367f032d93f642f64180aa3",
+        destination: "0x742d35cc6634c0532925a3b844bc454e4438f44e",
+        amountAtomic: "1000000",
+        nonce: 7,
+        deadline: 1893456000,
+        chainId: 31337,
+      },
+      signature: `0x${"ab".repeat(65)}`,
+    };
+    // A withdrawal record extends the full signed EIP-712 intent with its
+    // lifecycle fields; every bound economic field must be present.
+    const record = {
+      ...submission.intent,
+      status: "SIGNED",
+      txHash: null,
+    };
+
+    fetch
+      .mockRejectedValueOnce(new Error("Lost response"))
+      .mockResolvedValueOnce({ ok: true, json: async () => record });
+
+    await expect(client.submitWithdrawal(submission)).resolves.toEqual(record);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls[0][1].body).toBe(fetch.mock.calls[1][1].body);
+    expect(JSON.parse(fetch.mock.calls[1][1].body).intent.intentId).toBe("intent-1");
   });
 
   it("returns unchanged state immediately without retrying 304", async () => {
@@ -51,11 +170,11 @@ describe("HTTP reliability", () => {
     await expect(client.deleteNote("p1")).resolves.toBeUndefined();
   });
 
-  it("cleans up timers after a failed request", async () => {
+  it("cleans up timers after a failed non-retried request", async () => {
     vi.useFakeTimers();
     const { client, fetch } = setup();
     fetch.mockRejectedValue(new Error("Offline"));
-    await expect(client.call("t1")).rejects.toThrow("Offline");
+    await expect(client.saveNote("p1", "hello")).rejects.toThrow("Offline");
     expect(vi.getTimerCount()).toBe(0);
   });
 

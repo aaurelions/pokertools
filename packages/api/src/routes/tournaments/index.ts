@@ -17,6 +17,11 @@ import {
 } from "../../utils/tournaments.js";
 import { config } from "../../config.js";
 import { getHouseUserId } from "../../utils/house-user.js";
+import { InsufficientFundsError } from "../../utils/errors.js";
+import {
+  recordTournamentEvent,
+  tournamentStateFingerprint,
+} from "../../services/tournament-events.js";
 
 type TournamentStatus = "REGISTRATION" | "RUNNING" | "FINISHED" | "CANCELLED";
 
@@ -160,6 +165,47 @@ export async function reconcileTournament(
       );
     }
     await reconcileTournamentState(fastify, tournamentId, actorUserId, MAX_RECONCILE_ITERATIONS);
+    // Durable append-only audit of the accepted reconciliation state. Repeated
+    // reconciles that accept the same state produce the same stable fingerprint
+    // and append no spurious event. Audit failure never rolls back accepted
+    // director work (seats/stacks are already committed).
+    try {
+      const after = await fastify.prisma.tournament.findUnique({
+        where: { id: tournamentId },
+        select: {
+          status: true,
+          entries: {
+            select: {
+              id: true,
+              status: true,
+              placement: true,
+              currentTableId: true,
+              currentSeat: true,
+            },
+          },
+          tables: { select: { id: true, status: true } },
+        },
+      });
+      if (after && after.status === "RUNNING") {
+        const stateFingerprint = tournamentStateFingerprint(after);
+        await recordTournamentEvent(fastify.prisma, {
+          tournamentId,
+          type: "TOURNAMENT_RECONCILED",
+          payload: {
+            status: after.status,
+            tables: after.tables,
+            entries: after.entries,
+          },
+          stateFingerprint,
+          requestRef: actorUserId,
+        });
+      }
+    } catch (error) {
+      fastify.log.warn(
+        { tournamentId, error },
+        "Failed to record tournament reconcile audit event"
+      );
+    }
   } finally {
     try {
       await tableLock?.unlock();
@@ -625,7 +671,29 @@ async function closeEmptyTournamentTable(
   if (assigned > 0) return false;
   const state = await fastify.gameManager.getState(tableId);
   if (state.players.some((player) => player && player.stack > 0)) return false;
+  const table = await fastify.prisma.table.findUnique({
+    where: { id: tableId },
+    select: { tournamentId: true },
+  });
   await fastify.prisma.table.update({ where: { id: tableId }, data: { status: "CLOSED" } });
+  // Durable audit of the closed table. Fingerprint is stable per table, so a
+  // repeated close attempt appends no duplicate event.
+  if (table?.tournamentId) {
+    try {
+      await recordTournamentEvent(fastify.prisma, {
+        tournamentId: table.tournamentId,
+        type: "TABLE_CLOSED",
+        payload: { tableId },
+        stateFingerprint: `table-closed:${tableId}`,
+        requestRef: null,
+      });
+    } catch (error) {
+      fastify.log.warn(
+        { tournamentId: table.tournamentId, tableId, error },
+        "Failed to record tournament table-close audit event"
+      );
+    }
+  }
   return true;
 }
 
@@ -857,93 +925,37 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
             });
           }
 
-          const totalCost = tournament.buyIn + tournament.fee;
-          const totalCostBigInt = BigInt(totalCost);
-
-          // Debit MAIN only — do NOT sit into engine tables at registration
+          // Debit chips only — do NOT sit into engine tables at registration.
+          // PLAY_CHIPS moves available chips into the tournament pool; an
+          // ASSET-backed tournament performs the exact persisted conversion.
           const houseUserId = await getHouseUserId(fastify.prisma);
-          await fastify.prisma.$transaction(async (tx) => {
-            const mainAccount = await tx.account.findUniqueOrThrow({
-              where: {
-                userId_currency_type: { userId, currency: config.DEFAULT_CURRENCY, type: "MAIN" },
-              },
+          try {
+            await fastify.prisma.$transaction(async (tx) => {
+              await tx.tournamentEntry.create({
+                data: { tournamentId: id, userId, seat },
+              });
+              await fastify.financialManager.applyTournamentRegistration(
+                tx,
+                userId,
+                id,
+                BigInt(tournament.buyIn),
+                BigInt(tournament.fee),
+                { idempotencyKey: `tournament-register:${id}:${userId}`, operatorId: houseUserId }
+              );
+              await tx.tournament.update({
+                where: { id },
+                data: { prizePool: { increment: tournament.buyIn } },
+              });
             });
-            if (mainAccount.balance < totalCostBigInt) {
+          } catch (error) {
+            if (error instanceof InsufficientFundsError) {
               throw Object.assign(new Error("Insufficient funds for tournament registration"), {
                 statusCode: 402,
                 code: "INSUFFICIENT_FUNDS",
               });
             }
-
-            await tx.tournamentEntry.create({
-              data: { tournamentId: id, userId, seat },
-            });
-            await tx.ledgerEntry.createMany({
-              data: [
-                {
-                  accountId: mainAccount.id,
-                  amount: -BigInt(tournament.buyIn),
-                  type: "TOURNAMENT_BUY_IN",
-                  referenceId: id,
-                },
-                ...(tournament.fee > 0
-                  ? [
-                      {
-                        accountId: mainAccount.id,
-                        amount: -BigInt(tournament.fee),
-                        type: "TOURNAMENT_FEE" as const,
-                        referenceId: id,
-                      },
-                    ]
-                  : []),
-              ],
-            });
-            await tx.account.update({
-              where: { id: mainAccount.id },
-              data: { balance: { decrement: totalCostBigInt } },
-            });
-            await tx.tournament.update({
-              where: { id },
-              data: { prizePool: { increment: tournament.buyIn } },
-            });
-
-            // Credit the TOURNAMENT_ESCROW account (double-entry)
-            const escrowAccount = await tx.account.findUnique({
-              where: {
-                userId_currency_type: {
-                  userId: houseUserId,
-                  currency: config.DEFAULT_CURRENCY,
-                  type: "TOURNAMENT_ESCROW",
-                },
-              },
-            });
-            if (escrowAccount) {
-              await tx.ledgerEntry.createMany({
-                data: [
-                  {
-                    accountId: escrowAccount.id,
-                    amount: BigInt(tournament.buyIn),
-                    type: "TOURNAMENT_BUY_IN",
-                    referenceId: id,
-                  },
-                  ...(tournament.fee > 0
-                    ? [
-                        {
-                          accountId: escrowAccount.id,
-                          amount: BigInt(tournament.fee),
-                          type: "TOURNAMENT_FEE" as const,
-                          referenceId: id,
-                        },
-                      ]
-                    : []),
-                ],
-              });
-              await tx.account.update({
-                where: { id: escrowAccount.id },
-                data: { balance: { increment: totalCostBigInt } },
-              });
-            }
-          });
+            throw error;
+          }
 
           return { success: true };
         },
@@ -1104,6 +1116,27 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
               request.user.userId
             );
           }
+        }
+
+        // Durable audit of the accepted start facts. This is wrapped so an audit
+        // write failure cannot roll back an already-seated/dealt tournament.
+        try {
+          await recordTournamentEvent(fastify.prisma, {
+            tournamentId: tournament.id,
+            type: "TOURNAMENT_STARTED",
+            payload: {
+              tableIds,
+              distribution,
+              players: registeredEntries.length,
+            },
+            stateFingerprint: `started:${distribution.join(",")}:${registeredEntries.length}`,
+            requestRef: request.user.userId,
+          });
+        } catch (error) {
+          fastify.log.warn(
+            { tournamentId: tournament.id, error },
+            "Failed to record tournament start audit event"
+          );
         }
 
         return { success: true, tableIds, distribution };
@@ -1404,32 +1437,17 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
             } => payout !== null
           );
 
-        await fastify.prisma.$transaction(async (tx) => {
-          const totalPayoutBigInt = payouts.reduce((sum, p) => sum + BigInt(p.amount), 0n);
+        const closedTableIds = tournament.tables.map((table) => table.id);
 
+        await fastify.prisma.$transaction(async (tx) => {
           for (const payout of payouts) {
-            const mainAccount = await tx.account.findUniqueOrThrow({
-              where: {
-                userId_currency_type: {
-                  userId: payout.entry.userId,
-                  currency: config.DEFAULT_CURRENCY,
-                  type: "MAIN",
-                },
-              },
-            });
-            await tx.ledgerEntry.create({
-              data: {
-                accountId: mainAccount.id,
-                amount: BigInt(payout.amount),
-                type: "TOURNAMENT_PAYOUT",
-                referenceId: tournament.id,
-                metadata: { placement: payout.placement },
-              },
-            });
-            await tx.account.update({
-              where: { id: mainAccount.id },
-              data: { balance: { increment: BigInt(payout.amount) } },
-            });
+            await fastify.financialManager.payoutTournament(
+              tx,
+              payout.entry.userId,
+              tournament.id,
+              payout.amount,
+              { idempotencyKey: `tournament-settle:${tournament.id}:${payout.entry.id}` }
+            );
           }
 
           await tx.tournamentEntry.update({
@@ -1470,33 +1488,27 @@ export const tournamentRoutes: FastifyPluginAsync = async (fastify) => {
             data: { status: "CLOSED" },
           });
 
-          // Debit the TOURNAMENT_ESCROW account for total payouts (double-entry)
-          if (totalPayoutBigInt > 0n) {
-            const houseUserId = await getHouseUserId(fastify.prisma);
-            const escrowAccount = await tx.account.findUnique({
-              where: {
-                userId_currency_type: {
-                  userId: houseUserId,
-                  currency: config.DEFAULT_CURRENCY,
-                  type: "TOURNAMENT_ESCROW",
-                },
-              },
-            });
-            if (escrowAccount) {
-              await tx.ledgerEntry.create({
-                data: {
-                  accountId: escrowAccount.id,
-                  amount: -totalPayoutBigInt,
-                  type: "TOURNAMENT_PAYOUT",
-                  referenceId: tournament.id,
-                },
-              });
-              await tx.account.update({
-                where: { id: escrowAccount.id },
-                data: { balance: { decrement: totalPayoutBigInt } },
-              });
-            }
-          }
+          // Durable append-only settlement audit inside the same transaction as
+          // the accepted payouts and status change. The stable fingerprint makes
+          // a repeated settle a no-op (it never duplicates the economic payout).
+          await recordTournamentEvent(tx, {
+            tournamentId: tournament.id,
+            type: "TOURNAMENT_SETTLED",
+            payload: {
+              winnerUserId: winner.userId,
+              prizePool: tournament.prizePool,
+              payoutPercentages,
+              payouts: payouts.map((payout) => ({
+                userId: payout.entry.userId,
+                entryId: payout.entry.id,
+                placement: payout.placement,
+                amount: payout.amount,
+              })),
+              closedTableIds,
+            },
+            stateFingerprint: `settled:${tournament.id}`,
+            requestRef: request.user.userId,
+          });
         });
 
         await fastify.auditManager.record({

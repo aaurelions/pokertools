@@ -7,6 +7,7 @@ import {
   createTable,
   buyIn,
   executeAction,
+  getObservation,
   getTableState,
   getUserBalances,
   standFromTable,
@@ -57,10 +58,10 @@ describe("Financial Integrity - Ledger and Balance Tests", () => {
     // =========================================================================
     // STEP 3: Verify Ledger Entries
     // =========================================================================
-    const ledgerEntries = await ctx.app.prisma.ledgerEntry.findMany({
+    const ledgerEntries = await ctx.app.prisma.chipLedgerEntry.findMany({
       where: {
         account: {
-          userId: player1.id,
+          principalId: player1.id,
         },
       },
       include: {
@@ -71,23 +72,25 @@ describe("Financial Integrity - Ledger and Balance Tests", () => {
       },
     });
 
-    // Should have exactly 2 entries: debit from MAIN, credit to IN_PLAY
+    // Buy-in is a balanced transfer: debit AVAILABLE, credit TABLE reserve.
     expect(ledgerEntries.length).toBeGreaterThanOrEqual(2);
 
-    const mainDebit = ledgerEntries.find((e) => e.account.type === "MAIN" && e.type === "BUY_IN");
-    const inPlayCredit = ledgerEntries.find(
-      (e) => e.account.type === "IN_PLAY" && e.type === "BUY_IN"
+    const availableDebit = ledgerEntries.find(
+      (e) => e.account.kind === "AVAILABLE" && e.type === "BUY_IN"
+    );
+    const reserveCredit = ledgerEntries.find(
+      (e) => e.account.kind === "TABLE_RESERVE" && e.type === "BUY_IN"
     );
 
-    expect(mainDebit).toBeTruthy();
-    expect(inPlayCredit).toBeTruthy();
+    expect(availableDebit).toBeTruthy();
+    expect(reserveCredit).toBeTruthy();
 
     // Amounts should be equal and opposite
-    expect(mainDebit?.amount).toBe(-2000n);
-    expect(inPlayCredit?.amount).toBe(2000n);
+    expect(availableDebit?.amount).toBe(-2000n);
+    expect(reserveCredit?.amount).toBe(2000n);
 
     console.log(
-      `✅ Double-entry accounting verified: -${Number(mainDebit!.amount < 0n ? -mainDebit!.amount : mainDebit!.amount)} MAIN, +${Number(inPlayCredit!.amount)} IN_PLAY`
+      `✅ Balanced chip journal verified: -${Number(availableDebit!.amount < 0n ? -availableDebit!.amount : availableDebit!.amount)} AVAILABLE, +${Number(reserveCredit!.amount)} TABLE_RESERVE`
     );
 
     // =========================================================================
@@ -97,24 +100,30 @@ describe("Financial Integrity - Ledger and Balance Tests", () => {
     expect(newBalances.main).toBe(48000); // 50000 - 2000
     expect(newBalances.inPlay).toBe(2000);
 
-    const mainAccount = await ctx.app.prisma.account.findFirst({
+    const availableAccount = await ctx.app.prisma.chipAccount.findUnique({
       where: {
-        userId: player1.id,
-        type: "MAIN",
+        principalId_kind_scopeKey: {
+          principalId: player1.id,
+          kind: "AVAILABLE",
+          scopeKey: "@owner",
+        },
       },
     });
 
-    const inPlayAccount = await ctx.app.prisma.account.findFirst({
+    const reserveAccount = await ctx.app.prisma.chipAccount.findUnique({
       where: {
-        userId: player1.id,
-        type: "IN_PLAY",
+        principalId_kind_scopeKey: {
+          principalId: player1.id,
+          kind: "TABLE_RESERVE",
+          scopeKey: ctx.tableId!,
+        },
       },
     });
 
-    expect(mainAccount?.balance).toBe(48000n);
-    expect(inPlayAccount?.balance).toBe(2000n);
+    expect(availableAccount?.balance).toBe(48000n);
+    expect(reserveAccount?.balance).toBe(2000n);
 
-    console.log(`✅ Account balances match ledger entries`);
+    console.log(`✅ Chip account balances match journal entries`);
 
     // =========================================================================
     // STEP 5: Cash Out and Verify Reverse Entries
@@ -128,10 +137,10 @@ describe("Financial Integrity - Ledger and Balance Tests", () => {
     expect(cashOutBalances.main).toBeGreaterThan(48000);
     expect(cashOutBalances.main).toBeLessThanOrEqual(50000);
 
-    const allLedgerEntries = await ctx.app.prisma.ledgerEntry.findMany({
+    const allLedgerEntries = await ctx.app.prisma.chipLedgerEntry.findMany({
       where: {
         account: {
-          userId: player1.id,
+          principalId: player1.id,
         },
       },
       orderBy: {
@@ -143,7 +152,7 @@ describe("Financial Integrity - Ledger and Balance Tests", () => {
     const cashOutEntry = allLedgerEntries.find((e) => e.type === "CASH_OUT");
     expect(cashOutEntry).toBeTruthy();
 
-    console.log(`✅ Cash out ledger entries created`);
+    console.log(`✅ Cash out chip journal entries created`);
     console.log(
       `✅ Final balance: ${cashOutBalances.main} MAIN, ${cashOutBalances.inPlay} IN_PLAY`
     );
@@ -189,18 +198,18 @@ describe("Financial Integrity - Ledger and Balance Tests", () => {
     // Balance should NOT have changed
     expect(balancesAfterSecond.inPlay).toBe(inPlayAfterFirst);
 
-    // Verify ledger entries
-    const ledgerEntries = await ctx.app.prisma.ledgerEntry.findMany({
+    // Verify chip journal entries
+    const ledgerEntries = await ctx.app.prisma.chipLedgerEntry.findMany({
       where: {
         account: {
-          userId: player1.id,
+          principalId: player1.id,
         },
         type: "BUY_IN",
         referenceId: tableId,
       },
     });
 
-    // Should only have 2 entries (debit MAIN, credit IN_PLAY) from first buy-in
+    // Should only have 2 entries (debit AVAILABLE, credit TABLE reserve) from first buy-in
     expect(ledgerEntries.length).toBe(2);
 
     console.log(`✅ Idempotency prevented double-spending`);
@@ -321,35 +330,24 @@ describe("Financial Integrity - Ledger and Balance Tests", () => {
       (await getUserBalances(ctx.app, player1.id)).inPlay +
       (await getUserBalances(ctx.app, player2.id)).inPlay;
 
-    if (state.config.rake && state.config.rake > 0) {
+    if (state.config.rakePercent && state.config.rakePercent > 0) {
       expect(finalTotalInPlay).toBeLessThan(initialTotalInPlay);
 
       const rakeCollected = initialTotalInPlay - finalTotalInPlay;
       console.log(`✅ Rake collected: ${rakeCollected} chips`);
 
-      // Check if House account received rake
-      const houseAccount = await ctx.app.prisma.account.findFirst({
+      // Rake is credited to the operator account in the chip journal.
+      const rakeEntries = await ctx.app.prisma.chipLedgerEntry.findMany({
         where: {
-          user: {
-            role: "ADMIN",
-          },
-          type: "MAIN",
+          type: "RAKE",
+          referenceId: tableId,
         },
       });
 
-      if (houseAccount) {
-        const rakeEntries = await ctx.app.prisma.ledgerEntry.findMany({
-          where: {
-            accountId: houseAccount.id,
-            type: "RAKE",
-          },
-        });
-
-        if (rakeEntries.length > 0) {
-          const totalRakeInLedger = rakeEntries.reduce((sum, entry) => sum + entry.amount, 0n);
-          expect(totalRakeInLedger).toBeGreaterThan(0n);
-          console.log(`✅ House account received ${totalRakeInLedger} in rake`);
-        }
+      if (rakeEntries.length > 0) {
+        const totalRakeInLedger = rakeEntries.reduce((sum, entry) => sum + entry.amount, 0n);
+        expect(totalRakeInLedger).toBeGreaterThan(0n);
+        console.log(`✅ Operator account received ${totalRakeInLedger} in rake`);
       }
     }
 
@@ -371,6 +369,9 @@ describe("Financial Integrity - Ledger and Balance Tests", () => {
     await buyIn(ctx.app, player2.token, tableId, 5000, 1);
 
     const initialBalance = await getUserBalances(ctx.app, player1.id);
+    const initialBalance2 = await getUserBalances(ctx.app, player2.id);
+    const tableChipsBefore =
+      initialBalance.main + initialBalance.inPlay + initialBalance2.main + initialBalance2.inPlay;
 
     await executeAction(ctx.app, player1.token, tableId, {
       type: "DEAL",
@@ -378,19 +379,28 @@ describe("Financial Integrity - Ledger and Balance Tests", () => {
 
     let state = await getTableState(ctx.app, player1.token, tableId);
 
-    // Player 1 goes all-in
+    // Player 1 goes all-in at the first legal opportunity. With a posted blind
+    // the opening BET is not legal; an all-in is a RAISE, or an all-in CALL when
+    // the short stack cannot reach the current bet.
     const player1Seat = 0;
     if (state.actionTo === player1Seat) {
-      const player1Stack = state.players[player1Seat]?.stack || 0;
+      const observation = await getObservation(ctx.app, player1.token, tableId);
+      const allIn =
+        observation.legalActions.find((a) => a.family === "RAISE") ??
+        observation.legalActions.find((a) => a.family === "BET") ??
+        observation.legalActions.find((a) => a.family === "CALL");
+      expect(allIn).toBeDefined();
+
+      const amount = allIn!.family === "CALL" ? allIn!.amount : (allIn!.maxAmount ?? allIn!.amount);
       await executeAction(ctx.app, player1.token, tableId, {
-        type: "BET",
-        amount: player1Stack,
+        type: allIn!.family,
+        ...(amount === undefined ? {} : { amount }),
       });
 
       state = await getTableState(ctx.app, player1.token, tableId);
 
       // Player 2 calls
-      if (state.actionTo !== undefined) {
+      if (state.actionTo !== undefined && state.actionTo !== null) {
         await executeAction(ctx.app, player2.token, tableId, {
           type: "CALL",
         });
@@ -400,20 +410,23 @@ describe("Financial Integrity - Ledger and Balance Tests", () => {
       state = await getTableState(ctx.app, player1.token, tableId);
 
       if (state.street === "SHOWDOWN" && state.winners) {
-        const player1Lost = !state.winners.some((w) => w.seat === player1Seat);
+        const player1Lost = !state.winners.some((w: { seat: number }) => w.seat === player1Seat);
 
         if (player1Lost) {
-          // Player 1 should be busted
+          // Player 1 should be busted in the authoritative engine state.
           const finalStack = state.players[player1Seat]?.stack || 0;
           expect(finalStack).toBe(0);
 
+          // Chips are conserved across the table: no phantom chips are created
+          // while settlement is pending.
           const finalBalance = await getUserBalances(ctx.app, player1.id);
-
-          // All chips lost from IN_PLAY
-          expect(finalBalance.inPlay).toBeLessThan(initialBalance.inPlay);
+          const finalBalance2 = await getUserBalances(ctx.app, player2.id);
+          const tableChipsAfter =
+            finalBalance.main + finalBalance.inPlay + finalBalance2.main + finalBalance2.inPlay;
+          expect(tableChipsAfter).toBe(tableChipsBefore);
 
           console.log(`✅ Player bankruptcy handled correctly`);
-          console.log(`✅ Final IN_PLAY balance: ${finalBalance.inPlay}`);
+          console.log(`✅ Table chips conserved: ${tableChipsAfter}`);
         }
       }
     }

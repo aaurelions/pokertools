@@ -1,6 +1,6 @@
 # 🃏 @pokertools/custody
 
-> Private executable/security boundary, not a room-administration SDK. Production startup is blocked until exactly-once broadcast, quorum, finality/reorg and asset-ledger acceptance is demonstrated. The existing Telegram-coupled workflow below has not yet been converged to an optional adapter. Do not enable valuable funds. See the root convergence report.
+> Private executable/security boundary, not a room-administration SDK. The canonical entrypoint starts only the Telegram-independent withdrawal worker (`src/index.ts` → `src/runtime.ts`); signing is per-chain treasury JSON, persisted before broadcast, recovered by exact bytes, and never auto-refunded. Production startup remains blocked until mandatory financial acceptance is complete. See `CONVERGENCE_CONTRACTS.md` and the root convergence report.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-≥24.0.0-339933?logo=node.js)](https://nodejs.org)
@@ -241,42 +241,34 @@ npm start
 
 ### Scripts
 
-| Script                     | Description                                     |
-| -------------------------- | ----------------------------------------------- |
-| `npm run dev`              | Watch-mode TypeScript via tsx                   |
-| `npm run build`            | TypeScript compilation                          |
-| `npm start`                | Run compiled entrypoint                         |
-| `npm run contracts:build`  | Compile Solidity with Foundry                   |
-| `npm run contracts:test`   | Run Foundry unit tests                          |
-| `npm test`                 | Unit tests (blockchain-service, withdrawal-bot) |
-| `npm run test:e2e`         | Full E2E test (Anvil + game + sweep + withdraw) |
-| `npm run test:stand-alone` | E2E test with automatic infra setup/teardown    |
-| `npm run typecheck`        | TypeScript type checking (no emit)              |
-| `npm run lint`             | ESLint                                          |
+| Script                    | Description                                     |
+| ------------------------- | ----------------------------------------------- |
+| `npm run dev`             | Watch-mode TypeScript via tsx                   |
+| `npm run build`           | TypeScript compilation                          |
+| `npm start`               | Run compiled entrypoint                         |
+| `npm run contracts:build` | Compile Solidity with Foundry                   |
+| `npm run contracts:test`  | Run Foundry unit tests                          |
+| `npm test`                | Canonical workflow fault tests + process safety |
+| `npm run test:workflow`   | Withdrawal workflow fault tests only            |
+| `npm run typecheck`       | TypeScript type checking (no emit)              |
+| `npm run lint`            | ESLint                                          |
 
-### Scripts (E2E)
+### Acceptance (real chain)
 
-The E2E test suite spins up a local Anvil chain, deploys contracts, simulates user deposits, plays a complete game, sweeps funds, and processes a withdrawal.
-
-```bash
-npm run test:e2e
-```
-
-For standalone testing (spins up its own Redis):
-
-```bash
-npm run test:stand-alone
-```
+Cross-package Anvil/Postgres/Redis acceptance lives in `@pokertools/e2e`
+(`tests/finance/*.acceptance.test.ts`) and is run with
+`scripts/run-finance-acceptance.sh`.
 
 ## 🧪 Testing
 
-| Script                     | Description                                          | When to use                      |
-| -------------------------- | ---------------------------------------------------- | -------------------------------- |
-| `npm test`                 | Unit tests for blockchain-service and withdrawal-bot | Fast feedback during development |
-| `npm run test:e2e`         | Full E2E test requiring Anvil and Redis              | Pre-commit / CI validation       |
-| `npm run test:stand-alone` | E2E test with `infra:up` / `infra:down` wrappers     | One-shot local validation        |
+| Script                  | Description                                          | When to use                      |
+| ----------------------- | ---------------------------------------------------- | -------------------------------- |
+| `npm test`              | Canonical workflow fault tests + process-safety gate | Fast feedback during development |
+| `npm run test:workflow` | Persist-before-broadcast / nonce / reorg fault tests | Focused workflow changes         |
+| `npm run typecheck`     | TypeScript type checking (no emit)                   | Pre-commit validation            |
 
-The unit tests (`blockchain-service.test.ts`, `withdrawal-bot.test.ts`) use Vitest and run against a local SQLite database. The E2E test (`full-lifecycle.test.ts`) requires a running Anvil chain and Redis instance.
+The canonical tests use deterministic in-memory doubles and the real viem ports
+are exercised by the `@pokertools/e2e` finance acceptance suite.
 
 ## 🔒 Security
 

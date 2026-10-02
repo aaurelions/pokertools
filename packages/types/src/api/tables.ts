@@ -1,13 +1,4 @@
-import { TableConfig } from "../config";
-import { TableStatus } from "./common";
+import type { GetTablesResponseWire, TableListItemWire } from "../canonical/rest";
 
-export interface TableListItem {
-  id: string;
-  name: string;
-  config: TableConfig;
-  status: TableStatus;
-}
-
-export interface GetTablesResponse {
-  tables: TableListItem[];
-}
+export type TableListItem = TableListItemWire;
+export type GetTablesResponse = GetTablesResponseWire;

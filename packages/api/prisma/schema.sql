@@ -7,24 +7,34 @@
 
 PRAGMA foreign_keys=ON;
 
-CREATE TABLE IF NOT EXISTS "Account" (
+CREATE TABLE IF NOT EXISTS "Asset" (
     "id" TEXT NOT NULL PRIMARY KEY,
-    "userId" TEXT NOT NULL,
-    "currency" TEXT NOT NULL DEFAULT 'USDC',
-    "type" TEXT NOT NULL,
-    "balance" BIGINT NOT NULL DEFAULT 0,
-    CONSTRAINT "Account_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    "chainId" INTEGER NOT NULL,
+    "tokenAddress" TEXT NOT NULL,
+    "symbol" TEXT NOT NULL,
+    "decimals" INTEGER NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'ACTIVE',
+    "confirmations" INTEGER NOT NULL DEFAULT 12,
+    "deepFinality" INTEGER NOT NULL DEFAULT 24,
+    "treasuryAddress" TEXT NOT NULL,
+    "rpcUrls" JSONB NOT NULL,
+    "minGasAtomic" TEXT NOT NULL,
+    "ledgerVersion" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS "AdminWallet" (
+CREATE TABLE IF NOT EXISTS "AtomicAccount" (
     "id" TEXT NOT NULL PRIMARY KEY,
-    "label" TEXT NOT NULL,
-    "xpub" TEXT NOT NULL,
-    "xpriv" TEXT NOT NULL,
-    "derivationPath" TEXT NOT NULL DEFAULT 'm/44''/60''/0''/0',
-    "currentIndex" INTEGER NOT NULL DEFAULT 0,
-    "isActive" BOOLEAN NOT NULL DEFAULT true,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    "assetId" TEXT NOT NULL,
+    "ownerId" TEXT,
+    "ownerKey" TEXT NOT NULL,
+    "class" TEXT NOT NULL,
+    "balanceAtomic" TEXT NOT NULL DEFAULT '0',
+    "version" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "AtomicAccount_assetId_fkey" FOREIGN KEY ("assetId") REFERENCES "Asset" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS "AuditLog" (
@@ -40,28 +50,182 @@ CREATE TABLE IF NOT EXISTS "AuditLog" (
     CONSTRAINT "AuditLog_actorId_fkey" FOREIGN KEY ("actorId") REFERENCES "User" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS "Blockchain" (
+CREATE TABLE IF NOT EXISTS "ChipAccount" (
     "id" TEXT NOT NULL PRIMARY KEY,
-    "name" TEXT NOT NULL,
-    "chainId" INTEGER NOT NULL,
-    "rpcUrl" TEXT NOT NULL,
-    "rpcUrlBackup" TEXT,
-    "explorerUrl" TEXT NOT NULL,
-    "nativeCurrency" JSONB NOT NULL,
-    "isEnabled" BOOLEAN NOT NULL DEFAULT true,
-    "confirmations" INTEGER NOT NULL DEFAULT 12,
-    "lastScannedBlock" TEXT,
+    "principalId" TEXT NOT NULL,
+    "kind" TEXT NOT NULL,
+    "scopeKey" TEXT NOT NULL DEFAULT '@owner',
+    "balance" BIGINT NOT NULL DEFAULT 0,
+    "version" INTEGER NOT NULL DEFAULT 0,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS "DepositSession" (
+CREATE TABLE IF NOT EXISTS "ChipAssetConversion" (
     "id" TEXT NOT NULL PRIMARY KEY,
-    "userId" TEXT NOT NULL,
-    "userWalletId" TEXT NOT NULL,
-    "expiresAt" DATETIME NOT NULL,
+    "principalId" TEXT NOT NULL,
+    "economicPolicyId" TEXT NOT NULL,
+    "direction" TEXT NOT NULL,
+    "scopeType" TEXT NOT NULL,
+    "scopeId" TEXT NOT NULL,
+    "chipAmount" BIGINT NOT NULL,
+    "atomicAmount" TEXT NOT NULL,
+    "assetId" TEXT NOT NULL,
+    "journalRequestId" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'PENDING',
+    "idempotencyKey" TEXT,
+    "metadata" JSONB,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "DepositSession_userWalletId_fkey" FOREIGN KEY ("userWalletId") REFERENCES "UserWallet" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "ChipAssetConversion_economicPolicyId_fkey" FOREIGN KEY ("economicPolicyId") REFERENCES "EconomicPolicy" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS "ChipAssetSettlement" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "economicPolicyId" TEXT NOT NULL,
+    "assetId" TEXT NOT NULL,
+    "scopeType" TEXT NOT NULL,
+    "scopeId" TEXT NOT NULL,
+    "referenceId" TEXT NOT NULL,
+    "journalRequestId" TEXT NOT NULL,
+    "rakeAtomic" TEXT NOT NULL DEFAULT '0',
+    "breakdown" JSONB NOT NULL,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "ChipAssetSettlement_economicPolicyId_fkey" FOREIGN KEY ("economicPolicyId") REFERENCES "EconomicPolicy" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS "ChipGrant" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "principalId" TEXT NOT NULL,
+    "amount" BIGINT NOT NULL,
+    "reason" TEXT NOT NULL,
+    "operatorId" TEXT NOT NULL,
+    "idempotencyKey" TEXT NOT NULL,
+    "ledgerEntryId" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS "ChipLedgerEntry" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "accountId" TEXT NOT NULL,
+    "amount" BIGINT NOT NULL,
+    "balanceAfter" BIGINT NOT NULL,
+    "type" TEXT NOT NULL,
+    "referenceId" TEXT,
+    "idempotencyKey" TEXT,
+    "metadata" JSONB,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "ChipLedgerEntry_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "ChipAccount" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS "CustodyHeartbeat" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "chainId" INTEGER NOT NULL,
+    "signerAddress" TEXT NOT NULL,
+    "signerReady" BOOLEAN NOT NULL,
+    "gasReady" BOOLEAN NOT NULL,
+    "workerId" TEXT NOT NULL,
+    "observedAt" DATETIME NOT NULL,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS "DepositClaimRecord" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "assetId" TEXT NOT NULL,
+    "principalId" TEXT NOT NULL,
+    "chainId" INTEGER NOT NULL,
+    "txHash" TEXT NOT NULL,
+    "logIndex" INTEGER NOT NULL,
+    "amountAtomic" TEXT NOT NULL,
+    "blockNumber" TEXT,
+    "blockHash" TEXT,
+    "confirmations" INTEGER NOT NULL DEFAULT 0,
+    "status" TEXT NOT NULL DEFAULT 'OBSERVED',
+    "provenance" TEXT NOT NULL DEFAULT 'DIRECT_TREASURY',
+    "creditedJournalId" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "DepositClaimRecord_assetId_fkey" FOREIGN KEY ("assetId") REFERENCES "Asset" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS "EconomicPolicy" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "name" TEXT NOT NULL,
+    "assetId" TEXT NOT NULL,
+    "chipsNumerator" BIGINT NOT NULL,
+    "atomicDenominator" BIGINT NOT NULL,
+    "version" INTEGER NOT NULL DEFAULT 1,
+    "status" TEXT NOT NULL DEFAULT 'DRAFT',
+    "createdBy" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS "FinancialIncident" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "kind" TEXT NOT NULL,
+    "severity" TEXT NOT NULL DEFAULT 'WARNING',
+    "status" TEXT NOT NULL DEFAULT 'OPEN',
+    "assetId" TEXT,
+    "chainId" INTEGER,
+    "affectedId" TEXT,
+    "evidence" JSONB NOT NULL,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "resolvedAt" DATETIME,
+    "operatorId" TEXT,
+    "operatorEvidence" JSONB,
+    "version" INTEGER NOT NULL DEFAULT 0,
+    "updatedAt" DATETIME NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS "GameActionRequest" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "tableId" TEXT NOT NULL,
+    "requestId" TEXT NOT NULL,
+    "principalId" TEXT NOT NULL,
+    "turnId" TEXT NOT NULL,
+    "actionId" TEXT NOT NULL,
+    "expectedVersion" INTEGER NOT NULL,
+    "requestHash" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'PROCESSING',
+    "response" JSONB,
+    "resultVersion" INTEGER,
+    "eventSeq" INTEGER,
+    "errorCode" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "GameActionRequest_tableId_fkey" FOREIGN KEY ("tableId") REFERENCES "Table" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS "GameEvent" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "tableId" TEXT NOT NULL,
+    "eventSeq" INTEGER NOT NULL,
+    "version" INTEGER NOT NULL,
+    "turnId" TEXT,
+    "requestId" TEXT,
+    "actionId" TEXT,
+    "type" TEXT NOT NULL,
+    "payload" JSONB NOT NULL,
+    "previousHash" TEXT,
+    "hash" TEXT NOT NULL,
+    "occurredAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "GameEvent_tableId_fkey" FOREIGN KEY ("tableId") REFERENCES "Table" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS "GameOutbox" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "tableId" TEXT NOT NULL,
+    "kind" TEXT NOT NULL,
+    "dedupeKey" TEXT NOT NULL,
+    "payload" JSONB NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'PENDING',
+    "attempts" INTEGER NOT NULL DEFAULT 0,
+    "availableAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "lastError" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "GameOutbox_tableId_fkey" FOREIGN KEY ("tableId") REFERENCES "Table" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS "HandHistory" (
@@ -88,41 +252,25 @@ CREATE TABLE IF NOT EXISTS "IdempotencyRecord" (
     CONSTRAINT "IdempotencyRecord_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS "LedgerEntry" (
+CREATE TABLE IF NOT EXISTS "JournalPosting" (
     "id" TEXT NOT NULL PRIMARY KEY,
+    "transactionId" TEXT NOT NULL,
+    "assetId" TEXT NOT NULL,
     "accountId" TEXT NOT NULL,
-    "amount" BIGINT NOT NULL,
-    "type" TEXT NOT NULL,
-    "referenceId" TEXT,
-    "metadata" JSONB,
+    "amountAtomic" TEXT NOT NULL,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "LedgerEntry_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "Account" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    CONSTRAINT "JournalPosting_transactionId_assetId_fkey" FOREIGN KEY ("transactionId", "assetId") REFERENCES "JournalTransaction" ("id", "assetId") ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT "JournalPosting_accountId_assetId_fkey" FOREIGN KEY ("accountId", "assetId") REFERENCES "AtomicAccount" ("id", "assetId") ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS "PaymentTransaction" (
+CREATE TABLE IF NOT EXISTS "JournalTransaction" (
     "id" TEXT NOT NULL PRIMARY KEY,
-    "userId" TEXT NOT NULL,
-    "type" TEXT NOT NULL,
-    "blockchainId" TEXT NOT NULL,
-    "tokenId" TEXT NOT NULL,
-    "txHash" TEXT,
-    "address" TEXT NOT NULL,
-    "blockNumber" TEXT,
-    "blockHash" TEXT,
-    "amountRaw" TEXT NOT NULL,
-    "amountCredit" BIGINT NOT NULL,
-    "fee" TEXT,
-    "status" TEXT NOT NULL DEFAULT 'PENDING',
-    "recoveryState" TEXT,
-    "idempotencyKey" TEXT,
-    "ledgerEntryId" TEXT,
+    "assetId" TEXT NOT NULL,
+    "requestId" TEXT NOT NULL,
+    "payloadHash" TEXT NOT NULL,
+    "sealed" BOOLEAN NOT NULL DEFAULT false,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL,
-    "confirmedAt" DATETIME,
-    CONSTRAINT "PaymentTransaction_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "PaymentTransaction_blockchainId_fkey" FOREIGN KEY ("blockchainId") REFERENCES "Blockchain" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "PaymentTransaction_tokenId_fkey" FOREIGN KEY ("tokenId") REFERENCES "Token" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "PaymentTransaction_ledgerEntryId_fkey" FOREIGN KEY ("ledgerEntryId") REFERENCES "LedgerEntry" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    CONSTRAINT "JournalTransaction_assetId_fkey" FOREIGN KEY ("assetId") REFERENCES "Asset" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS "PlayerNote" (
@@ -135,6 +283,25 @@ CREATE TABLE IF NOT EXISTS "PlayerNote" (
     "updatedAt" DATETIME NOT NULL,
     CONSTRAINT "PlayerNote_authorId_fkey" FOREIGN KEY ("authorId") REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT "PlayerNote_targetId_fkey" FOREIGN KEY ("targetId") REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS "ServiceCredential" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "userId" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "keyHash" TEXT NOT NULL,
+    "scopes" JSONB NOT NULL,
+    "tableId" TEXT,
+    "seat" INTEGER,
+    "revoked" BOOLEAN NOT NULL DEFAULT false,
+    "createdById" TEXT,
+    "expiresAt" DATETIME,
+    "lastUsedAt" DATETIME,
+    "revokedAt" DATETIME,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "ServiceCredential_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "ServiceCredential_createdById_fkey" FOREIGN KEY ("createdById") REFERENCES "User" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS "Session" (
@@ -154,22 +321,14 @@ CREATE TABLE IF NOT EXISTS "Table" (
     "status" TEXT NOT NULL DEFAULT 'WAITING',
     "config" JSONB NOT NULL,
     "state" JSONB,
+    "stateVersion" INTEGER NOT NULL DEFAULT 0,
+    "eventSeq" INTEGER NOT NULL DEFAULT 0,
     "tournamentId" TEXT,
+    "economicPolicyId" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL,
-    CONSTRAINT "Table_tournamentId_fkey" FOREIGN KEY ("tournamentId") REFERENCES "Tournament" ("id") ON DELETE SET NULL ON UPDATE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS "Token" (
-    "id" TEXT NOT NULL PRIMARY KEY,
-    "blockchainId" TEXT NOT NULL,
-    "address" TEXT NOT NULL,
-    "symbol" TEXT NOT NULL,
-    "name" TEXT NOT NULL,
-    "decimals" INTEGER NOT NULL,
-    "minDeposit" TEXT NOT NULL,
-    "isEnabled" BOOLEAN NOT NULL DEFAULT true,
-    CONSTRAINT "Token_blockchainId_fkey" FOREIGN KEY ("blockchainId") REFERENCES "Blockchain" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+    CONSTRAINT "Table_tournamentId_fkey" FOREIGN KEY ("tournamentId") REFERENCES "Tournament" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT "Table_economicPolicyId_fkey" FOREIGN KEY ("economicPolicyId") REFERENCES "EconomicPolicy" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS "Tournament" (
@@ -187,6 +346,7 @@ CREATE TABLE IF NOT EXISTS "Tournament" (
     "prizePool" INTEGER NOT NULL DEFAULT 0,
     "blindStructure" JSONB NOT NULL,
     "payoutPercentages" JSONB NOT NULL,
+    "economicPolicyId" TEXT,
     "startsAt" DATETIME,
     "startedAt" DATETIME,
     "lastBlindAdvancedAt" DATETIME,
@@ -194,7 +354,8 @@ CREATE TABLE IF NOT EXISTS "Tournament" (
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL,
     CONSTRAINT "Tournament_creatorId_fkey" FOREIGN KEY ("creatorId") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "Tournament_tableId_fkey" FOREIGN KEY ("tableId") REFERENCES "Table" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    CONSTRAINT "Tournament_tableId_fkey" FOREIGN KEY ("tableId") REFERENCES "Table" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "Tournament_economicPolicyId_fkey" FOREIGN KEY ("economicPolicyId") REFERENCES "EconomicPolicy" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS "TournamentEntry" (
@@ -214,28 +375,88 @@ CREATE TABLE IF NOT EXISTS "TournamentEntry" (
     CONSTRAINT "TournamentEntry_currentTableId_fkey" FOREIGN KEY ("currentTableId") REFERENCES "Table" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS "TournamentEvent" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "tournamentId" TEXT NOT NULL,
+    "eventSeq" INTEGER NOT NULL,
+    "type" TEXT NOT NULL,
+    "payload" JSONB NOT NULL,
+    "stateFingerprint" TEXT NOT NULL,
+    "requestRef" TEXT,
+    "previousHash" TEXT,
+    "hash" TEXT NOT NULL,
+    "occurredAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "TournamentEvent_tournamentId_fkey" FOREIGN KEY ("tournamentId") REFERENCES "Tournament" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS "TreasuryReconciliation" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "assetId" TEXT NOT NULL,
+    "chainId" INTEGER NOT NULL,
+    "observedAtomic" TEXT NOT NULL,
+    "ledgerAtomic" TEXT NOT NULL,
+    "differenceAtomic" TEXT NOT NULL,
+    "blockNumber" TEXT,
+    "status" TEXT NOT NULL DEFAULT 'UNVERIFIED',
+    "evidence" JSONB NOT NULL,
+    "incidentId" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "TreasuryReconciliation_assetId_fkey" FOREIGN KEY ("assetId") REFERENCES "Asset" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS "User" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "username" TEXT NOT NULL,
-    "address" TEXT NOT NULL,
+    "address" TEXT,
     "role" TEXT NOT NULL DEFAULT 'PLAYER',
+    "kind" TEXT NOT NULL DEFAULT 'WALLET',
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS "UserWallet" (
+CREATE TABLE IF NOT EXISTS "WithdrawalIntentRecord" (
     "id" TEXT NOT NULL PRIMARY KEY,
-    "userId" TEXT NOT NULL,
-    "adminWalletId" TEXT NOT NULL,
-    "derivationIndex" INTEGER NOT NULL,
-    "address" TEXT NOT NULL,
-    CONSTRAINT "UserWallet_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT "UserWallet_adminWalletId_fkey" FOREIGN KEY ("adminWalletId") REFERENCES "AdminWallet" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+    "principalId" TEXT NOT NULL,
+    "assetId" TEXT NOT NULL,
+    "chainId" INTEGER NOT NULL,
+    "destination" TEXT NOT NULL,
+    "amountAtomic" TEXT NOT NULL,
+    "nonce" BIGINT NOT NULL,
+    "deadline" BIGINT NOT NULL,
+    "signature" TEXT NOT NULL,
+    "state" TEXT NOT NULL DEFAULT 'RESERVED',
+    "reservedJournalId" TEXT,
+    "payloadHash" TEXT,
+    "signedRawTx" TEXT,
+    "signedCallData" TEXT,
+    "signedValueAtomic" TEXT,
+    "txHash" TEXT,
+    "broadcastNonce" BIGINT,
+    "receiptBlockNumber" TEXT,
+    "receiptBlockHash" TEXT,
+    "confirmedJournalId" TEXT,
+    "reorgJournalId" TEXT,
+    "replacementPolicy" TEXT NOT NULL DEFAULT 'NO_AUTOMATIC_REPLACEMENT',
+    "treasuryAddress" TEXT,
+    "tokenAddress" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "WithdrawalIntentRecord_assetId_fkey" FOREIGN KEY ("assetId") REFERENCES "Asset" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS "Account_userId_currency_type_key" ON "Account"("userId", "currency", "type");
+CREATE UNIQUE INDEX IF NOT EXISTS "Asset_chainId_tokenAddress_key" ON "Asset"("chainId", "tokenAddress");
 
-CREATE INDEX IF NOT EXISTS "Account_userId_idx" ON "Account"("userId");
+CREATE INDEX IF NOT EXISTS "Asset_status_idx" ON "Asset"("status");
+
+CREATE INDEX IF NOT EXISTS "AtomicAccount_assetId_class_idx" ON "AtomicAccount"("assetId", "class");
+
+CREATE INDEX IF NOT EXISTS "AtomicAccount_assetId_idx" ON "AtomicAccount"("assetId");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "AtomicAccount_assetId_ownerKey_class_key" ON "AtomicAccount"("assetId", "ownerKey", "class");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "AtomicAccount_id_assetId_key" ON "AtomicAccount"("id", "assetId");
+
+CREATE INDEX IF NOT EXISTS "AtomicAccount_ownerId_idx" ON "AtomicAccount"("ownerId");
 
 CREATE INDEX IF NOT EXISTS "AuditLog_action_createdAt_idx" ON "AuditLog"("action", "createdAt");
 
@@ -243,11 +464,85 @@ CREATE INDEX IF NOT EXISTS "AuditLog_actorId_createdAt_idx" ON "AuditLog"("actor
 
 CREATE INDEX IF NOT EXISTS "AuditLog_resource_idx" ON "AuditLog"("resource");
 
-CREATE UNIQUE INDEX IF NOT EXISTS "Blockchain_chainId_key" ON "Blockchain"("chainId");
+CREATE INDEX IF NOT EXISTS "ChipAccount_kind_scopeKey_idx" ON "ChipAccount"("kind", "scopeKey");
 
-CREATE UNIQUE INDEX IF NOT EXISTS "Blockchain_name_key" ON "Blockchain"("name");
+CREATE INDEX IF NOT EXISTS "ChipAccount_principalId_idx" ON "ChipAccount"("principalId");
 
-CREATE INDEX IF NOT EXISTS "DepositSession_expiresAt_idx" ON "DepositSession"("expiresAt");
+CREATE UNIQUE INDEX IF NOT EXISTS "ChipAccount_principalId_kind_scopeKey_key" ON "ChipAccount"("principalId", "kind", "scopeKey");
+
+CREATE INDEX IF NOT EXISTS "ChipAssetConversion_assetId_idx" ON "ChipAssetConversion"("assetId");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "ChipAssetConversion_idempotencyKey_key" ON "ChipAssetConversion"("idempotencyKey");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "ChipAssetConversion_journalRequestId_key" ON "ChipAssetConversion"("journalRequestId");
+
+CREATE INDEX IF NOT EXISTS "ChipAssetConversion_principalId_idx" ON "ChipAssetConversion"("principalId");
+
+CREATE INDEX IF NOT EXISTS "ChipAssetConversion_scopeType_scopeId_idx" ON "ChipAssetConversion"("scopeType", "scopeId");
+
+CREATE INDEX IF NOT EXISTS "ChipAssetSettlement_assetId_idx" ON "ChipAssetSettlement"("assetId");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "ChipAssetSettlement_journalRequestId_key" ON "ChipAssetSettlement"("journalRequestId");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "ChipAssetSettlement_scopeType_scopeId_referenceId_key" ON "ChipAssetSettlement"("scopeType", "scopeId", "referenceId");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "ChipGrant_idempotencyKey_key" ON "ChipGrant"("idempotencyKey");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "ChipGrant_ledgerEntryId_key" ON "ChipGrant"("ledgerEntryId");
+
+CREATE INDEX IF NOT EXISTS "ChipGrant_principalId_createdAt_idx" ON "ChipGrant"("principalId", "createdAt");
+
+CREATE INDEX IF NOT EXISTS "ChipLedgerEntry_accountId_createdAt_idx" ON "ChipLedgerEntry"("accountId", "createdAt");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "ChipLedgerEntry_idempotencyKey_key" ON "ChipLedgerEntry"("idempotencyKey");
+
+CREATE INDEX IF NOT EXISTS "ChipLedgerEntry_referenceId_idx" ON "ChipLedgerEntry"("referenceId");
+
+CREATE INDEX IF NOT EXISTS "ChipLedgerEntry_type_idx" ON "ChipLedgerEntry"("type");
+
+CREATE INDEX IF NOT EXISTS "CustodyHeartbeat_chainId_signerAddress_observedAt_idx" ON "CustodyHeartbeat"("chainId", "signerAddress", "observedAt");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "CustodyHeartbeat_chainId_signerAddress_workerId_key" ON "CustodyHeartbeat"("chainId", "signerAddress", "workerId");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "DepositClaimRecord_chainId_txHash_logIndex_key" ON "DepositClaimRecord"("chainId", "txHash", "logIndex");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "DepositClaimRecord_creditedJournalId_key" ON "DepositClaimRecord"("creditedJournalId");
+
+CREATE INDEX IF NOT EXISTS "DepositClaimRecord_principalId_assetId_idx" ON "DepositClaimRecord"("principalId", "assetId");
+
+CREATE INDEX IF NOT EXISTS "DepositClaimRecord_status_idx" ON "DepositClaimRecord"("status");
+
+CREATE INDEX IF NOT EXISTS "EconomicPolicy_assetId_idx" ON "EconomicPolicy"("assetId");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "EconomicPolicy_name_version_key" ON "EconomicPolicy"("name", "version");
+
+CREATE INDEX IF NOT EXISTS "EconomicPolicy_status_idx" ON "EconomicPolicy"("status");
+
+CREATE INDEX IF NOT EXISTS "FinancialIncident_assetId_idx" ON "FinancialIncident"("assetId");
+
+CREATE INDEX IF NOT EXISTS "FinancialIncident_kind_idx" ON "FinancialIncident"("kind");
+
+CREATE INDEX IF NOT EXISTS "FinancialIncident_status_createdAt_idx" ON "FinancialIncident"("status", "createdAt");
+
+CREATE INDEX IF NOT EXISTS "GameActionRequest_status_idx" ON "GameActionRequest"("status");
+
+CREATE INDEX IF NOT EXISTS "GameActionRequest_tableId_principalId_idx" ON "GameActionRequest"("tableId", "principalId");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "GameActionRequest_tableId_requestId_key" ON "GameActionRequest"("tableId", "requestId");
+
+CREATE INDEX IF NOT EXISTS "GameActionRequest_tableId_turnId_idx" ON "GameActionRequest"("tableId", "turnId");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "GameEvent_tableId_eventSeq_key" ON "GameEvent"("tableId", "eventSeq");
+
+CREATE INDEX IF NOT EXISTS "GameEvent_tableId_occurredAt_idx" ON "GameEvent"("tableId", "occurredAt");
+
+CREATE INDEX IF NOT EXISTS "GameEvent_type_idx" ON "GameEvent"("type");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "GameOutbox_dedupeKey_key" ON "GameOutbox"("dedupeKey");
+
+CREATE INDEX IF NOT EXISTS "GameOutbox_status_availableAt_idx" ON "GameOutbox"("status", "availableAt");
+
+CREATE INDEX IF NOT EXISTS "GameOutbox_tableId_status_idx" ON "GameOutbox"("tableId", "status");
 
 CREATE INDEX IF NOT EXISTS "HandHistory_tableId_timestamp_idx" ON "HandHistory"("tableId", "timestamp");
 
@@ -257,29 +552,33 @@ CREATE UNIQUE INDEX IF NOT EXISTS "IdempotencyRecord_scope_key_key" ON "Idempote
 
 CREATE INDEX IF NOT EXISTS "IdempotencyRecord_userId_scope_idx" ON "IdempotencyRecord"("userId", "scope");
 
-CREATE INDEX IF NOT EXISTS "LedgerEntry_accountId_idx" ON "LedgerEntry"("accountId");
+CREATE INDEX IF NOT EXISTS "JournalPosting_accountId_idx" ON "JournalPosting"("accountId");
 
-CREATE INDEX IF NOT EXISTS "LedgerEntry_createdAt_idx" ON "LedgerEntry"("createdAt");
+CREATE INDEX IF NOT EXISTS "JournalPosting_assetId_idx" ON "JournalPosting"("assetId");
 
-CREATE INDEX IF NOT EXISTS "LedgerEntry_referenceId_idx" ON "LedgerEntry"("referenceId");
+CREATE INDEX IF NOT EXISTS "JournalPosting_transactionId_idx" ON "JournalPosting"("transactionId");
 
-CREATE INDEX IF NOT EXISTS "PaymentTransaction_blockHash_idx" ON "PaymentTransaction"("blockHash");
+CREATE INDEX IF NOT EXISTS "JournalTransaction_assetId_createdAt_idx" ON "JournalTransaction"("assetId", "createdAt");
 
-CREATE UNIQUE INDEX IF NOT EXISTS "PaymentTransaction_blockchainId_txHash_key" ON "PaymentTransaction"("blockchainId", "txHash");
+CREATE UNIQUE INDEX IF NOT EXISTS "JournalTransaction_id_assetId_key" ON "JournalTransaction"("id", "assetId");
 
-CREATE UNIQUE INDEX IF NOT EXISTS "PaymentTransaction_idempotencyKey_key" ON "PaymentTransaction"("idempotencyKey");
-
-CREATE UNIQUE INDEX IF NOT EXISTS "PaymentTransaction_ledgerEntryId_key" ON "PaymentTransaction"("ledgerEntryId");
-
-CREATE INDEX IF NOT EXISTS "PaymentTransaction_recoveryState_idx" ON "PaymentTransaction"("recoveryState");
-
-CREATE INDEX IF NOT EXISTS "PaymentTransaction_status_idx" ON "PaymentTransaction"("status");
-
-CREATE INDEX IF NOT EXISTS "PaymentTransaction_userId_type_idx" ON "PaymentTransaction"("userId", "type");
+CREATE UNIQUE INDEX IF NOT EXISTS "JournalTransaction_requestId_key" ON "JournalTransaction"("requestId");
 
 CREATE INDEX IF NOT EXISTS "PlayerNote_authorId_idx" ON "PlayerNote"("authorId");
 
 CREATE UNIQUE INDEX IF NOT EXISTS "PlayerNote_authorId_targetId_key" ON "PlayerNote"("authorId", "targetId");
+
+CREATE INDEX IF NOT EXISTS "ServiceCredential_createdById_idx" ON "ServiceCredential"("createdById");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "ServiceCredential_keyHash_key" ON "ServiceCredential"("keyHash");
+
+CREATE INDEX IF NOT EXISTS "ServiceCredential_revoked_idx" ON "ServiceCredential"("revoked");
+
+CREATE INDEX IF NOT EXISTS "ServiceCredential_tableId_idx" ON "ServiceCredential"("tableId");
+
+CREATE INDEX IF NOT EXISTS "ServiceCredential_userId_idx" ON "ServiceCredential"("userId");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "ServiceCredential_userId_key" ON "ServiceCredential"("userId");
 
 CREATE INDEX IF NOT EXISTS "Session_jti_idx" ON "Session"("jti");
 
@@ -287,11 +586,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS "Session_jti_key" ON "Session"("jti");
 
 CREATE INDEX IF NOT EXISTS "Session_userId_idx" ON "Session"("userId");
 
+CREATE INDEX IF NOT EXISTS "Table_economicPolicyId_idx" ON "Table"("economicPolicyId");
+
 CREATE INDEX IF NOT EXISTS "Table_status_idx" ON "Table"("status");
 
 CREATE INDEX IF NOT EXISTS "Table_tournamentId_idx" ON "Table"("tournamentId");
-
-CREATE UNIQUE INDEX IF NOT EXISTS "Token_blockchainId_address_key" ON "Token"("blockchainId", "address");
 
 CREATE INDEX IF NOT EXISTS "TournamentEntry_currentTableId_idx" ON "TournamentEntry"("currentTableId");
 
@@ -301,18 +600,46 @@ CREATE UNIQUE INDEX IF NOT EXISTS "TournamentEntry_tournamentId_userId_key" ON "
 
 CREATE INDEX IF NOT EXISTS "TournamentEntry_userId_status_idx" ON "TournamentEntry"("userId", "status");
 
+CREATE UNIQUE INDEX IF NOT EXISTS "TournamentEvent_tournamentId_eventSeq_key" ON "TournamentEvent"("tournamentId", "eventSeq");
+
+CREATE INDEX IF NOT EXISTS "TournamentEvent_tournamentId_occurredAt_idx" ON "TournamentEvent"("tournamentId", "occurredAt");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "TournamentEvent_tournamentId_stateFingerprint_key" ON "TournamentEvent"("tournamentId", "stateFingerprint");
+
+CREATE INDEX IF NOT EXISTS "TournamentEvent_type_idx" ON "TournamentEvent"("type");
+
 CREATE INDEX IF NOT EXISTS "Tournament_creatorId_idx" ON "Tournament"("creatorId");
+
+CREATE INDEX IF NOT EXISTS "Tournament_economicPolicyId_idx" ON "Tournament"("economicPolicyId");
 
 CREATE INDEX IF NOT EXISTS "Tournament_status_createdAt_idx" ON "Tournament"("status", "createdAt");
 
 CREATE UNIQUE INDEX IF NOT EXISTS "Tournament_tableId_key" ON "Tournament"("tableId");
 
-CREATE INDEX IF NOT EXISTS "UserWallet_address_idx" ON "UserWallet"("address");
+CREATE INDEX IF NOT EXISTS "TreasuryReconciliation_assetId_createdAt_idx" ON "TreasuryReconciliation"("assetId", "createdAt");
 
-CREATE UNIQUE INDEX IF NOT EXISTS "UserWallet_userId_adminWalletId_key" ON "UserWallet"("userId", "adminWalletId");
+CREATE INDEX IF NOT EXISTS "TreasuryReconciliation_status_idx" ON "TreasuryReconciliation"("status");
 
 CREATE INDEX IF NOT EXISTS "User_address_idx" ON "User"("address");
 
 CREATE UNIQUE INDEX IF NOT EXISTS "User_address_key" ON "User"("address");
 
+CREATE INDEX IF NOT EXISTS "User_kind_idx" ON "User"("kind");
+
 CREATE UNIQUE INDEX IF NOT EXISTS "User_username_key" ON "User"("username");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "WithdrawalIntentRecord_assetId_principalId_nonce_key" ON "WithdrawalIntentRecord"("assetId", "principalId", "nonce");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "WithdrawalIntentRecord_confirmedJournalId_key" ON "WithdrawalIntentRecord"("confirmedJournalId");
+
+CREATE INDEX IF NOT EXISTS "WithdrawalIntentRecord_principalId_idx" ON "WithdrawalIntentRecord"("principalId");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "WithdrawalIntentRecord_reorgJournalId_key" ON "WithdrawalIntentRecord"("reorgJournalId");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "WithdrawalIntentRecord_reservedJournalId_key" ON "WithdrawalIntentRecord"("reservedJournalId");
+
+CREATE INDEX IF NOT EXISTS "WithdrawalIntentRecord_state_idx" ON "WithdrawalIntentRecord"("state");
+
+CREATE INDEX IF NOT EXISTS "WithdrawalIntentRecord_txHash_idx" ON "WithdrawalIntentRecord"("txHash");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "WithdrawalIntentRecord_txHash_key" ON "WithdrawalIntentRecord"("txHash");

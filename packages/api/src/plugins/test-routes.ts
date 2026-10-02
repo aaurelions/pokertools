@@ -1,5 +1,6 @@
 import fp from "fastify-plugin";
 import type { FastifyPluginAsync } from "fastify";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { config } from "../config.js";
 
@@ -22,14 +23,13 @@ const testRoutesPlugin: FastifyPluginAsync = async (fastify) => {
 
       const { userId } = request.user;
       await fastify.financialManager.ensureAccounts(userId);
-      const account = await fastify.prisma.account.update({
-        where: {
-          userId_currency_type: { userId, currency: config.DEFAULT_CURRENCY, type: "MAIN" },
-        },
-        data: { balance: BigInt(parsed.data.amount) },
+      const result = await fastify.financialManager.grantChips(userId, parsed.data.amount, {
+        reason: "test_credit",
+        operatorId: userId,
+        idempotencyKey: `test-credit:${userId}:${randomUUID()}`,
       });
-
-      return { success: true, balance: Number(account.balance) };
+      const balances = await fastify.financialManager.getChipBalances(userId);
+      return { success: true, balance: Number(balances.available), grantId: result.grantId };
     }
   );
 

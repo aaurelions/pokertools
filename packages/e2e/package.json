@@ -8,7 +8,9 @@
   "private": true,
   "scripts": {
     "pretest:docker": "echo '🐳 Building Docker E2E dependencies...' && npm run build -w @pokertools/types && npm run build -w @pokertools/sdk && npm run contracts:build -w @pokertools/custody --if-present",
-    "test:docker": "NODE_ENV=test vitest run --config vitest.config.ts"
+    "test:docker": "NODE_ENV=test vitest run --config vitest.config.ts",
+    "contracts:build:finance": "npm run contracts:build -w @pokertools/custody",
+    "test:finance-acceptance": "vitest run --config vitest.finance.config.ts"
   },
   "dependencies": {
     "@pokertools/sdk": "1.0.20",

@@ -29,7 +29,13 @@ export function createPrismaClient(options: PrismaClientOptions = {}) {
   const adapter =
     databaseUrl.startsWith("postgresql://") || databaseUrl.startsWith("postgres://")
       ? new PrismaPg({ connectionString: databaseUrl })
-      : new PrismaBetterSqlite3({ url: databaseUrl });
+      : new PrismaBetterSqlite3({
+          url: databaseUrl,
+          // Local/test SQLite is a single-writer file shared by API, workers and
+          // tests; a generous busy timeout prevents transient P1008 failures
+          // under legitimate concurrent transactions. PostgreSQL is unaffected.
+          timeout: Number(process.env.SQLITE_BUSY_TIMEOUT_MS ?? 15_000),
+        });
 
   return new PrismaClient({
     ...options,

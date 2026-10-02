@@ -47,9 +47,9 @@ TEST_DB_NAME="${TEST_DB_NAME:-_restore_test}"
 export PGPASSWORD
 
 # ---- Core tables expected in every PokerTools database ----
-# These tables correspond to the Prisma schema models. Add or remove entries
-# as the schema evolves.
-EXPECTED_TABLES="User Session Account LedgerEntry PaymentTransaction Blockchain Token AdminWallet UserWallet DepositSession Table HandHistory Tournament TournamentEntry PlayerNote IdempotencyRecord AuditLog"
+# These tables correspond to the canonical Prisma schema models (the legacy
+# Account/LedgerEntry/PaymentTransaction/Blockchain/Token models were removed).
+EXPECTED_TABLES="User ServiceCredential Session Table HandHistory Tournament TournamentEntry PlayerNote IdempotencyRecord AuditLog Asset AtomicAccount JournalTransaction JournalPosting DepositClaimRecord WithdrawalIntentRecord FinancialIncident TreasuryReconciliation GameEvent GameActionRequest GameOutbox TournamentEvent ChipAccount ChipLedgerEntry ChipGrant EconomicPolicy ChipAssetConversion ChipAssetSettlement CustodyHeartbeat"
 
 # ---- Find the latest backup ----
 BACKUP_PATH="$(find "${BACKUP_DIR}" -name "backup-*.sql.gz" -type f 2>/dev/null | sort | tail -1)"

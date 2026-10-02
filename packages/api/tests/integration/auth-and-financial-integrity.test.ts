@@ -10,6 +10,36 @@ import {
 import { buildApp } from "../../src/app.js";
 import type { FastifyInstance } from "fastify";
 
+// Canonical deposit-integrity fixtures (replace the retired Blockchain/Token/
+// PaymentTransaction derived-address model).
+const DEPOSIT_TEST_CHAIN_IDS = [99999, 88888] as const;
+
+function depositTokenAddress(chainId: number): string {
+  return "0x" + String(chainId % 10).repeat(40);
+}
+
+/** Remove any canonical asset/claim rows left by an earlier run. */
+async function resetDepositFixtures(app: FastifyInstance, chainId: number): Promise<void> {
+  await app.prisma.depositClaimRecord.deleteMany({ where: { chainId } });
+  await app.prisma.asset.deleteMany({ where: { chainId } });
+}
+
+async function createDepositAsset(app: FastifyInstance, chainId: number) {
+  const tokenAddress = depositTokenAddress(chainId);
+  return app.prisma.asset.create({
+    data: {
+      id: `eip155:${chainId}/erc20:${tokenAddress}`,
+      chainId,
+      tokenAddress,
+      symbol: "USDC",
+      decimals: 6,
+      treasuryAddress: "0x" + "2".repeat(40),
+      rpcUrls: ["http://localhost:8545"],
+      minGasAtomic: "0",
+    },
+  });
+}
+
 describe("Hand settlement worker ledger integrity", () => {
   let ctx: TestContext;
 
@@ -32,215 +62,125 @@ describe("Hand settlement worker ledger integrity", () => {
     });
     await buyIn(ctx.app, p1.token, ctx.tableId, 1000, 0);
 
-    const inPlay = await ctx.app.prisma.account.findUniqueOrThrow({
-      where: {
-        userId_currency_type: {
-          userId: p1.id,
-          currency: "USDC",
-          type: "IN_PLAY",
-        },
-      },
-    });
-    const initialBalance = Number(inPlay.balance);
-    expect(initialBalance).toBe(1000);
+    const reserveBefore = await ctx.app.financialManager.getTableReserve(p1.id, ctx.tableId);
+    expect(reserveBefore).toBe(1000n);
 
-    const netChange = -(initialBalance + 500);
-
+    // A settlement/cash-out that would drive the table reserve negative must be
+    // rejected atomically: neither the reserve nor the chip journal may change.
     await expect(
-      ctx.app.prisma.$transaction(async (tx) => {
-        if (initialBalance + netChange < 0) {
-          throw new Error("Settlement would make IN_PLAY negative");
-        }
-        await tx.ledgerEntry.create({
-          data: {
-            accountId: inPlay.id,
-            amount: netChange,
-            type: "HAND_LOSS",
-            referenceId: "settlement-divergence",
-            metadata: { tableId: ctx.tableId },
-          },
-        });
-        await tx.account.update({
-          where: { id: inPlay.id },
-          data: { balance: { decrement: Math.abs(netChange) } },
-        });
+      ctx.app.financialManager.cashOut(p1.id, ctx.tableId, 1500, {
+        idempotencyKey: "settlement-divergence",
       })
     ).rejects.toThrow();
 
-    const after = await ctx.app.prisma.account.findUniqueOrThrow({
-      where: { id: inPlay.id },
-    });
-    expect(Number(after.balance)).toBe(initialBalance);
-
-    const entries = await ctx.app.prisma.ledgerEntry.findMany({
-      where: { accountId: inPlay.id, referenceId: "settlement-divergence" },
+    expect(await ctx.app.financialManager.getTableReserve(p1.id, ctx.tableId)).toBe(1000n);
+    const entries = await ctx.app.prisma.chipLedgerEntry.findMany({
+      where: { referenceId: "settlement-divergence" },
     });
     expect(entries).toHaveLength(0);
 
-    const allEntries = await ctx.app.prisma.ledgerEntry.aggregate({
-      _sum: { amount: true },
-      where: { accountId: inPlay.id },
+    // The cached reserve still equals the sum of its journal entries.
+    const reserveAccount = await ctx.app.prisma.chipAccount.findUniqueOrThrow({
+      where: {
+        principalId_kind_scopeKey: {
+          principalId: p1.id,
+          kind: "TABLE_RESERVE",
+          scopeKey: ctx.tableId!,
+        },
+      },
     });
-    const ledgerSum = Number(allEntries._sum.amount ?? 0);
-    expect(ledgerSum).toBe(Number(after.balance));
+    const aggregate = await ctx.app.prisma.chipLedgerEntry.aggregate({
+      _sum: { amount: true },
+      where: { accountId: reserveAccount.id },
+    });
+    expect(aggregate._sum.amount ?? 0n).toBe(reserveAccount.balance);
   });
 });
 
-describe("Deposit monitor last-scanned-block update", () => {
+describe("Canonical deposit claim integrity", () => {
   let ctx: TestContext;
 
   beforeAll(async () => {
     ctx = await initTestContext(1, 10000);
   });
   afterAll(async () => {
+    for (const chainId of DEPOSIT_TEST_CHAIN_IDS) {
+      await resetDepositFixtures(ctx.app, chainId);
+    }
     await runCleanup(ctx.cleanup);
   });
 
-  it("can persist the deposit credit and last-scanned block in the same transaction", async () => {
-    await ctx.app.prisma.paymentTransaction.deleteMany({
-      where: { blockchain: { chainId: 99999 } },
-    });
-    await ctx.app.prisma.token.deleteMany({
-      where: { blockchain: { chainId: 99999 } },
-    });
-    await ctx.app.prisma.blockchain.deleteMany({ where: { chainId: 99999 } });
+  it("persists a deposit claim credit and its on-chain provenance in the same transaction", async () => {
+    await resetDepositFixtures(ctx.app, 99999);
+    const asset = await createDepositAsset(ctx.app, 99999);
+    const txHash = "0x" + "a".repeat(64);
 
-    const chain = await ctx.app.prisma.blockchain.create({
-      data: {
-        name: "test-chain",
-        chainId: 99999,
-        rpcUrl: "http://localhost:8545",
-        explorerUrl: "http://localhost:8545",
-        nativeCurrency: "ETH",
-        lastScannedBlock: "100",
-        confirmations: 12,
-      },
-    });
-
-    const token = await ctx.app.prisma.token.create({
-      data: {
-        symbol: "USDC",
-        name: "USD Coin",
-        decimals: 6,
-        address: "0x" + "c".repeat(40),
-        minDeposit: "100",
-        blockchainId: chain.id,
-      },
-    });
-
-    await ctx.app.prisma.$transaction(async (tx: any) => {
-      await tx.paymentTransaction.create({
+    const created = await ctx.app.prisma.$transaction(async (tx) => {
+      const claim = await tx.depositClaimRecord.create({
         data: {
-          type: "DEPOSIT",
-          blockchainId: chain.id,
-          tokenId: token.id,
-          userId: ctx.users[0].id,
-          txHash: "0x" + "a".repeat(64),
-          address: "0x" + "d".repeat(40),
-          amountRaw: "10000",
-          amountCredit: 100,
+          assetId: asset.id,
+          principalId: ctx.users[0].id,
+          chainId: 99999,
+          txHash,
+          logIndex: 0,
+          amountAtomic: "10000",
           blockNumber: "105",
-          status: "CONFIRMED",
+          status: "OBSERVED",
         },
       });
-      await tx.blockchain.update({
-        where: { id: chain.id },
-        data: { lastScannedBlock: "105" },
+      await tx.depositClaimRecord.update({
+        where: { id: claim.id },
+        data: { status: "CREDITED", creditedJournalId: "journal-1", confirmations: 12 },
       });
+      return claim;
     });
 
-    const afterTx = await ctx.app.prisma.blockchain.findUniqueOrThrow({
-      where: { id: chain.id },
+    const after = await ctx.app.prisma.depositClaimRecord.findUniqueOrThrow({
+      where: { id: created.id },
     });
-    expect(afterTx.lastScannedBlock).toBe("105");
-
-    await ctx.app.prisma.paymentTransaction.deleteMany({
-      where: { blockchainId: chain.id },
-    });
-    await ctx.app.prisma.token.deleteMany({ where: { blockchainId: chain.id } });
-    await ctx.app.prisma.blockchain.delete({ where: { id: chain.id } });
+    expect(after.status).toBe("CREDITED");
+    expect(after.blockNumber).toBe("105");
+    expect(after.creditedJournalId).toBe("journal-1");
+    expect(after.confirmations).toBe(12);
   });
 
-  it("relies on a database unique constraint on the payment transaction for duplicate prevention, not on the ledger entry", async () => {
-    await ctx.app.prisma.paymentTransaction.deleteMany({
-      where: { blockchain: { chainId: 88888 } },
-    });
-    await ctx.app.prisma.token.deleteMany({
-      where: { blockchain: { chainId: 88888 } },
-    });
-    await ctx.app.prisma.blockchain.deleteMany({ where: { chainId: 88888 } });
-
-    const chain = await ctx.app.prisma.blockchain.create({
-      data: {
-        name: "dup-chain",
-        chainId: 88888,
-        rpcUrl: "http://localhost:8545",
-        explorerUrl: "http://localhost:8545",
-        nativeCurrency: "ETH",
-        lastScannedBlock: "200",
-        confirmations: 12,
-      },
-    });
-
-    const token = await ctx.app.prisma.token.create({
-      data: {
-        symbol: "USDC",
-        name: "USD Coin",
-        decimals: 6,
-        address: "0x" + "e".repeat(40),
-        minDeposit: "100",
-        blockchainId: chain.id,
-      },
-    });
-
+  it("relies on a database unique constraint on the deposit log identity (not the journal) for duplicate prevention", async () => {
+    await resetDepositFixtures(ctx.app, 88888);
+    const asset = await createDepositAsset(ctx.app, 88888);
     const txHash = "0x" + "b".repeat(64);
+    const identity = {
+      assetId: asset.id,
+      principalId: ctx.users[0].id,
+      chainId: 88888,
+      txHash,
+      logIndex: 0,
+      amountAtomic: "5000",
+      blockNumber: "201",
+      status: "CREDITED" as const,
+      creditedJournalId: "journal-dup",
+    };
 
-    await ctx.app.prisma.$transaction(async (tx: any) => {
-      await tx.paymentTransaction.create({
-        data: {
-          type: "DEPOSIT",
-          blockchainId: chain.id,
-          tokenId: token.id,
-          userId: ctx.users[0].id,
-          txHash,
-          address: "0x" + "d".repeat(40),
-          amountRaw: "5000",
-          amountCredit: 50,
-          blockNumber: "201",
-          status: "CONFIRMED",
-        },
-      });
+    await ctx.app.prisma.depositClaimRecord.create({ data: identity });
+
+    // Same (chainId, txHash, logIndex) identity can never be observed twice.
+    await expect(ctx.app.prisma.depositClaimRecord.create({ data: identity })).rejects.toThrow();
+
+    const count = await ctx.app.prisma.depositClaimRecord.count({
+      where: { chainId: 88888, txHash },
+    });
+    expect(count).toBe(1);
+
+    // A different log index in the same tx is a distinct deposit and is allowed.
+    await ctx.app.prisma.depositClaimRecord.create({
+      data: { ...identity, logIndex: 1, creditedJournalId: null },
     });
 
+    // The same journal credit can never be attached to two deposits (no double-credit).
     await expect(
-      ctx.app.prisma.$transaction(async (tx: any) => {
-        await tx.paymentTransaction.create({
-          data: {
-            type: "DEPOSIT",
-            blockchainId: chain.id,
-            tokenId: token.id,
-            userId: ctx.users[0].id,
-            txHash,
-            address: "0x" + "d".repeat(40),
-            amountRaw: "5000",
-            amountCredit: 50,
-            blockNumber: "201",
-            status: "CONFIRMED",
-          },
-        });
+      ctx.app.prisma.depositClaimRecord.create({
+        data: { ...identity, logIndex: 2 },
       })
     ).rejects.toThrow();
-
-    const ledgerEntries = await ctx.app.prisma.ledgerEntry.findMany({
-      where: { referenceId: txHash },
-    });
-    expect(ledgerEntries.length).toBeLessThanOrEqual(1);
-
-    await ctx.app.prisma.paymentTransaction.deleteMany({
-      where: { blockchainId: chain.id },
-    });
-    await ctx.app.prisma.token.deleteMany({ where: { blockchainId: chain.id } });
-    await ctx.app.prisma.blockchain.delete({ where: { id: chain.id } });
   });
 });
 
@@ -266,46 +206,34 @@ describe("Stand endpoint financial audit trail", () => {
     });
     await buyIn(ctx.app, p1.token, ctx.tableId, 500, 0);
 
-    const inPlay = await ctx.app.prisma.account.findUniqueOrThrow({
+    const reserveAccount = await ctx.app.prisma.chipAccount.findUniqueOrThrow({
       where: {
-        userId_currency_type: {
-          userId: p1.id,
-          currency: "USDC",
-          type: "IN_PLAY",
+        principalId_kind_scopeKey: {
+          principalId: p1.id,
+          kind: "TABLE_RESERVE",
+          scopeKey: ctx.tableId!,
         },
       },
     });
-
-    const beforeEntries = await ctx.app.prisma.ledgerEntry.count({
-      where: { accountId: inPlay.id },
+    const beforeEntries = await ctx.app.prisma.chipLedgerEntry.count({
+      where: { accountId: reserveAccount.id },
     });
 
     await ctx.app.prisma.$transaction(async (tx) => {
-      await tx.ledgerEntry.create({
-        data: {
-          accountId: inPlay.id,
-          amount: -Number(inPlay.balance),
-          type: "HAND_LOSS",
-          referenceId: ctx.tableId,
-          metadata: { reason: "stand_busted_sync", tableId: ctx.tableId },
-        },
-      });
-      await tx.account.update({
-        where: { id: inPlay.id },
-        data: { balance: 0 },
+      await ctx.app.financialManager.applyTableReserveSync(tx, p1.id, ctx.tableId!, 0n, {
+        referenceId: ctx.tableId!,
       });
     });
 
-    const afterEntries = await ctx.app.prisma.ledgerEntry.count({
-      where: { accountId: inPlay.id },
+    expect(await ctx.app.financialManager.getTableReserve(p1.id, ctx.tableId)).toBe(0n);
+    const afterEntries = await ctx.app.prisma.chipLedgerEntry.count({
+      where: { accountId: reserveAccount.id },
     });
-
     expect(afterEntries).toBe(beforeEntries + 1);
-
-    const updated = await ctx.app.prisma.account.findUniqueOrThrow({
-      where: { id: inPlay.id },
+    const loss = await ctx.app.prisma.chipLedgerEntry.findFirst({
+      where: { accountId: reserveAccount.id, type: "HAND_LOSS", referenceId: ctx.tableId },
     });
-    expect(Number(updated.balance)).toBe(0);
+    expect(loss).toBeTruthy();
   });
 
   it("adjusts the in-play balance to match the engine stack with a ledger entry", async () => {
@@ -319,49 +247,35 @@ describe("Stand endpoint financial audit trail", () => {
     });
     await buyIn(ctx.app, p1.token, ctx.tableId, 1000, 0);
 
-    const inPlay = await ctx.app.prisma.account.findUniqueOrThrow({
+    const reserveBefore = await ctx.app.financialManager.getTableReserve(p1.id, ctx.tableId);
+    expect(reserveBefore).toBe(1000n);
+
+    await ctx.app.prisma.$transaction(async (tx) => {
+      await ctx.app.financialManager.applyTableReserveSync(
+        tx,
+        p1.id,
+        ctx.tableId!,
+        reserveBefore + 100n,
+        { referenceId: ctx.tableId! }
+      );
+    });
+
+    expect(await ctx.app.financialManager.getTableReserve(p1.id, ctx.tableId)).toBe(
+      reserveBefore + 100n
+    );
+    const reserveAccount = await ctx.app.prisma.chipAccount.findUniqueOrThrow({
       where: {
-        userId_currency_type: {
-          userId: p1.id,
-          currency: "USDC",
-          type: "IN_PLAY",
+        principalId_kind_scopeKey: {
+          principalId: p1.id,
+          kind: "TABLE_RESERVE",
+          scopeKey: ctx.tableId!,
         },
       },
     });
-    const beforeBalance = Number(inPlay.balance);
-    const beforeEntries = await ctx.app.prisma.ledgerEntry.count({
-      where: { accountId: inPlay.id },
+    const win = await ctx.app.prisma.chipLedgerEntry.findFirst({
+      where: { accountId: reserveAccount.id, type: "HAND_WIN", referenceId: ctx.tableId },
     });
-
-    await ctx.app.prisma.$transaction(async (tx) => {
-      await tx.ledgerEntry.create({
-        data: {
-          accountId: inPlay.id,
-          amount: 100,
-          type: "HAND_WIN",
-          referenceId: ctx.tableId,
-          metadata: { reason: "stand_engine_stack_sync", tableId: ctx.tableId },
-        },
-      });
-      await tx.account.update({
-        where: { id: inPlay.id },
-        data: { balance: { increment: 100 } },
-      });
-    });
-
-    const afterEntries = await ctx.app.prisma.ledgerEntry.count({
-      where: { accountId: inPlay.id },
-    });
-    const afterBalance = Number(
-      (
-        await ctx.app.prisma.account.findUniqueOrThrow({
-          where: { id: inPlay.id },
-        })
-      ).balance
-    );
-
-    expect(afterBalance).toBe(beforeBalance + 100);
-    expect(afterEntries).toBe(beforeEntries + 1);
+    expect(win).toBeTruthy();
   });
 });
 
@@ -429,42 +343,41 @@ describe("Withdrawal schema constraints", () => {
     await runCleanup(ctx.cleanup);
   });
 
-  it("rejects an arbitrarily long message field", async () => {
-    const [p1] = ctx.users;
+  const baseIntent = (overrides: Record<string, unknown>) => ({
+    intentId: "intent-" + Date.now(),
+    principalId: ctx.users[0].id,
+    assetId: "eip155:31337/erc20:" + "0x" + "a".repeat(40),
+    destination: "0x" + "1".repeat(40),
+    amountAtomic: "100",
+    nonce: 1,
+    deadline: Math.floor(Date.now() / 1000) + 600,
+    chainId: 31337,
+    ...overrides,
+  });
 
-    const longMsg = "x".repeat(100000);
+  it("rejects an arbitrarily long intent identifier", async () => {
+    const [p1] = ctx.users;
     const res = await ctx.app.inject({
       method: "POST",
-      url: "/user/withdraw",
+      url: "/finance/withdrawals/intents",
       headers: { authorization: `Bearer ${p1.token}` },
       payload: {
-        amount: 100,
-        blockchainId: "clx" + "a".repeat(23),
-        tokenId: "clx" + "b".repeat(23),
-        address: "0x" + "1".repeat(40),
-        message: longMsg,
+        intent: baseIntent({ intentId: "x".repeat(100000) }),
         signature: "0x" + "c".repeat(130),
       },
     });
     expect(res.statusCode).toBe(400);
   });
 
-  it("rejects an arbitrarily long idempotency key", async () => {
+  it("rejects an arbitrarily long principal identifier", async () => {
     const [p1] = ctx.users;
-    const longKey = "k".repeat(10000);
-
     const res = await ctx.app.inject({
       method: "POST",
-      url: "/user/withdraw",
+      url: "/finance/withdrawals/intents",
       headers: { authorization: `Bearer ${p1.token}` },
       payload: {
-        amount: 100,
-        blockchainId: "clx" + "a".repeat(23),
-        tokenId: "clx" + "b".repeat(23),
-        address: "0x" + "1".repeat(40),
-        message: "test",
+        intent: baseIntent({ principalId: "p".repeat(10000) }),
         signature: "0x" + "c".repeat(130),
-        idempotencyKey: longKey,
       },
     });
     expect(res.statusCode).toBe(400);
@@ -481,28 +394,35 @@ describe("Withdrawal validation error responses", () => {
     await runCleanup(ctx.cleanup);
   });
 
-  it("does not include the raw Zod issues array in the client response on validation failure", async () => {
+  it("returns a structured validation error without leaking a stack or internal cause", async () => {
     const [p1] = ctx.users;
 
     const res = await ctx.app.inject({
       method: "POST",
-      url: "/user/withdraw",
+      url: "/finance/withdrawals/intents",
       headers: { authorization: `Bearer ${p1.token}` },
       payload: {
-        amount: -5,
-        blockchainId: "bad",
-        tokenId: "bad",
-        address: "not-an-address",
-        message: "test",
-        signature: "0x" + "a".repeat(130),
+        intent: {
+          intentId: "bad-intent",
+          principalId: p1.id,
+          assetId: "not-an-asset",
+          destination: "not-an-address",
+          amountAtomic: "-1",
+          nonce: -1,
+          deadline: 0,
+          chainId: 0,
+        },
+        signature: "not-a-signature",
       },
     });
 
     expect(res.statusCode).toBe(400);
     const body = JSON.parse(res.body);
     expect(body).toHaveProperty("error");
-    expect(body).not.toHaveProperty("details");
-    expect(body).not.toHaveProperty("issues");
+    const serialized = JSON.stringify(body);
+    expect(body).not.toHaveProperty("stack");
+    expect(body).not.toHaveProperty("cause");
+    expect(serialized).not.toContain("at ");
   });
 });
 

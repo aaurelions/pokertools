@@ -14,8 +14,8 @@ import {
   TableConfigSchema,
   CreateTableSchema,
   BuyInRequestSchema,
-  GameActionRequestSchema,
 } from "../src/schemas";
+import { CanonicalActionRequestSchema } from "../src";
 
 describe("Action Schemas", () => {
   describe("SitActionSchema", () => {
@@ -410,44 +410,37 @@ describe("API Request Schemas", () => {
     });
   });
 
-  describe("GameActionRequestSchema", () => {
-    test("accepts action with amount", () => {
-      const request = {
-        type: "RAISE",
-        amount: 200,
-      };
+  describe("CanonicalActionRequestSchema", () => {
+    const base = { requestId: "req-1", turnId: "turn-1", expectedVersion: 1, actionId: "a1" };
 
-      const result = GameActionRequestSchema.safeParse(request);
+    test("accepts a canonical action request with amount", () => {
+      const result = CanonicalActionRequestSchema.safeParse({ ...base, amount: 200 });
       expect(result.success).toBe(true);
     });
 
-    test("accepts action without amount", () => {
-      const request = {
-        type: "FOLD",
-      };
-
-      const result = GameActionRequestSchema.safeParse(request);
+    test("accepts a canonical action request without amount", () => {
+      const result = CanonicalActionRequestSchema.safeParse(base);
       expect(result.success).toBe(true);
     });
 
-    test("accepts SHOW with cardIndices", () => {
-      const request = {
-        type: "SHOW",
-        cardIndices: [0, 1],
-      };
-
-      const result = GameActionRequestSchema.safeParse(request);
-      expect(result.success).toBe(true);
+    test("rejects obsolete type-body wire fields and actor identity", () => {
+      for (const obsolete of [
+        { type: "RAISE" },
+        { playerId: "victim" },
+        { seat: 0 },
+        { cardIndices: [0, 1] },
+        { idempotencyKey: "legacy" },
+      ]) {
+        expect(CanonicalActionRequestSchema.safeParse({ ...base, ...obsolete }).success).toBe(
+          false
+        );
+      }
     });
 
-    test("rejects invalid cardIndices", () => {
-      const request = {
-        type: "SHOW",
-        cardIndices: [0, 2], // 2 is invalid (max is 1)
-      };
-
-      const result = GameActionRequestSchema.safeParse(request);
-      expect(result.success).toBe(false);
+    test("rejects zero, negative and unsafe chip amounts", () => {
+      for (const amount of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+        expect(CanonicalActionRequestSchema.safeParse({ ...base, amount }).success).toBe(false);
+      }
     });
   });
 });

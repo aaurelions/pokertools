@@ -1,7 +1,19 @@
 import { createId } from "@paralleldrive/cuid2";
 import { createPrismaClient } from "../src/utils/prisma-client.js";
+import { ChipLedger } from "../src/services/chip-ledger.js";
 
 const prisma = createPrismaClient();
+
+/**
+ * Canonical dev principal + chip fixtures. Chips are integer gameplay units
+ * funded only through an explicit operator grant (`ChipGrant` + journal row),
+ * mirroring production. Idempotent: a re-run reuses the same grant.
+ */
+const DEV_PRINCIPAL = {
+  username: "DEV_PLAYER",
+  address: "0x1111111111111111111111111111111111111111",
+};
+const DEV_CHIP_GRANT = 10_000n;
 
 async function main() {
   console.log("🌱 Starting database seed...");
@@ -25,39 +37,29 @@ async function main() {
     console.log(`✅ House User already exists: ${houseUser.id}`);
   }
 
-  // 2. Create House MAIN Account (Where Rake goes)
-  const houseAccount = await prisma.account.upsert({
-    where: {
-      userId_currency_type: {
-        userId: houseUser.id,
-        currency: "USDC",
-        type: "MAIN", // Rake is realized profit, goes to MAIN
-      },
-    },
+  // 2. Canonical principal + chip fixture for local development.
+  const devPrincipal = await prisma.user.upsert({
+    where: { username: DEV_PRINCIPAL.username },
     create: {
-      userId: houseUser.id,
-      currency: "USDC",
-      type: "MAIN",
-      balance: 0, // Start at 0
+      username: DEV_PRINCIPAL.username,
+      address: DEV_PRINCIPAL.address,
+      role: "PLAYER",
+      kind: "WALLET",
     },
     update: {},
   });
 
-  console.log(`✅ House Account ensured: ${houseAccount.id}`);
-
-  // 3. Create House system accounts that act as the counterparty for external
-  //    money flows (deposits/withdrawals) and tournament escrow. These make the
-  //    ledger fully double-entry: SUM(all account balances) == 0.
-  for (const type of ["HOUSE_RESERVE", "TOURNAMENT_ESCROW"] as const) {
-    const sysAccount = await prisma.account.upsert({
-      where: {
-        userId_currency_type: { userId: houseUser.id, currency: "USDC", type },
-      },
-      create: { userId: houseUser.id, currency: "USDC", type, balance: 0 },
-      update: {},
+  const ledger = new ChipLedger(prisma);
+  await prisma.$transaction(async (tx) => {
+    await ledger.grant(tx, {
+      principalId: devPrincipal.id,
+      amount: DEV_CHIP_GRANT,
+      reason: "dev seed fixture",
+      operatorId: houseUser.id,
+      idempotencyKey: `seed:${DEV_PRINCIPAL.username}:grant`,
     });
-    console.log(`✅ House ${type} Account ensured: ${sysAccount.id}`);
-  }
+  });
+  console.log(`✅ Canonical dev principal ${devPrincipal.username} funded with chips`);
 
   console.log("🌱 Seeding completed.");
 }

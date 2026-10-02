@@ -232,12 +232,12 @@ describe("Cash Game - Full Lifecycle Integration Test", () => {
     );
 
     // =========================================================================
-    // STEP 11: Verify Ledger Entries
+    // STEP 11: Verify Canonical Chip Journal Entries
     // =========================================================================
-    const ledgerEntries = await ctx.app.prisma.ledgerEntry.findMany({
+    const ledgerEntries = await ctx.app.prisma.chipLedgerEntry.findMany({
       where: {
         account: {
-          userId: player1.id,
+          principalId: player1.id,
         },
       },
       include: {
@@ -250,14 +250,15 @@ describe("Cash Game - Full Lifecycle Integration Test", () => {
 
     expect(ledgerEntries.length).toBeGreaterThan(0);
 
-    // Should have BUY_IN entries (both debit from MAIN and credit to IN_PLAY)
+    // Buy-in is a balanced transfer: a debit from AVAILABLE and a credit to the
+    // TABLE reserve account.
     const buyInDebit = ledgerEntries.find((e) => e.type === "BUY_IN" && e.amount < 0);
     const buyInCredit = ledgerEntries.find((e) => e.type === "BUY_IN" && e.amount > 0);
 
     expect(buyInDebit).toBeTruthy();
     expect(buyInCredit).toBeTruthy();
-    expect(buyInDebit?.amount).toBe(-1000n); // Debit from MAIN
-    expect(buyInCredit?.amount).toBe(1000n); // Credit to IN_PLAY
+    expect(buyInDebit?.amount).toBe(-1000n); // Debit from AVAILABLE
+    expect(buyInCredit?.amount).toBe(1000n); // Credit to TABLE reserve
 
     console.log(`✅ Ledger entries verified: ${ledgerEntries.length} entries for player 1`);
 

@@ -8,7 +8,6 @@ import {
   getUserBalances,
   type TestContext,
 } from "../helpers/test-utils.js";
-import { getHouseUserId } from "../../src/utils/house-user.js";
 
 describe("Tournament Edge Cases", () => {
   let ctx: TestContext;
@@ -613,22 +612,15 @@ describe("Tournament Edge Cases", () => {
     expect(unregisteredBalances.main).toBe(initialBalances[2].main);
     expect(unregisteredBalances.inPlay).toBe(initialBalances[2].inPlay);
 
-    // Verify escrow account holds the total debits (2000 buyIn + 200 fee = 2200)
-    // The TOURNAMENT_ESCROW account is created at seed time; if missing, total buyIn+fee
-    // still shows up in the house user's ledger entries even before the account exists.
-    const houseUserId = await getHouseUserId(ctx.app.prisma);
-    const escrowAccount = await ctx.app.prisma.account.findUnique({
-      where: {
-        userId_currency_type: {
-          userId: houseUserId,
-          currency: "USDC",
-          type: "TOURNAMENT_ESCROW",
-        },
-      },
+    // Verify the canonical tournament chip reserve holds the pooled buy-ins.
+    // Canonical escrow is a TOURNAMENT_RESERVE ChipAccount keyed by
+    // `tournament:<id>`; fees are routed to the operator and are not pooled.
+    const escrowAccount = await ctx.app.prisma.chipAccount.findFirst({
+      where: { principalId: `tournament:${tournamentId}`, kind: "TOURNAMENT_RESERVE" },
     });
     if (escrowAccount) {
-      // Escrow balance should reflect total buyIn + fee collected
-      expect(Number(escrowAccount.balance)).toBeGreaterThanOrEqual(2200);
+      // Pool balance should reflect the 2 × 1000 buy-ins collected
+      expect(Number(escrowAccount.balance)).toBeGreaterThanOrEqual(2000);
     }
 
     // Verify total system balance conservation (users' main + inPlay)

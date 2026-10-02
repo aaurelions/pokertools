@@ -3,6 +3,11 @@
  *
  * Provides type-safe methods for all API endpoints with automatic
  * retry, authentication, and error handling.
+ *
+ * Gameplay uses the canonical turn/observation/action protocol: the server
+ * issues the legal actions for the acting seat and the client echoes an opaque
+ * `actionId` back with a stable `requestId`. The SDK never derives legality
+ * from client engine assumptions.
  */
 
 import type {
@@ -10,10 +15,8 @@ import type {
   CreateTableRequest,
   BuyInRequest,
   AddChipsRequest,
-  GameActionRequest,
   LoginRequest,
   LoginResponse,
-  NonceResponse,
   TableListItem,
   TournamentDetails,
   TournamentListItem,
@@ -23,21 +26,45 @@ import type {
   ReconcileTournamentResponse,
   SettleTournamentResponse,
   HealthResponse,
-} from "@pokertools/types";
-import { HealthResponseSchema } from "@pokertools/types";
-
-import {
-  PokerSDKConfig,
-  PokerSDKError,
   UserProfile,
-  BlockchainInfo,
-  DepositSession,
-  DepositRecord,
-  WithdrawalRequest,
-  WithdrawalRecord,
   HandHistoryEntry,
   PlayerNote,
-} from "./types";
+  // Canonical wire contracts
+  SeatObservation,
+  LegalAction,
+  LegalActionFamily,
+  CanonicalActionRequest,
+  CanonicalActionResult,
+  PublicWireState,
+  Asset,
+  Balance as AssetBalance,
+  DepositClaim,
+  DepositClaimRequest,
+  WithdrawalSubmission,
+  WithdrawalRecord,
+} from "@pokertools/types";
+import {
+  HealthResponseSchema,
+  SeatObservationSchema,
+  CanonicalActionRequestSchema,
+  CanonicalActionResultSchema,
+  AssetSchema,
+  BalanceSchema,
+  DepositClaimSchema,
+  DepositClaimRequestSchema,
+  WithdrawalSubmissionSchema,
+  WithdrawalRecordSchema,
+  LoginRequestSchema,
+  LoginResponseSchema,
+  NonceResponseSchema,
+  UserProfileSchema,
+  HandHistoryResponseSchema,
+  GetNotesResponseSchema,
+  GetNoteResponseSchema,
+  SavePlayerNoteResponseSchema,
+} from "@pokertools/types";
+
+import { PokerSDKConfig, PokerSDKError } from "./types";
 
 /**
  * Default configuration values
@@ -52,6 +79,46 @@ const DEFAULT_CONFIG = {
 };
 
 /**
+ * A body is safe to replay automatically only when it carries a stable
+ * server-recognized identity field. Replays reuse the identical serialized
+ * bytes, so a lost response never produces a second logical mutation.
+ */
+function hasStableOperationId(body: unknown): boolean {
+  if (typeof body !== "object" || body === null) return false;
+  const record = body as Record<string, unknown>;
+
+  if (typeof record.idempotencyKey === "string" && record.idempotencyKey.length > 0) {
+    return true;
+  }
+  // Canonical action submission: requestId is the idempotency identity.
+  if (typeof record.requestId === "string" && record.requestId.length > 0) {
+    return true;
+  }
+  // EIP-712 withdrawal submission: the signed intent identity is canonical.
+  const intent = record.intent;
+  if (typeof intent === "object" && intent !== null) {
+    const i = intent as Record<string, unknown>;
+    if (
+      typeof i.intentId === "string" &&
+      i.intentId.length > 0 &&
+      typeof i.nonce === "number" &&
+      Number.isInteger(i.nonce)
+    ) {
+      return true;
+    }
+  }
+  // Exact deposit log identity (assetId, txHash, logIndex).
+  if (
+    typeof record.txHash === "string" &&
+    typeof record.logIndex === "number" &&
+    Number.isInteger(record.logIndex)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * PokerClient - Main HTTP client for PokerTools API
  *
  * @example
@@ -61,23 +128,16 @@ const DEFAULT_CONFIG = {
  *   token: "jwt-token",
  * });
  *
- * // Get tables
- * const tables = await client.getTables();
+ * // Read the authoritative decision boundary
+ * const observation = await client.getObservation(tableId);
  *
- * // Create a table
- * const tableId = await client.createTable({
- *   name: "My Table",
- *   mode: "CASH",
- *   smallBlind: 5,
- *   bigBlind: 10,
- *   maxPlayers: 6,
- * });
- *
- * // Buy in
- * await client.buyIn(tableId, {
- *   amount: 500,
- *   seat: 3,
- *   idempotencyKey: crypto.randomUUID(),
+ * // Choose a server-issued legal action
+ * const fold = observation.legalActions.find((a) => a.family === "FOLD");
+ * await client.action(tableId, {
+ *   requestId: crypto.randomUUID(),
+ *   turnId: observation.turnId,
+ *   expectedVersion: observation.version,
+ *   actionId: fold.actionId,
  * });
  * ```
  */
@@ -108,7 +168,10 @@ export class PokerClient {
   // ============================================================================
 
   /**
-   * Set the authentication token
+   * Set the authentication token.
+   *
+   * Wallet sessions and scoped SERVICE credentials are both opaque bearer
+   * tokens; the transport does not distinguish them.
    */
   setToken(token: string | null): void {
     this.token = token;
@@ -136,17 +199,19 @@ export class PokerClient {
    * Get a nonce for SIWE authentication
    */
   async getNonce(): Promise<string> {
-    const response = await this.request<NonceResponse>("POST", "/auth/nonce");
-    return response.nonce;
+    const response = await this.request<unknown>("POST", "/auth/nonce");
+    return NonceResponseSchema.parse(response).nonce;
   }
 
   /**
    * Login with SIWE signature
    */
   async login(request: LoginRequest): Promise<LoginResponse> {
-    const response = await this.request<LoginResponse>("POST", "/auth/login", request);
-    this.token = response.token;
-    return response;
+    const parsed = LoginRequestSchema.parse(request);
+    const response = await this.request<unknown>("POST", "/auth/login", parsed);
+    const result = LoginResponseSchema.parse(response);
+    this.token = result.token;
+    return result;
   }
 
   /**
@@ -179,6 +244,12 @@ export class PokerClient {
 
   /**
    * Get table state
+   *
+   * @deprecated Legacy engine `PublicState` view of `GET /tables/:id`. The
+   * canonical single protocol is {@link getObservation}, which returns the
+   * authoritative per-seat `SeatObservation` (masked state + legal actions).
+   * Retained as a semantic view only; it is not a wire DTO contract.
+   *
    * @param tableId - Table ID
    * @param since - Optional version for conditional fetch (returns null if unchanged)
    */
@@ -199,22 +270,35 @@ export class PokerClient {
   }
 
   /**
+   * Fetch the authoritative per-seat observation for the acting turn.
+   *
+   * The returned `legalActions` are the only actions the client may submit;
+   * the SDK does not compute legality itself.
+   */
+  async getObservation(tableId: string): Promise<SeatObservation> {
+    const response = await this.request<unknown>("GET", `/tables/${tableId}/observation`);
+    return SeatObservationSchema.parse(response);
+  }
+
+  /**
+   * Submit a canonical action.
+   *
+   * The request is strict: it carries only opaque ids and an optional chip
+   * amount. Actor identity is derived from authentication, never the body.
+   * The response is the stored deterministic result: the receipt plus the
+   * resulting observation for the same principal.
+   */
+  async action(tableId: string, request: CanonicalActionRequest): Promise<CanonicalActionResult> {
+    const parsed = CanonicalActionRequestSchema.parse(request);
+    const response = await this.request<unknown>("POST", `/tables/${tableId}/action`, parsed);
+    return CanonicalActionResultSchema.parse(response);
+  }
+
+  /**
    * Buy in to a table
    */
   async buyIn(tableId: string, request: BuyInRequest): Promise<void> {
     await this.request("POST", `/tables/${tableId}/buy-in`, request);
-  }
-
-  /**
-   * Execute a game action
-   */
-  async action(tableId: string, request: GameActionRequest): Promise<PublicState> {
-    const response = await this.request<{ state: PublicState }>(
-      "POST",
-      `/tables/${tableId}/action`,
-      request
-    );
-    return response.state;
   }
 
   /**
@@ -224,12 +308,89 @@ export class PokerClient {
     await this.request("POST", `/tables/${tableId}/add-chips`, request);
   }
 
+  // ============================================================================
+  // Convenience Action Methods
+  //
+  // Each method fetches a fresh observation and submits the matching
+  // server-issued legal action. A stable requestId is generated once per call
+  // and reused by the transport across retries.
+  // ============================================================================
+
+  /**
+   * Fold hand
+   */
+  async fold(tableId: string): Promise<PublicWireState> {
+    return (await this.submitFamily(tableId, "FOLD")).observation.state;
+  }
+
+  /**
+   * Check (pass action)
+   */
+  async check(tableId: string): Promise<PublicWireState> {
+    return (await this.submitFamily(tableId, "CHECK")).observation.state;
+  }
+
+  /**
+   * Call current bet
+   */
+  async call(tableId: string): Promise<PublicWireState> {
+    return (await this.submitFamily(tableId, "CALL")).observation.state;
+  }
+
+  /**
+   * Place a bet. If no amount is supplied the server's precomputed legal
+   * amount is used when available.
+   */
+  async bet(tableId: string, amount?: number): Promise<PublicWireState> {
+    return (await this.submitFamily(tableId, "BET", { amount })).observation.state;
+  }
+
+  /**
+   * Raise the current bet. If no amount is supplied the server's precomputed
+   * legal amount is used when available.
+   */
+  async raise(tableId: string, amount?: number): Promise<PublicWireState> {
+    return (await this.submitFamily(tableId, "RAISE", { amount })).observation.state;
+  }
+
+  /**
+   * Deal new hand
+   */
+  async deal(tableId: string): Promise<PublicWireState> {
+    return (await this.submitFamily(tableId, "DEAL")).observation.state;
+  }
+
+  /**
+   * Show cards at showdown
+   */
+  async show(tableId: string): Promise<PublicWireState> {
+    return (await this.submitFamily(tableId, "SHOW")).observation.state;
+  }
+
+  /**
+   * Muck cards at showdown
+   */
+  async muck(tableId: string): Promise<PublicWireState> {
+    return (await this.submitFamily(tableId, "MUCK")).observation.state;
+  }
+
+  /**
+   * Use time bank
+   */
+  async timeBank(tableId: string): Promise<PublicWireState> {
+    return (await this.submitFamily(tableId, "TIME_BANK")).observation.state;
+  }
+
   /**
    * Stand from table (leave and cash out)
    */
-  async stand(tableId: string): Promise<void> {
-    await this.request("POST", `/tables/${tableId}/stand`);
+  async stand(tableId: string): Promise<PublicWireState> {
+    return (await this.submitFamily(tableId, "STAND")).observation.state;
   }
+
+  // ============================================================================
+  // Tournaments
+  // ============================================================================
 
   /**
    * Get active and registering tournaments.
@@ -304,73 +465,6 @@ export class PokerClient {
   }
 
   // ============================================================================
-  // Convenience Action Methods
-  // ============================================================================
-
-  /**
-   * Fold hand
-   */
-  async fold(tableId: string): Promise<PublicState> {
-    return this.action(tableId, { type: "FOLD" });
-  }
-
-  /**
-   * Check (pass action)
-   */
-  async check(tableId: string): Promise<PublicState> {
-    return this.action(tableId, { type: "CHECK" });
-  }
-
-  /**
-   * Call current bet
-   */
-  async call(tableId: string): Promise<PublicState> {
-    return this.action(tableId, { type: "CALL" });
-  }
-
-  /**
-   * Place a bet
-   */
-  async bet(tableId: string, amount: number): Promise<PublicState> {
-    return this.action(tableId, { type: "BET", amount });
-  }
-
-  /**
-   * Raise the current bet
-   */
-  async raise(tableId: string, amount: number): Promise<PublicState> {
-    return this.action(tableId, { type: "RAISE", amount });
-  }
-
-  /**
-   * Deal new hand
-   */
-  async deal(tableId: string): Promise<PublicState> {
-    return this.action(tableId, { type: "DEAL" });
-  }
-
-  /**
-   * Show cards at showdown
-   */
-  async show(tableId: string, cardIndices?: number[]): Promise<PublicState> {
-    return this.action(tableId, { type: "SHOW", cardIndices });
-  }
-
-  /**
-   * Muck cards at showdown
-   */
-  async muck(tableId: string): Promise<PublicState> {
-    return this.action(tableId, { type: "MUCK" });
-  }
-
-  /**
-   * Use time bank
-   */
-  async timeBank(tableId: string): Promise<PublicState> {
-    return this.action(tableId, { type: "TIME_BANK" });
-  }
-
-  // ============================================================================
   // User
   // ============================================================================
 
@@ -378,74 +472,70 @@ export class PokerClient {
    * Get current user profile and balances
    */
   async getProfile(): Promise<UserProfile> {
-    return this.request<UserProfile>("GET", "/user/me");
+    return UserProfileSchema.parse(await this.request<unknown>("GET", "/user/me"));
   }
 
   /**
    * Get hand history
    */
   async getHandHistory(): Promise<HandHistoryEntry[]> {
-    const response = await this.request<{ history: HandHistoryEntry[] }>("GET", "/user/history");
-    return response.history;
-  }
-
-  /**
-   * Request a withdrawal
-   */
-  async withdraw(request: WithdrawalRequest): Promise<{
-    id: string;
-    status: string;
-    amount: number;
-    destination: string;
-    blockchain: string;
-    token: string;
-  }> {
-    return this.request("POST", "/user/withdraw", request);
-  }
-
-  /**
-   * Get withdrawal history
-   */
-  async getWithdrawals(): Promise<WithdrawalRecord[]> {
-    const response = await this.request<{ withdrawals: WithdrawalRecord[] }>(
-      "GET",
-      "/user/withdrawals"
-    );
-    return response.withdrawals;
+    const response = await this.request<unknown>("GET", "/user/history");
+    return HandHistoryResponseSchema.parse(response).history;
   }
 
   // ============================================================================
-  // Finance
+  // Finance (canonical asset/atomic contract)
   // ============================================================================
 
   /**
-   * Get supported blockchains and tokens
+   * List supported assets. Amounts are only ever canonical atomic decimal
+   * strings.
    */
-  async getChains(): Promise<BlockchainInfo[]> {
-    return this.request<BlockchainInfo[]>("GET", "/finance/chains");
+  async getAssets(): Promise<Asset[]> {
+    const response = await this.request<{ assets: Asset[] }>("GET", "/finance/assets");
+    return response.assets.map((asset) => AssetSchema.parse(asset));
   }
 
   /**
-   * Start deposit monitoring session
+   * List the authenticated principal's per-asset balances.
    */
-  async startDeposit(): Promise<DepositSession> {
-    return this.request<DepositSession>("POST", "/finance/deposit/start");
+  async getBalances(): Promise<AssetBalance[]> {
+    const response = await this.request<{ balances: AssetBalance[] }>("GET", "/finance/balances");
+    return response.balances.map((balance) => BalanceSchema.parse(balance));
   }
 
   /**
-   * Get deposit address
+   * Claim a direct treasury deposit by exact log identity.
    */
-  async getDepositAddress(): Promise<string> {
-    const response = await this.request<{ address: string }>("GET", "/finance/deposit/address");
-    return response.address;
+  async claimDeposit(claim: DepositClaimRequest): Promise<DepositClaim> {
+    const parsed = DepositClaimRequestSchema.parse(claim);
+    const response = await this.request<unknown>("POST", "/finance/deposits/claim", parsed);
+    return DepositClaimSchema.parse(response);
   }
 
   /**
-   * Get deposit history
+   * Get a deposit by id.
    */
-  async getDeposits(): Promise<DepositRecord[]> {
-    const response = await this.request<{ deposits: DepositRecord[] }>("GET", "/finance/deposits");
-    return response.deposits;
+  async getDeposit(depositId: string): Promise<DepositClaim> {
+    const response = await this.request<unknown>("GET", `/finance/deposits/${depositId}`);
+    return DepositClaimSchema.parse(response);
+  }
+
+  /**
+   * Submit a signed EIP-712 withdrawal intent.
+   */
+  async submitWithdrawal(submission: WithdrawalSubmission): Promise<WithdrawalRecord> {
+    const parsed = WithdrawalSubmissionSchema.parse(submission);
+    const response = await this.request<unknown>("POST", "/finance/withdrawals/intents", parsed);
+    return WithdrawalRecordSchema.parse(response);
+  }
+
+  /**
+   * Get a withdrawal by intent id.
+   */
+  async getWithdrawal(intentId: string): Promise<WithdrawalRecord> {
+    const response = await this.request<unknown>("GET", `/finance/withdrawals/${intentId}`);
+    return WithdrawalRecordSchema.parse(response);
   }
 
   // ============================================================================
@@ -456,28 +546,28 @@ export class PokerClient {
    * Get all notes by current user
    */
   async getNotes(): Promise<PlayerNote[]> {
-    const response = await this.request<{ notes: PlayerNote[] }>("GET", "/notes");
-    return response.notes;
+    const response = await this.request<unknown>("GET", "/notes");
+    return GetNotesResponseSchema.parse(response).notes;
   }
 
   /**
    * Get note for specific player
    */
   async getNote(targetId: string): Promise<PlayerNote | null> {
-    const response = await this.request<{ note: PlayerNote | null }>("GET", `/notes/${targetId}`);
-    return response.note;
+    const response = await this.request<unknown>("GET", `/notes/${targetId}`);
+    return GetNoteResponseSchema.parse(response).note;
   }
 
   /**
    * Save or update note
    */
   async saveNote(targetId: string, content: string, label?: string): Promise<PlayerNote> {
-    const response = await this.request<{ note: PlayerNote }>("POST", "/notes", {
+    const response = await this.request<unknown>("POST", "/notes", {
       targetId,
       content,
       label,
     });
-    return response.note;
+    return SavePlayerNoteResponseSchema.parse(response).note;
   }
 
   /**
@@ -503,6 +593,87 @@ export class PokerClient {
   // ============================================================================
 
   /**
+   * Fetch the current observation and submit the requested legal action
+   * family. Throws when the server does not currently offer that family.
+   */
+  private async submitFamily(
+    tableId: string,
+    family: LegalActionFamily,
+    options: { amount?: number } = {}
+  ): Promise<CanonicalActionResult> {
+    const observation = await this.getObservation(tableId);
+    const legal = observation.legalActions.find((action) => action.family === family);
+    if (!legal) {
+      throw new PokerSDKError(
+        `Server did not offer a legal ${family} action`,
+        "ILLEGAL_ACTION",
+        undefined,
+        { tableId, offered: observation.legalActions.map((action) => action.family) }
+      );
+    }
+
+    const amount = this.resolveLegalAmount(legal, options.amount);
+    const request: CanonicalActionRequest = {
+      requestId: this.generateRequestId(),
+      turnId: observation.turnId,
+      expectedVersion: observation.version,
+      actionId: legal.actionId,
+      // A zero call is a check; the canonical request amount must be positive.
+      ...(amount === undefined || amount === 0 ? {} : { amount }),
+    };
+
+    return this.action(tableId, request);
+  }
+
+  /**
+   * Resolve the chip amount for a legal action without inventing legality.
+   */
+  private resolveLegalAmount(legal: LegalAction, requested?: number): number | undefined {
+    const bounded = legal.minAmount !== undefined || legal.maxAmount !== undefined;
+
+    if (!bounded) {
+      if (requested !== undefined) {
+        throw new PokerSDKError("This action takes no chip amount", "INVALID_AMOUNT", undefined, {
+          family: legal.family,
+        });
+      }
+      return legal.amount;
+    }
+
+    const amount = requested ?? legal.amount ?? legal.minAmount;
+    if (amount === undefined) {
+      // minAmount is present for bounded families, so this is defensive only.
+      throw new PokerSDKError("A chip amount is required", "AMOUNT_REQUIRED", undefined, {
+        family: legal.family,
+      });
+    }
+    if (legal.minAmount !== undefined && amount < legal.minAmount) {
+      throw new PokerSDKError(
+        `Amount ${amount} is below minimum ${legal.minAmount}`,
+        "AMOUNT_BELOW_MIN",
+        undefined,
+        { family: legal.family, minAmount: legal.minAmount, amount }
+      );
+    }
+    if (legal.maxAmount !== undefined && amount > legal.maxAmount) {
+      throw new PokerSDKError(
+        `Amount ${amount} is above maximum ${legal.maxAmount}`,
+        "AMOUNT_ABOVE_MAX",
+        undefined,
+        { family: legal.family, maxAmount: legal.maxAmount, amount }
+      );
+    }
+    return amount;
+  }
+
+  /**
+   * Generate a stable idempotent request id.
+   */
+  private generateRequestId(): string {
+    return crypto.randomUUID();
+  }
+
+  /**
    * Make HTTP request with retry logic
    */
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -515,14 +686,10 @@ export class PokerClient {
       headers.Authorization = `Bearer ${this.token}`;
     }
 
-    // Only replay reads or writes protected by the API's idempotency key.
-    const canRetry =
-      method === "GET" ||
-      (typeof body === "object" &&
-        body !== null &&
-        "idempotencyKey" in body &&
-        typeof body.idempotencyKey === "string" &&
-        body.idempotencyKey.length > 0);
+    // Reads are bounded by config. Mutations retry only when the body carries
+    // a stable requestId / idempotency identity, and the exact serialized bytes
+    // are replayed so a lost response cannot create a second mutation.
+    const canRetry = method === "GET" || hasStableOperationId(body);
     const retryCount = canRetry ? this.retry.count : 0;
     let lastError: Error | null = null;
 

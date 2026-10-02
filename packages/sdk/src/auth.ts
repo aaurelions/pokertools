@@ -1,7 +1,11 @@
 /**
- * Authentication helpers for SIWE (Sign-In with Ethereum)
+ * Authentication helpers for SIWE (Sign-In with Ethereum) and canonical
+ * EIP-712 withdrawal intents.
  *
- * These utilities help construct SIWE messages for wallet signing.
+ * SIWE formatting/parsing delegates to maintained `viem/siwe` helpers.
+ * Withdrawals are signed as canonical EIP-712 typed data; the SDK never
+ * hand-builds a withdrawal message and never fabricates a wallet or service
+ * credential.
  */
 
 import {
@@ -10,6 +14,13 @@ import {
   validateSiweMessage,
   type CreateSiweMessageParameters,
 } from "viem/siwe";
+import type {
+  Eip712Domain,
+  Eip712TypedData,
+  WithdrawalIntent,
+  WithdrawalSubmission,
+} from "@pokertools/types";
+import { withdrawalIntentTypedData } from "@pokertools/types";
 
 export { parseSiweMessage } from "viem/siwe";
 
@@ -104,35 +115,58 @@ export function isSiweExpired(message: string): boolean {
 }
 
 /**
- * Create a withdrawal message for signing
- *
- * Includes nonce and timestamp to prevent replay attacks.
- *
- * @param amount - Amount in USD
- * @param destinationAddress - Destination Ethereum address
- * @param nonce - Unique nonce to prevent replay (recommended: use generateIdempotencyKey())
- * @param timestamp - Unix timestamp in milliseconds (defaults to now)
- *
- * @example
- * ```typescript
- * const nonce = generateIdempotencyKey();
- * const message = createWithdrawalMessage(100, "0x...", nonce);
- * const signature = await signMessage({ message });
- * await client.withdraw({
- *   amount: 100, address: "0x...", blockchainId, tokenId,
- *   message, signature, idempotencyKey: nonce
- * });
- * ```
+ * Signer shape structurally compatible with a viem wallet/account client
+ * bound to the authenticating principal. Callers supply their own signer so
+ * the SDK never creates or holds a wallet.
  */
-export function createWithdrawalMessage(
-  amount: number,
-  destinationAddress: string,
-  nonce: string,
-  timestamp?: number
-): string {
-  const ts = timestamp ?? Date.now();
-  const baseMsg = `Withdraw ${amount} USD to ${destinationAddress}`;
-  return `${baseMsg}\nNonce: ${nonce}\nTimestamp: ${ts}`;
+export interface WithdrawalTypedDataSigner {
+  signTypedData(args: {
+    domain: Eip712TypedData["domain"];
+    types: Eip712TypedData["types"];
+    primaryType: string;
+    message: Record<string, unknown>;
+  }): Promise<`0x${string}`>;
+}
+
+/**
+ * Build the canonical EIP-712 typed data for a withdrawal intent.
+ *
+ * Uses the shared `@pokertools/types` helper so the signed payload is the
+ * exact contract the API and custody boundary validate. The domain name and
+ * version are fixed by the shared contract.
+ */
+export function createWithdrawalTypedData(
+  intent: WithdrawalIntent,
+  domain: Eip712Domain
+): Eip712TypedData {
+  return withdrawalIntentTypedData(intent, domain);
+}
+
+/**
+ * Sign a canonical withdrawal intent as EIP-712 typed data.
+ *
+ * The API rebuilds the signature input from the intent, so the submission
+ * carries only the intent and signature.
+ *
+ * @param signer - Principal-bound viem-compatible signer (never supplied by SDK).
+ * @param intent - Canonical withdrawal intent including `intentId` and `nonce`.
+ * @param domain - Fixed EIP-712 domain for the custody contract.
+ * @returns The signed submission to POST to `/finance/withdrawals/intents`.
+ */
+export async function signWithdrawalIntent(
+  signer: WithdrawalTypedDataSigner,
+  intent: WithdrawalIntent,
+  domain: Eip712Domain
+): Promise<WithdrawalSubmission> {
+  const typedData = createWithdrawalTypedData(intent, domain);
+  const signature = await signer.signTypedData({
+    domain: typedData.domain,
+    types: typedData.types,
+    primaryType: typedData.primaryType,
+    message: typedData.message,
+  });
+
+  return { intent, signature };
 }
 
 /**

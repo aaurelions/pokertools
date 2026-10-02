@@ -69,6 +69,26 @@ const mocks = vi.hoisted(() => {
     Promise.resolve({ id: "user-1", username: "alice", balances: { MAIN: 100 } })
   );
   const getTableStateMock = vi.fn(() => Promise.resolve({ version: 1, players: [] }));
+  const getObservationMock = vi.fn(() =>
+    Promise.resolve({
+      tableId: "table-1",
+      handId: "h1",
+      turnId: "turn-1",
+      version: 1,
+      eventSeq: 1,
+      state: {
+        handId: "h1",
+        version: 1,
+        street: "PREFLOP",
+        board: [],
+        deck: [],
+        players: [],
+        viewingPlayerId: null,
+      },
+      legalActions: [{ actionId: "a1", family: "FOLD" }],
+    })
+  );
+  const foldMock = vi.fn(() => Promise.resolve({ requestId: "req-1" }));
   const actionMock = vi.fn(() => Promise.resolve({ version: 3, players: [] }));
   const standMock = vi.fn(() => Promise.resolve(undefined));
 
@@ -79,6 +99,8 @@ const mocks = vi.hoisted(() => {
     getTournament = getTournamentMock;
     getProfile = getProfileMock;
     getTableState = getTableStateMock;
+    getObservation = getObservationMock;
+    fold = foldMock;
     action = actionMock;
     stand = standMock;
   }
@@ -93,6 +115,8 @@ const mocks = vi.hoisted(() => {
     getTournamentMock,
     getProfileMock,
     getTableStateMock,
+    getObservationMock,
+    foldMock,
     socketInstances,
     MockPokerSocket,
     MockPokerClient,
@@ -248,12 +272,9 @@ describe("React SDK hooks", () => {
     await screen.findByText("anonymous");
   });
 
-  it("useTable fetches state, joins, receives snapshots, and leaves on cleanup", async () => {
+  it("useTable fetches observation, joins, receives observations, and leaves on cleanup", async () => {
     function Table() {
       const { state } = useTable("table-1");
-      useEffect(() => {
-        mocks.socketInstances[0]?.emit("snapshot", "table-1", { version: 4, players: [] });
-      }, []);
       return <div data-testid="version">{state?.version ?? "none"}</div>;
     }
 
@@ -263,10 +284,36 @@ describe("React SDK hooks", () => {
       </PokerProvider>
     );
 
-    await waitFor(() => expect(mocks.getTableStateMock).toHaveBeenCalledWith("table-1"));
+    await waitFor(() => expect(mocks.getObservationMock).toHaveBeenCalledWith("table-1"));
     await waitFor(() => expect(mocks.joinMock).toHaveBeenCalledWith("table-1"));
+    await waitFor(() => expect(mocks.socketInstances.length).toBeGreaterThan(0));
+
+    mocks.socketInstances[0].emit("observation", "table-1", {
+      version: 4,
+      state: { version: 4 },
+    });
+    await waitFor(() => expect(screen.getByTestId("version").textContent).toBe("4"));
 
     unmount();
     expect(mocks.leaveMock).toHaveBeenCalledWith("table-1");
+  });
+
+  it("useTable observes canonical legal actions and submits a family", async () => {
+    function Table() {
+      const { observe, action } = useTable("table-1");
+      useEffect(() => {
+        void observe().then(() => action("FOLD"));
+      }, [observe, action]);
+      return <div data-testid="canonical" />;
+    }
+
+    render(
+      <PokerProvider config={{ baseUrl: "http://api.test", token: "token-1" }}>
+        <Table />
+      </PokerProvider>
+    );
+
+    await waitFor(() => expect(mocks.getObservationMock).toHaveBeenCalledWith("table-1"));
+    await waitFor(() => expect(mocks.foldMock).toHaveBeenCalledWith("table-1"));
   });
 });

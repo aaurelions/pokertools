@@ -13,12 +13,11 @@ import {
 } from "../helpers/test-utils.js";
 
 /**
- * Timeout Worker Integration Tests
+ * Timeout / action propagation integration tests.
  *
- * Validates that the timeout worker:
- * 1. Uses Redlock for concurrency (same pattern as normal actions)
- * 2. Uses version guard to prevent race conditions
- * 3. Publishes lightweight STATE_UPDATE (no state field in WebSocket broadcast)
+ * The live private stream is canonical: every change is delivered as a full
+ * per-principal `OBSERVATION` (masked state + exact legal actions). There is no
+ * partial/version-only `STATE_UPDATE` frame.
  */
 describe("Timeout Worker - Redlock & Version Guard Integration Test", () => {
   let ctx: TestContext;
@@ -36,10 +35,9 @@ describe("Timeout Worker - Redlock & Version Guard Integration Test", () => {
     await runCleanup(ctx.cleanup);
   });
 
-  it("timeout worker publishes lightweight STATE_UPDATE via WebSocket", async () => {
+  it("publishes a full masked OBSERVATION after an accepted turn", async () => {
     const [player1, player2] = ctx.users;
 
-    // Create table
     const tableId = await createTable(ctx.app, player1.token, {
       name: "Timeout Test",
       mode: "CASH",
@@ -48,67 +46,44 @@ describe("Timeout Worker - Redlock & Version Guard Integration Test", () => {
     });
 
     try {
-      // Connect WebSocket
       const ws = new WebSocket(wsUrl, ["pokertools", `jwt.${player1.token}`]);
       await new Promise((resolve) => ws.once("open", resolve));
 
       const messages: any[] = [];
-      const stateUpdates: any[] = [];
-      ws.on("message", (data) => {
-        const msg = JSON.parse(data.toString());
-        messages.push(msg);
-        if (msg.type === "STATE_UPDATE") {
-          stateUpdates.push(msg);
-        }
-      });
+      ws.on("message", (data) => messages.push(JSON.parse(data.toString())));
 
-      // Join table
       ws.send(JSON.stringify({ type: "JOIN", tableId }));
-      await waitFor(() => messages.some((m) => m.type === "SNAPSHOT"), 7000);
+      await waitFor(() => messages.some((m) => m.type === "OBSERVATION"), 7000);
 
-      // Both players buy in
       await buyIn(ctx.app, player1.token, tableId, 500, 0);
       await buyIn(ctx.app, player2.token, tableId, 500, 1);
 
-      // Clear messages before deal
       messages.length = 0;
-      stateUpdates.length = 0;
-
-      // Deal
       await executeAction(ctx.app, player1.token, tableId, { type: "DEAL" });
+      await waitFor(() => messages.some((m) => m.type === "OBSERVATION"), 3000);
 
-      // Wait for the deal to propagate
-      await waitFor(() => messages.length > 0, 2000);
-
-      // Execute an action (fold) by the acting player
-      const state = (await ctx.app.gameManager.getState(
-        tableId,
-        player1.token ? player1.id : undefined
-      )) as any;
+      const state = (await ctx.app.gameManager.getState(tableId, player1.id)) as any;
 
       if (state.actionTo !== null && state.actionTo !== undefined) {
         const actingPlayer = ctx.users[state.actionTo];
         if (actingPlayer) {
-          // Clear before action
           messages.length = 0;
-          stateUpdates.length = 0;
-
           await executeAction(ctx.app, actingPlayer.token, tableId, { type: "FOLD" });
+          await waitFor(() => messages.some((m) => m.type === "OBSERVATION"), 7000);
 
-          // Wait for STATE_UPDATE
-          await waitFor(() => stateUpdates.length > 0, 7000);
+          const frames = messages.filter((m) => m.type === "OBSERVATION");
+          expect(frames.length).toBeGreaterThan(0);
 
-          // Verify all STATE_UPDATE messages are lightweight
-          for (const su of stateUpdates) {
-            expect(su.state).toBeUndefined();
-            expect(su.type).toBe("STATE_UPDATE");
-            expect(su.tableId).toBeTypeOf("string");
-            expect(su.version).toBeTypeOf("number");
-            expect(su.timestamp).toBeTypeOf("number");
-
-            // Only allowed keys
-            const allowedKeys = ["type", "tableId", "version", "timestamp"];
-            expect(Object.keys(su).sort()).toEqual(allowedKeys.sort());
+          for (const frame of frames) {
+            // Every frame is the full authoritative projection, not a notification.
+            expect(frame.type).toBe("OBSERVATION");
+            expect(frame.tableId).toBe(tableId);
+            expect(frame.timestamp).toBeTypeOf("number");
+            expect(frame.observation.state).toBeDefined();
+            expect(frame.observation.state.viewingPlayerId).toBe(player1.id);
+            expect(frame.observation.state.deck).toEqual([]);
+            expect(frame.observation.version).toBeTypeOf("number");
+            expect(Array.isArray(frame.observation.legalActions)).toBe(true);
           }
         }
       }
@@ -117,7 +92,7 @@ describe("Timeout Worker - Redlock & Version Guard Integration Test", () => {
     } finally {
       await cleanupTestTable(ctx.app, tableId);
     }
-  }, 15000);
+  }, 20000);
 
   it("version guard prevents stale timeout from corrupting state", async () => {
     const [player1, player2] = ctx.users;

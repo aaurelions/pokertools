@@ -3,14 +3,20 @@
     {
       "name": "001_initial_schema",
       "file": "001_initial_schema.sql",
-      "sha256": "321f8eec7f380b04c54ae46c1eb73756d346d00dabdcdc5748bf536464c37ba4",
-      "description": "Initial PokerTools PostgreSQL schema — mirrors the SQLite schema including User, Account, LedgerEntry, PaymentTransaction, Table, Tournament, TournamentEntry, HandHistory, Session, PlayerNote, AuditLog, IdempotencyRecord, Blockchain, Token, AdminWallet, UserWallet, DepositSession, and Tournament.lastBlindAdvancedAt."
+      "sha256": "4a31fe18a885866eb0d62203aa005ad4d955585f52b45229fea092bd299c3338",
+      "description": "Canonical PostgreSQL baseline generated offline from prisma/schema.prisma (native enums, tables, indexes and composite foreign keys). Replaces the retired hand-written TEXT+CHECK baseline that left Prisma native enum types undefined. Immutable/append-only: never edit after release."
     },
     {
-      "name": "002_house_system_accounts",
-      "file": "002_house_system_accounts.sql",
-      "sha256": "57566af7824afc2fa283bae9c252c4780fafdd76e6028f318e73113f895a40b0",
-      "description": "Records HOUSE_RESERVE and TOURNAMENT_ESCROW AccountType values for full double-entry accounting. Account.type is a TEXT column so no DDL change is required; house system accounts are created by the application seed."
+      "name": "002_financial_invariants",
+      "file": "002_financial_invariants.sql",
+      "sha256": "07fb3ba405138c04a1754d69af2c5feb71a35c3cfe1d00b110b904bcabf77ec9",
+      "description": "Non-Prisma financial invariants: canonical decimal-string CHECKs, asset/custody domain + canonicality CHECKs, same-asset composite FK targets, sealed-journal + append-only triggers, deferred per-journal sum-zero/sealed/>=2-postings constraint trigger, AtomicAccount nonnegative-for-owner trigger, EconomicPolicy one-chip representability, FinancialIncident resolution consistency, TreasuryReconciliation amount canonicality. Immutable/append-only: never edit after release."
+    },
+    {
+      "name": "003_audit_invariants",
+      "file": "003_audit_invariants.sql",
+      "sha256": "bf6aae547626518facfa25fdc5ba198c410bf5e50751ca8502843ba4ea7eba1f",
+      "description": "Append-only audit invariants: GameEvent and TournamentEvent immutability (no UPDATE; DELETE only via owning-row cascade), GameActionRequest one-way terminal transition with frozen identity/response, and re-assertion of the ordered/state-fingerprint unique indexes. Immutable/append-only: never edit after release."
     }
   ]
 }

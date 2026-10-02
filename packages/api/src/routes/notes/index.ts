@@ -1,37 +1,53 @@
 import type { FastifyPluginAsync } from "fastify";
-import { z } from "zod";
+import {
+  DeleteNoteResponseSchema,
+  GetNoteResponseSchema,
+  GetNotesResponseSchema,
+  PlayerNoteRequestSchema,
+  SavePlayerNoteResponseSchema,
+  type PlayerNoteRequest,
+} from "@pokertools/types";
 
-const NoteSchema = z.object({
-  targetId: z.string(),
-  content: z.string().max(500),
-  label: z.string().max(100).optional(),
-});
+interface NoteRecord {
+  id: string;
+  authorId: string;
+  targetId: string;
+  content: string;
+  label: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  target?: { id: string; username: string };
+}
+
+/** Project a Prisma note row onto the canonical wire shape (ISO timestamps). */
+function toWireNote(note: NoteRecord) {
+  return {
+    id: note.id,
+    authorId: note.authorId,
+    targetId: note.targetId,
+    content: note.content,
+    label: note.label,
+    createdAt: note.createdAt.toISOString(),
+    updatedAt: note.updatedAt.toISOString(),
+    ...(note.target ? { target: note.target } : {}),
+  };
+}
 
 export const notesRoutes: FastifyPluginAsync = async (fastify) => {
   // POST /notes - Save or update note
-  fastify.post<{ Body: z.infer<typeof NoteSchema> }>(
+  fastify.post<{ Body: PlayerNoteRequest }>(
     "/",
     {
       onRequest: [fastify.authenticate],
-      schema: {
-        body: {
-          type: "object",
-          required: ["targetId", "content"],
-          properties: {
-            targetId: { type: "string" },
-            content: { type: "string", maxLength: 500 },
-            label: { type: "string", maxLength: 100 },
-          },
-        },
-      },
     },
     async (request, reply) => {
       const { userId } = request.user;
-      const validation = NoteSchema.safeParse(request.body);
+      const validation = PlayerNoteRequestSchema.safeParse(request.body);
 
       if (!validation.success) {
         return reply.code(400).send({
           error: "Validation failed",
+          message: validation.error.issues.map((issue) => issue.message).join("; "),
           details: validation.error.issues,
         });
       }
@@ -40,7 +56,10 @@ export const notesRoutes: FastifyPluginAsync = async (fastify) => {
 
       try {
         const note = await fastify.notesManager.upsertNote(userId, targetId, content, label);
-        return { success: true, note };
+        return SavePlayerNoteResponseSchema.parse({
+          success: true,
+          note: toWireNote(note),
+        });
       } catch (error) {
         if (error instanceof Error) {
           return reply.code(400).send({ error: error.message });
@@ -61,7 +80,9 @@ export const notesRoutes: FastifyPluginAsync = async (fastify) => {
       const { targetId } = request.params;
 
       const note = await fastify.notesManager.getNote(userId, targetId);
-      return { note };
+      return GetNoteResponseSchema.parse({
+        note: note ? toWireNote(note) : null,
+      });
     }
   );
 
@@ -75,7 +96,9 @@ export const notesRoutes: FastifyPluginAsync = async (fastify) => {
       const { userId } = request.user;
 
       const notes = await fastify.notesManager.getAllNotes(userId);
-      return { notes };
+      return GetNotesResponseSchema.parse({
+        notes: notes.map(toWireNote),
+      });
     }
   );
 
@@ -91,7 +114,7 @@ export const notesRoutes: FastifyPluginAsync = async (fastify) => {
 
       try {
         await fastify.notesManager.deleteNote(userId, targetId);
-        return { success: true, message: "Note deleted" };
+        return DeleteNoteResponseSchema.parse({ success: true, message: "Note deleted" });
       } catch (error) {
         if (error instanceof Error) {
           return reply.code(404).send({ error: error.message });

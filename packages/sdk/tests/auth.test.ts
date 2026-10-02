@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   createSiweMessage as maintainedFormatter,
   parseSiweMessage as maintainedParser,
@@ -7,7 +7,8 @@ import {
   createSiweMessage,
   parseSiweMessage,
   isSiweExpired,
-  createWithdrawalMessage,
+  createWithdrawalTypedData,
+  signWithdrawalIntent,
   generateIdempotencyKey,
 } from "../src/auth";
 
@@ -192,55 +193,71 @@ describe("Auth Utilities", () => {
     });
   });
 
-  describe("createWithdrawalMessage", () => {
-    it("creates withdrawal message with required nonce and timestamp", () => {
-      const message = createWithdrawalMessage(
-        100,
-        "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-        "nonce-100",
-        1719000000000
-      );
-      expect(message).toBe(
-        "Withdraw 100 USD to 0x742d35Cc6634C0532925a3b844Bc454e4438f44e\nNonce: nonce-100\nTimestamp: 1719000000000"
-      );
+  describe("canonical withdrawal EIP-712", () => {
+    const intent = {
+      intentId: "intent-1",
+      principalId: "principal-1",
+      assetId: "eip155:31337/erc20:0x5fbdb2315678afecb367f032d93f642f64180aa3" as const,
+      destination: "0x742d35cc6634c0532925a3b844bc454e4438f44e" as const,
+      amountAtomic: "1000000",
+      nonce: 7,
+      deadline: 1893456000,
+      chainId: 31337,
+    };
+    const domain = {
+      name: "PokerTools Withdrawal",
+      version: "1",
+      chainId: 31337,
+      verifyingContract: "0x0000000000000000000000000000000000000000" as const,
+    };
+
+    it("builds canonical EIP-712 typed data for a withdrawal intent", () => {
+      const typedData = createWithdrawalTypedData(intent, domain);
+      expect(typedData.primaryType).toBe("WithdrawalIntent");
+      expect(typedData.domain).toEqual(domain);
+      expect(typedData.types.WithdrawalIntent.map((f) => f.name)).toEqual([
+        "intentId",
+        "principalId",
+        "assetId",
+        "destination",
+        "amountAtomic",
+        "nonce",
+        "deadline",
+        "chainId",
+      ]);
+      expect(typedData.message).toMatchObject(intent);
     });
 
-    it("handles decimal amounts", () => {
-      const message = createWithdrawalMessage(99.99, "0x123", "nonce-decimal", 1719000000000);
-      expect(message).toBe(
-        "Withdraw 99.99 USD to 0x123\nNonce: nonce-decimal\nTimestamp: 1719000000000"
-      );
+    it("rejects a domain that does not match the fixed withdrawal contract", () => {
+      expect(() =>
+        createWithdrawalTypedData(intent, { ...domain, name: "Attacker Controlled" })
+      ).toThrow();
+      expect(() => createWithdrawalTypedData(intent, { ...domain, chainId: 1 })).toThrow();
     });
 
-    it("creates withdrawal message with nonce and timestamp", () => {
-      const nonce = "abc-123-def";
-      const timestamp = 1719000000000;
-      const message = createWithdrawalMessage(
-        100,
-        "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-        nonce,
-        timestamp
-      );
-      expect(message).toContain("Withdraw 100 USD to 0x742d35Cc6634C0532925a3b844Bc454e4438f44e");
-      expect(message).toContain("Nonce: abc-123-def");
-      expect(message).toContain("Timestamp: 1719000000000");
+    it("signs the intent through a caller-supplied signer without inventing one", async () => {
+      const typedData = createWithdrawalTypedData(intent, domain);
+      const signTypedData = vi.fn(async () => `0x${"ab".repeat(65)}` as `0x${string}`);
+      const submission = await signWithdrawalIntent({ signTypedData }, intent, domain);
+
+      expect(signTypedData).toHaveBeenCalledWith({
+        domain: typedData.domain,
+        types: typedData.types,
+        primaryType: typedData.primaryType,
+        message: typedData.message,
+      });
+      // The API rebuilds the signature input; clients never submit typed data.
+      expect(submission).toEqual({ intent, signature: `0x${"ab".repeat(65)}` });
+      expect("typedData" in submission).toBe(false);
     });
 
-    it("includes nonce but auto-generates timestamp if not provided", () => {
-      const nonce = "unique-nonce-1";
-      const beforeTime = Date.now();
-      const message = createWithdrawalMessage(50, "0xabc", nonce);
-      const afterTime = Date.now();
-
-      expect(message).toContain("Nonce: unique-nonce-1");
-      expect(message).toContain("Timestamp: ");
-
-      // Extract timestamp and verify it's within range
-      const tsMatch = /Timestamp: (\d+)/.exec(message);
-      expect(tsMatch).not.toBeNull();
-      const ts = parseInt(tsMatch![1], 10);
-      expect(ts).toBeGreaterThanOrEqual(beforeTime);
-      expect(ts).toBeLessThanOrEqual(afterTime);
+    it("rejects an invalid canonical intent (atomic amount must be a decimal string)", () => {
+      expect(() =>
+        createWithdrawalTypedData(
+          { ...intent, amountAtomic: "1000000.5" } as unknown as typeof intent,
+          domain
+        )
+      ).toThrow();
     });
   });
 

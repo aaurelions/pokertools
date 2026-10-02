@@ -22,15 +22,6 @@ describe("Full Game Cycle Integration Test", () => {
       data: {
         username: `alice_${randomId}`,
         address: `0xalice${randomId}`,
-        accounts: {
-          create: [
-            {
-              currency: "USDC",
-              type: "MAIN",
-              balance: 10000,
-            },
-          ],
-        },
       },
     });
 
@@ -38,20 +29,20 @@ describe("Full Game Cycle Integration Test", () => {
       data: {
         username: `bob_${randomId}`,
         address: `0xbob${randomId}`,
-        accounts: {
-          create: [
-            {
-              currency: "USDC",
-              type: "MAIN",
-              balance: 10000,
-            },
-          ],
-        },
       },
     });
 
     player1Id = user1.id;
     player2Id = user2.id;
+
+    // Canonical chip funding (the legacy cents Account model is not authority).
+    for (const id of [player1Id, player2Id]) {
+      await app.financialManager.grantChips(id, 10000, {
+        reason: "test_fixture",
+        operatorId: id,
+        idempotencyKey: `full-game-grant-${id}`,
+      });
+    }
 
     // Create test tokens
     const jti1 = `test1_${randomId}`;
@@ -80,18 +71,20 @@ describe("Full Game Cycle Integration Test", () => {
     // Clean up test data
     if (player1Id) {
       await app.prisma.session.deleteMany({ where: { userId: player1Id } });
-      await app.prisma.ledgerEntry.deleteMany({
-        where: { account: { userId: player1Id } },
+      await app.prisma.chipLedgerEntry.deleteMany({
+        where: { account: { principalId: player1Id } },
       });
-      await app.prisma.account.deleteMany({ where: { userId: player1Id } });
+      await app.prisma.chipGrant.deleteMany({ where: { principalId: player1Id } });
+      await app.prisma.chipAccount.deleteMany({ where: { principalId: player1Id } });
       await app.prisma.user.delete({ where: { id: player1Id } }).catch(() => {});
     }
     if (player2Id) {
       await app.prisma.session.deleteMany({ where: { userId: player2Id } });
-      await app.prisma.ledgerEntry.deleteMany({
-        where: { account: { userId: player2Id } },
+      await app.prisma.chipLedgerEntry.deleteMany({
+        where: { account: { principalId: player2Id } },
       });
-      await app.prisma.account.deleteMany({ where: { userId: player2Id } });
+      await app.prisma.chipGrant.deleteMany({ where: { principalId: player2Id } });
+      await app.prisma.chipAccount.deleteMany({ where: { principalId: player2Id } });
       await app.prisma.user.delete({ where: { id: player2Id } }).catch(() => {});
     }
     if (tableId) {
@@ -174,13 +167,13 @@ describe("Full Game Cycle Integration Test", () => {
     expect(state.players.filter((p: any) => p !== null)).toHaveLength(2);
 
     // 5. Check balances updated
-    const balances1 = await app.financialManager.getBalances(player1Id);
-    expect(balances1.main).toBe(9000);
-    expect(balances1.inPlay).toBe(1000);
+    const balances1 = await app.financialManager.getChipBalances(player1Id);
+    expect(Number(balances1.available)).toBe(9000);
+    expect(Number(balances1.inPlay)).toBe(1000);
 
-    const balances2 = await app.financialManager.getBalances(player2Id);
-    expect(balances2.main).toBe(9000);
-    expect(balances2.inPlay).toBe(1000);
+    const balances2 = await app.financialManager.getChipBalances(player2Id);
+    expect(Number(balances2.available)).toBe(9000);
+    expect(Number(balances2.inPlay)).toBe(1000);
 
     console.log("✅ Full game cycle test passed!");
   });

@@ -76,7 +76,7 @@ describe("PokerClient", () => {
 
       const response = await client.login({
         message: "test message",
-        signature: "0x123",
+        signature: `0x${"a".repeat(130)}`,
       });
 
       expect(response.token).toBe("new-jwt");
@@ -148,6 +148,71 @@ describe("PokerClient", () => {
   });
 
   describe("actions", () => {
+    const wireState = {
+      config: { smallBlind: 5, bigBlind: 10, maxPlayers: 2 },
+      players: [null, null],
+      maxPlayers: 2,
+      handNumber: 1,
+      buttonSeat: null,
+      bigBlindSeat: null,
+      deck: [],
+      board: [],
+      street: "PREFLOP",
+      pots: [],
+      currentBets: {},
+      minRaise: 10,
+      lastRaiseAmount: 0,
+      actionTo: null,
+      lastAggressorSeat: null,
+      activePlayers: [],
+      winners: null,
+      rakeThisHand: 0,
+      smallBlind: 5,
+      bigBlind: 10,
+      ante: 0,
+      blindLevel: 0,
+      timeBanks: {},
+      timeBankActiveSeat: null,
+      actionHistory: [],
+      timestamp: 1700000000000,
+      handId: "hand-1",
+      viewingPlayerId: null,
+      version: 5,
+    };
+    const observation = {
+      tableId: "table-1",
+      handId: "hand-1",
+      turnId: "turn-1",
+      version: 5,
+      eventSeq: 10,
+      state: wireState,
+      legalActions: [
+        { actionId: "act-fold", family: "FOLD" },
+        { actionId: "act-call", family: "CALL", amount: 50 },
+        { actionId: "act-bet", family: "BET", minAmount: 100, maxAmount: 500 },
+      ],
+    };
+    // The action receipt must identify its resulting observation: the same
+    // table/hand identity and the new (version, eventSeq).
+    const resultWireState = { ...wireState, version: 6 };
+    const resultObservation = {
+      ...observation,
+      version: 6,
+      eventSeq: 11,
+      state: resultWireState,
+    };
+    const receipt = {
+      requestId: "req-1",
+      tableId: "table-1",
+      handId: "hand-1",
+      turnId: "turn-1",
+      actionId: "act-fold",
+      version: 6,
+      eventSeq: 11,
+      acceptedAt: 1700000000000,
+    };
+    const actionResult = { receipt, observation: resultObservation };
+
     it("buyIn sends correct request", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
@@ -169,37 +234,121 @@ describe("PokerClient", () => {
       );
     });
 
-    it("action returns updated state", async () => {
-      const state = { pot: 150, players: [] };
+    it("getObservation returns the validated seat observation", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ state }),
+        json: () => Promise.resolve(observation),
       });
 
-      const result = await client.action("table-1", { type: "CALL" });
-      expect(result).toEqual(state);
+      await expect(client.getObservation("table-1")).resolves.toEqual(observation);
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.example.com/tables/table-1/observation",
+        expect.objectContaining({ method: "GET" })
+      );
     });
 
-    it("convenience methods work", async () => {
-      const state = { pot: 100, players: [] };
-      mockFetch.mockResolvedValue({
+    it("rejects a response that is not a valid seat observation", async () => {
+      mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ state }),
+        json: () => Promise.resolve({ ...observation, legalActions: [{ family: "FOLD" }] }),
       });
 
-      await client.fold("table-1");
-      await client.check("table-1");
-      await client.call("table-1");
-      await client.bet("table-1", 50);
-      await client.raise("table-1", 100);
+      await expect(client.getObservation("table-1")).rejects.toThrow();
+    });
 
-      expect(mockFetch).toHaveBeenCalledTimes(5);
+    it("action submits a strict canonical request and returns the stored result", async () => {
+      const request = {
+        requestId: "req-1",
+        turnId: "turn-1",
+        expectedVersion: 5,
+        actionId: "act-fold",
+      };
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve(actionResult),
+      });
+
+      await expect(client.action("table-1", request)).resolves.toEqual(actionResult);
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.example.com/tables/table-1/action",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify(request),
+        })
+      );
+    });
+
+    it("action rejects a request carrying actor identity", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(actionResult) });
+      await expect(
+        client.action("table-1", {
+          requestId: "req-1",
+          turnId: "turn-1",
+          expectedVersion: 5,
+          actionId: "act-fold",
+          playerId: "spoofed",
+        } as unknown as Parameters<typeof client.action>[1])
+      ).rejects.toThrow();
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it("convenience fold returns the canonical wire state from the result", async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(observation) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(actionResult) });
+
+      await expect(client.fold("table-1")).resolves.toEqual(resultWireState);
+
+      const actionCall = mockFetch.mock.calls[1];
+      expect(actionCall[0]).toBe("https://api.example.com/tables/table-1/action");
+      const body = JSON.parse(actionCall[1].body);
+      expect(body).toMatchObject({
+        turnId: "turn-1",
+        expectedVersion: 5,
+        actionId: "act-fold",
+      });
+      expect(typeof body.requestId).toBe("string");
+      expect(body.requestId.length).toBeGreaterThan(0);
+    });
+
+    it("bet uses a caller amount bounded by server min/max", async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(observation) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(actionResult) });
+
+      await client.bet("table-1", 200);
+      expect(JSON.parse(mockFetch.mock.calls[1][1].body).amount).toBe(200);
+    });
+
+    it("bet rejects an amount outside the server bounds before mutating", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(observation) });
+      await expect(client.bet("table-1", 50)).rejects.toMatchObject({ code: "AMOUNT_BELOW_MIN" });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("throws when the server does not offer the requested family", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(observation) });
+      await expect(client.check("table-1")).rejects.toMatchObject({ code: "ILLEGAL_ACTION" });
     });
   });
 
   describe("user", () => {
     it("getProfile returns user data", async () => {
-      const profile = { id: "user1", username: "test", balances: { main: 1000, inPlay: 0 } };
+      const profile = {
+        id: "user1",
+        username: "test",
+        address: null,
+        role: "PLAYER",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        chipBalances: {
+          available: "1000",
+          inPlay: "0",
+          tournament: "0",
+          totalInPlay: "0",
+          pendingWithdrawal: "0",
+        },
+        assetBalances: [],
+      };
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve(profile),
@@ -210,7 +359,15 @@ describe("PokerClient", () => {
     });
 
     it("getHandHistory returns history", async () => {
-      const history = [{ id: "e1", amount: 50, type: "HAND_WIN" }];
+      const history = [
+        {
+          id: "e1",
+          amount: 50,
+          type: "HAND_WIN",
+          referenceId: null,
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      ];
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({ history }),
@@ -385,32 +542,151 @@ describe("PokerClient", () => {
   });
 
   describe("finance", () => {
-    it("getChains returns blockchain list", async () => {
-      const chains = [{ id: "eth", name: "Ethereum", tokens: [] }];
+    const assetId = "eip155:31337/erc20:0x5fbdb2315678afecb367f032d93f642f64180aa3";
+    const asset = {
+      assetId,
+      chainId: 31337,
+      tokenAddress: "0x5fbdb2315678afecb367f032d93f642f64180aa3",
+      decimals: 6,
+      symbol: "USDC",
+      status: "ACTIVE",
+      confirmations: 12,
+      deepFinality: 64,
+    };
+    const balance = {
+      principalId: "p1",
+      assetId,
+      availableAtomic: "1000000",
+      inPlayAtomic: "250000",
+      pendingWithdrawalAtomic: "0",
+    };
+    const deposit = {
+      id: "dep-1",
+      assetId,
+      txHash: `0x${"ab".repeat(32)}`,
+      logIndex: 3,
+      principalId: "p1",
+      amountAtomic: "1000000",
+      status: "CREDITED",
+      provenance: "DIRECT_TREASURY",
+    };
+    const intent = {
+      intentId: "intent-1",
+      principalId: "p1",
+      assetId,
+      destination: "0x742d35cc6634c0532925a3b844bc454e4438f44e",
+      amountAtomic: "1000000",
+      nonce: 7,
+      deadline: 1893456000,
+      chainId: 31337,
+    };
+    const submission = { intent, signature: `0x${"ab".repeat(65)}` };
+    // A withdrawal record is the full signed intent plus its lifecycle fields;
+    // it must retain every EIP-712-bound economic field.
+    const withdrawal = {
+      ...intent,
+      status: "SIGNED",
+      txHash: null,
+    };
+
+    it("getAssets returns the canonical asset registry", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve(chains),
+        json: () => Promise.resolve({ assets: [asset] }),
       });
 
-      const result = await client.getChains();
-      expect(result).toEqual(chains);
+      await expect(client.getAssets()).resolves.toEqual([asset]);
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.example.com/finance/assets",
+        expect.objectContaining({ method: "GET" })
+      );
     });
 
-    it("startDeposit returns session", async () => {
-      const session = { address: "0x123", expiresAt: "2024-01-01" };
+    it("getBalances returns atomic decimal-string balances", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve(session),
+        json: () => Promise.resolve({ balances: [balance] }),
       });
 
-      const result = await client.startDeposit();
-      expect(result).toEqual(session);
+      // The parsed balance materializes the schema defaults for the reserve
+      // and obligation buckets, which may be omitted on the wire.
+      await expect(client.getBalances()).resolves.toEqual([
+        { ...balance, tournamentReserveAtomic: "0", incidentObligationAtomic: "0" },
+      ]);
+    });
+
+    it("claimDeposit posts exact log identity", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve(deposit),
+      });
+
+      await expect(
+        client.claimDeposit({ assetId, txHash: deposit.txHash, logIndex: 3 })
+      ).resolves.toEqual(deposit);
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.example.com/finance/deposits/claim",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ assetId, txHash: deposit.txHash, logIndex: 3 }),
+        })
+      );
+    });
+
+    it("getDeposit fetches by id", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(deposit) });
+      await expect(client.getDeposit("dep-1")).resolves.toEqual(deposit);
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.example.com/finance/deposits/dep-1",
+        expect.objectContaining({ method: "GET" })
+      );
+    });
+
+    it("submitWithdrawal posts the signed canonical intent", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(withdrawal) });
+      await expect(client.submitWithdrawal(submission)).resolves.toEqual(withdrawal);
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.example.com/finance/withdrawals/intents",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify(submission),
+        })
+      );
+    });
+
+    it("submitWithdrawal rejects non-canonical atomic amounts before mutating", async () => {
+      await expect(
+        client.submitWithdrawal({
+          ...submission,
+          intent: { ...intent, amountAtomic: "1.5" },
+        })
+      ).rejects.toThrow();
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it("getWithdrawal fetches by intent id", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(withdrawal) });
+      await expect(client.getWithdrawal("intent-1")).resolves.toEqual(withdrawal);
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.example.com/finance/withdrawals/intent-1",
+        expect.objectContaining({ method: "GET" })
+      );
     });
   });
 
   describe("notes", () => {
+    const wireNote = {
+      id: "n1",
+      authorId: "user1",
+      targetId: "user2",
+      content: "test",
+      label: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+
     it("getNotes returns note list", async () => {
-      const notes = [{ id: "n1", targetId: "user2", content: "test" }];
+      const notes = [wireNote];
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({ notes }),
@@ -421,10 +697,10 @@ describe("PokerClient", () => {
     });
 
     it("saveNote creates/updates note", async () => {
-      const note = { id: "n1", targetId: "user2", content: "updated" };
+      const note = { ...wireNote, content: "updated" };
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ note }),
+        json: () => Promise.resolve({ success: true, note }),
       });
 
       const result = await client.saveNote("user2", "updated", "TAG");

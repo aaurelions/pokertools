@@ -1,12 +1,14 @@
 /// <reference path="../../types/fastify.d.ts" />
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "node:crypto";
+import { ActionType } from "@pokertools/types";
 import {
   initTestContext,
   runCleanup,
   createTable,
   buyIn,
   executeAction,
+  getObservation,
   getTableState,
   getUserBalances,
   cleanupTestTable,
@@ -121,9 +123,14 @@ describe("Tournament - Full Lifecycle Integration Test", () => {
     // =========================================================================
     // STEP 5: Increase Blind Level
     // =========================================================================
-    await executeAction(ctx.app, player1.token, ctx.tableId, {
-      type: "NEXT_BLIND_LEVEL",
-    });
+    // Blind escalation is a tournament-management family and is deliberately
+    // not offered through the public action route. Drive the internal
+    // management mutation directly; it shares the same DB-authoritative CAS.
+    await ctx.app.gameManager.processAction(
+      ctx.tableId,
+      { type: ActionType.NEXT_BLIND_LEVEL },
+      player1.id
+    );
 
     state = await getTableState(ctx.app, player1.token, ctx.tableId);
     const newBlindLevel = state.blindLevel || 0;
@@ -195,10 +202,19 @@ describe("Tournament - Full Lifecycle Integration Test", () => {
       const player = state.players[seat];
 
       if (player && state.actionTo === seat) {
-        // Go all-in
+        // Go all-in at the first legal opportunity. With a posted blind the
+        // opening BET is not legal; an all-in is a RAISE (or an all-in CALL).
+        const observation = await getObservation(ctx.app, shortStackPlayer.token, ctx.tableId);
+        const allIn =
+          observation.legalActions.find((action) => action.family === "RAISE") ??
+          observation.legalActions.find((action) => action.family === "BET") ??
+          observation.legalActions.find((action) => action.family === "CALL");
+        expect(allIn).toBeDefined();
+        const amount =
+          allIn!.family === "CALL" ? allIn!.amount : (allIn!.maxAmount ?? allIn!.amount);
         await executeAction(ctx.app, shortStackPlayer.token, ctx.tableId, {
-          type: "BET",
-          amount: player.stack,
+          type: allIn!.family,
+          ...(amount === undefined ? {} : { amount }),
         });
 
         console.log(`✅ Player ${seat} went all-in with ${player.stack} chips`);
@@ -1088,10 +1104,12 @@ describe("Tournament - Management and Financial Regression Coverage", () => {
         data: {
           username,
           address,
-          accounts: {
-            create: [{ currency: "USDC", type: "MAIN", balance: 10000 }],
-          },
         },
+      });
+      await rctx.app.financialManager.grantChips(user.id, 10000, {
+        reason: "test_fixture",
+        operatorId: user.id,
+        idempotencyKey: `temp-table-grant-${user.id}`,
       });
       const jti = `test_temp_${username}`;
       const token = await rctx.app.jwt.sign(
@@ -1132,10 +1150,11 @@ describe("Tournament - Management and Financial Regression Coverage", () => {
     // Cleanup temp users
     for (const user of tempUsers) {
       await rctx.app.prisma.session.deleteMany({ where: { userId: user.id } });
-      await rctx.app.prisma.ledgerEntry.deleteMany({
-        where: { account: { userId: user.id } },
+      await rctx.app.prisma.chipLedgerEntry.deleteMany({
+        where: { account: { principalId: user.id } },
       });
-      await rctx.app.prisma.account.deleteMany({ where: { userId: user.id } });
+      await rctx.app.prisma.chipGrant.deleteMany({ where: { principalId: user.id } });
+      await rctx.app.prisma.chipAccount.deleteMany({ where: { principalId: user.id } });
       await rctx.app.prisma.user.delete({ where: { id: user.id } }).catch(() => {});
     }
   });

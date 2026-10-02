@@ -135,16 +135,16 @@ describe("Load and Performance Tests", () => {
         });
 
         if (hand === 0) {
-          firstHandStreet = dealResult.state.street;
+          firstHandStreet = dealResult.observation.state.street;
         }
 
         // Verify we're in a preflop state with 3 players
-        expect(dealResult.state.players.filter(Boolean)).toHaveLength(3);
+        expect(dealResult.observation.state.players.filter(Boolean)).toHaveLength(3);
 
         // Fold until the hand completes (winners present)
         let actionsThisHand = 0;
         const maxActionsThisHand = 10; // safety valve
-        let state = dealResult.state;
+        let state = dealResult.observation.state;
 
         while (!state.winners || !Array.isArray(state.winners) || state.winners.length === 0) {
           actionsThisHand++;
@@ -168,8 +168,8 @@ describe("Load and Performance Tests", () => {
           const foldResult = await executeAction(ctx.app, actingPlayer.token, tableId, {
             type: "FOLD",
           });
-          expect(foldResult.state).toBeDefined();
-          state = foldResult.state;
+          expect(foldResult.observation.state).toBeDefined();
+          state = foldResult.observation.state;
         }
 
         // Hand completed — verify at least one winner or one player remaining
@@ -524,7 +524,7 @@ describe("Load and Performance Tests", () => {
       const fold1Result = await executeAction(ctx.app, firstActor.token, tableId, { type: "FOLD" });
       const fold1Duration = performance.now() - t0Fold1;
 
-      state = fold1Result.state;
+      state = fold1Result.observation.state;
 
       // If hand isn't over yet (both still in), fold for the other player
       let fold2Duration = 0;

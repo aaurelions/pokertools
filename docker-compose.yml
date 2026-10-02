@@ -47,6 +47,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Local SQLite image: generate a SQLite-provider Prisma client.
+        PRISMA_GENERATE_DATABASE_URL: "file:../.runtime/prisma-generate.db"
     image: ghcr.io/aaurelions/pokertools:latest
     restart: unless-stopped
     ports:
@@ -68,7 +71,6 @@ services:
       # The entrypoint enforces that production never uses dev defaults.
       JWT_SECRET: "${JWT_SECRET:?err: JWT_SECRET must be set in .env for production}"
       COOKIE_SECRET: "${COOKIE_SECRET:?err: COOKIE_SECRET must be set in .env for production}"
-      WALLET_ENCRYPTION_SECRET: "${WALLET_ENCRYPTION_SECRET:?err: WALLET_ENCRYPTION_SECRET must be set in .env for production}"
       # Observability — set METRICS_TOKEN to secure the /metrics endpoint.
       METRICS_TOKEN: ${METRICS_TOKEN:-}
       CORS_ORIGIN: ${CORS_ORIGIN:-}

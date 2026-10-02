@@ -66,9 +66,10 @@ describe("Chaos & Resilience", () => {
       expect(player1InState).not.toBeNull();
       expect(player2InState).not.toBeNull();
 
-      // Verify state was repopulated in Redis after DB fallback read
-      const redisRepopulated = await ctx.app.redis.get(redisKey);
-      expect(redisRepopulated).not.toBeNull();
+      // PostgreSQL is authoritative: a second read still returns the same
+      // durable state even though Redis remains empty.
+      const stateAgain = await getTableState(ctx.app, player1.token, tableId);
+      expect(stateAgain.version).toBe(state.version);
     } finally {
       await cleanupTestTable(ctx.app, tableId);
     }
@@ -85,10 +86,12 @@ describe("Chaos & Resilience", () => {
       data: {
         username: `poor_resilience_${Date.now()}`,
         address: `0xpoor_resilience_${Date.now()}`,
-        accounts: {
-          create: [{ currency: "USDC", type: "MAIN", balance: 500 }],
-        },
       },
+    });
+    await ctx.app.financialManager.grantChips(poorUser.id, 500, {
+      reason: "test_fixture",
+      operatorId: poorUser.id,
+      idempotencyKey: `test-grant:${poorUser.id}`,
     });
 
     const jti = `resilience_jti_${Date.now()}`;
@@ -111,9 +114,9 @@ describe("Chaos & Resilience", () => {
       });
 
       try {
-        // Capture ledger count before attempting buy-in
-        const ledgerBefore = await ctx.app.prisma.ledgerEntry.count({
-          where: { account: { userId: poorUser.id } },
+        // Capture canonical chip-journal count before attempting buy-in
+        const ledgerBefore = await ctx.app.prisma.chipLedgerEntry.count({
+          where: { account: { principalId: poorUser.id } },
         });
 
         // Attempt buy-in with amount exceeding balance (500 > available 500)
@@ -131,9 +134,9 @@ describe("Chaos & Resilience", () => {
         // Must fail - insufficient funds
         expect([400, 500]).toContain(buyInRes.statusCode);
 
-        // Verify no phantom ledger entries were left behind
-        const ledgerAfter = await ctx.app.prisma.ledgerEntry.count({
-          where: { account: { userId: poorUser.id } },
+        // Verify no phantom chip-journal entries were left behind
+        const ledgerAfter = await ctx.app.prisma.chipLedgerEntry.count({
+          where: { account: { principalId: poorUser.id } },
         });
         expect(ledgerAfter).toBe(ledgerBefore);
 
@@ -142,9 +145,9 @@ describe("Chaos & Resilience", () => {
         expect(balances.main).toBe(500);
         expect(balances.inPlay).toBe(0);
 
-        // Also verify no partial IN_PLAY account was created
-        const inPlayAccount = await ctx.app.prisma.account.findFirst({
-          where: { userId: poorUser.id, type: "IN_PLAY" },
+        // Also verify no partial chip TABLE_RESERVE (in-play escrow) account was created
+        const inPlayAccount = await ctx.app.prisma.chipAccount.findFirst({
+          where: { principalId: poorUser.id, kind: "TABLE_RESERVE" },
         });
         expect(inPlayAccount).toBeNull();
       } finally {
@@ -240,9 +243,9 @@ describe("Chaos & Resilience", () => {
       expect(player).not.toBeNull();
       expect(player!.stack).toBeGreaterThan(0);
 
-      // Verify the state was re-cached back into Redis after the DB fallback
-      const redisAfter = await ctx.app.redis.get(redisKey);
-      expect(redisAfter).not.toBeNull();
+      // PostgreSQL is authoritative: the state is still readable while Redis is empty.
+      const stateAgain = await getTableState(ctx.app, player1.token, tableId);
+      expect(stateAgain.version).toBe(state.version);
     } finally {
       await cleanupTestTable(ctx.app, tableId);
     }

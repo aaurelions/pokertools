@@ -24,9 +24,37 @@ import { wsRoutes } from "./routes/ws/index.js";
 import { financeRoutes } from "./routes/finance/index.js";
 import { notesRoutes } from "./routes/notes/index.js";
 import { tournamentRoutes } from "./routes/tournaments/index.js";
+import { chipRoutes } from "./routes/chips/index.js";
 
 import { config } from "./config.js";
-import { HealthResponseSchema, ReadinessResponseSchema } from "@pokertools/types";
+import { HealthResponseSchema } from "@pokertools/types";
+import type { TableScope } from "./services/principal-manager.js";
+import { createPlatformReadiness, buildReadinessResponse } from "./services/readiness-adapters.js";
+import { createIncidentReadinessCheck } from "./services/incident-readiness.js";
+
+/**
+ * Table scopes a SERVICE principal is permitted to reach over REST. Any other
+ * route is categorically denied for machine credentials (no admin, finance,
+ * custody, user, tournament-management, or auth-operator access).
+ */
+function serviceRequiredScope(method: string, routeUrl: string): TableScope | null {
+  if (routeUrl === "/tables" || routeUrl === "/tables/:id") {
+    return method === "GET" ? "table:observe" : null;
+  }
+  if (routeUrl === "/tables/:id/action") {
+    return method === "POST" ? "table:act" : null;
+  }
+  if (routeUrl === "/tables/:id/observation" || routeUrl === "/tables/:id/replay") {
+    return method === "GET" ? "table:observe" : null;
+  }
+  if (["/tables/:id/buy-in", "/tables/:id/add-chips", "/tables/:id/stand"].includes(routeUrl)) {
+    return method === "POST" ? "table:act" : null;
+  }
+  if (routeUrl === "/tables/:id/chat") {
+    return method === "POST" ? "table:chat" : method === "GET" ? "table:observe" : null;
+  }
+  return null;
+}
 
 export async function buildApp() {
   const app = Fastify({
@@ -116,18 +144,148 @@ export async function buildApp() {
   await app.register(queuePlugin);
   await app.register(servicesPlugin);
 
-  // Authenticate decorator: validates JWT AND DB session so server-side
-  // revocation/expiry cannot be bypassed with a still-valid token.
+  // Operator incident resolution must re-verify real chain/accounting health in
+  // the same transaction; without this injected check the route fails closed.
+  app.decorate(
+    "financialIncidentReadinessCheck",
+    createIncidentReadinessCheck({ prisma: app.prisma })
+  );
+
+  // Authenticate decorator: validates the principal and attaches it to the
+  // request. Wallet JWTs are checked against the DB session so server-side
+  // revocation/expiry cannot be bypassed with a still-valid token. Opaque
+  // SERVICE credentials are resolved by hashed lookup and are fully revocable.
   app.decorate("authenticate", async (request: FastifyRequest, reply: FastifyReply) => {
+    const authorization = request.headers.authorization;
+    const bearer =
+      typeof authorization === "string" && authorization.startsWith("Bearer ")
+        ? authorization.slice("Bearer ".length).trim()
+        : undefined;
+
+    // Prefixed service credentials are never parsed as wallet JWTs.
+    if (app.principalManager.isServiceToken(bearer)) {
+      const principal = await app.principalManager.authenticateServiceToken(bearer!);
+      if (principal === null) {
+        await reply.code(401).send({ error: "Unauthorized" });
+        return;
+      }
+      request.principal = principal;
+      // Compatibility shim: routes that predate principals still read
+      // request.user.userId. Service identities have no session (empty jti).
+      request.user = { userId: principal.id, jti: "", address: undefined };
+      return;
+    }
+
     try {
       await request.jwtVerify();
       const { jti } = request.user;
-      const session = await app.prisma.session.findUnique({ where: { jti } });
+      const session = await app.prisma.session.findUnique({
+        where: { jti },
+        include: { user: { select: { id: true, address: true, role: true, kind: true } } },
+      });
       if (session === null || session.revoked || session.expiresAt <= new Date()) {
         throw new Error("Session invalid");
       }
+      const principal = app.principalManager.buildWalletPrincipal({
+        id: session.user.id,
+        address: session.user.address,
+        role: session.user.role,
+        kind: session.user.kind,
+      });
+      // Fail closed: a session whose backing identity is not an addressable
+      // WALLET must never be promoted to a wallet principal.
+      if (principal === null) throw new Error("Not a wallet principal");
+      request.principal = principal;
     } catch (_err) {
       await reply.code(401).send({ error: "Unauthorized" });
+    }
+  });
+
+  // Operator authority is an explicit ADMIN wallet property. SERVICE
+  // credentials are never operators, regardless of requested scopes.
+  app.decorate("requireOperator", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!request.principal?.isOperator) {
+      await reply.code(403).send({ error: "OPERATOR_REQUIRED" });
+    }
+  });
+
+  // Reusable table authorization for REST handlers (game/SDK agents).
+  // `persistedSeat` must come from authoritative state, never request body.
+  app.decorate(
+    "authorizeTable",
+    (
+      request: FastifyRequest,
+      scope: TableScope,
+      tableId?: string | null,
+      persistedSeat?: number | null
+    ) => app.principalManager.authorizeTable(request.principal, scope, tableId, persistedSeat)
+  );
+
+  // Resolve presented service credentials even on otherwise public routes.
+  // Ignoring a bearer token there would bypass resource restrictions by treating
+  // an authenticated service as an anonymous spectator.
+  app.addHook("onRequest", async (request, reply) => {
+    const authorization = request.headers.authorization;
+    if (
+      typeof authorization === "string" &&
+      authorization.startsWith("Bearer ") &&
+      app.principalManager.isServiceToken(authorization.slice(7).trim())
+    ) {
+      await app.authenticate(request, reply);
+    }
+  });
+
+  // Enforce SERVICE scope boundaries before any handler runs. Wallet principals
+  // are unaffected and retain their full regular gameplay scopes. Non-table
+  // resources (finance, custody, admin, operator auth, room/table creation) are
+  // categorically denied to machine credentials.
+  app.addHook("preHandler", async (request, reply) => {
+    const principal = request.principal;
+    if (principal?.kind !== "SERVICE") return;
+
+    const routeUrl = request.routeOptions?.url ?? "";
+    // These public operational endpoints and the principal's own identity do
+    // not confer gameplay, financial or operator authority.
+    if (request.method === "GET" && ["/health", "/ready", "/auth/me"].includes(routeUrl)) return;
+    const requiredScope = serviceRequiredScope(request.method, routeUrl);
+    if (!requiredScope) {
+      await reply.code(403).send({ error: "SERVICE_SCOPE_FORBIDDEN" });
+      return;
+    }
+
+    const tableId = (request.params as { id?: string } | undefined)?.id ?? null;
+
+    // Seat restrictions are checked against the principal's authoritative seat
+    // in engine state — never a client-supplied actor seat. An unrestrictable
+    // or unknown seat fails closed inside authorizeTable.
+    let persistedSeat: number | null = null;
+    if (principal.restrictions.seat !== null && tableId) {
+      const state = await app.gameManager.getState(tableId).catch(() => null);
+      const index = state?.players.findIndex((player) => player?.id === principal.id) ?? -1;
+      persistedSeat = index >= 0 ? index : null;
+      if (persistedSeat === null && routeUrl === "/tables/:id/buy-in") {
+        // Selecting a destination seat for a claim is resource selection, not
+        // actor selection. The route validates it and always seats principal.id.
+        const requestedSeat = (request.body as { seat?: unknown } | undefined)?.seat;
+        if (
+          typeof requestedSeat === "number" &&
+          Number.isInteger(requestedSeat) &&
+          requestedSeat >= 0 &&
+          requestedSeat <= 9
+        ) {
+          persistedSeat = requestedSeat;
+        }
+      }
+    }
+
+    const authorization = app.principalManager.authorizeTable(
+      principal,
+      requiredScope,
+      tableId,
+      persistedSeat
+    );
+    if (!authorization.allowed) {
+      await reply.code(403).send({ error: authorization.reason });
     }
   });
 
@@ -139,6 +297,7 @@ export async function buildApp() {
   await app.register(wsRoutes, { prefix: "/ws" });
   await app.register(financeRoutes, { prefix: "/finance" });
   await app.register(notesRoutes, { prefix: "/notes" });
+  await app.register(chipRoutes, { prefix: "/chips" });
   if (config.NODE_ENV === "test" && config.ENABLE_TEST_ROUTES === "true") {
     await app.register(testRoutesPlugin);
   }
@@ -163,28 +322,18 @@ export async function buildApp() {
 
   app.get("/health", () => HealthResponseSchema.parse({ status: "ok", timestamp: Date.now() }));
 
+  const readiness = createPlatformReadiness(app, {
+    custodyEvidenceReader: {
+      read: () =>
+        app.prisma.custodyHeartbeat.findMany({
+          orderBy: { observedAt: "desc" },
+          take: 1000,
+        }),
+    },
+  });
   app.get("/ready", async (_request, reply) => {
-    const health = await app.observabilityManager.health();
-    // A reachable DB is not proof of migration integrity or financial safety.
-    // No configuration flag may turn missing acceptance evidence into readiness.
-    return reply.code(503).send(
-      ReadinessResponseSchema.parse({
-        status: "not_ready",
-        timestamp: Date.now(),
-        checks: health.checks,
-        migrations: { status: "unverified" },
-        financial: {
-          status: "blocked",
-          reasons: [
-            "ASSET_LEDGER_UNVERIFIED",
-            "RPC_QUORUM_UNVERIFIED",
-            "RECONCILIATION_UNVERIFIED",
-            "NATIVE_GAS_UNVERIFIED",
-            "CUSTODY_WORKFLOW_UNVERIFIED",
-          ],
-        },
-      })
-    );
+    const report = await readiness.evaluate();
+    return reply.code(report.ready ? 200 : 503).send(buildReadinessResponse(report));
   });
 
   app.get("/metrics", async (request, reply) => {

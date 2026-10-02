@@ -1,5 +1,9 @@
 /**
  * SDK-specific types and configuration
+ *
+ * Wire DTOs for auth, canonical table turns and finance live in
+ * `@pokertools/types` and are re-exported from the SDK. Only SDK
+ * configuration, transport events and view helpers are declared here.
  */
 
 /**
@@ -12,7 +16,11 @@ export interface PokerSDKConfig {
   /** WebSocket URL (defaults to baseUrl with ws:// protocol) */
   wsUrl?: string;
 
-  /** JWT token for authentication */
+  /**
+   * Credential for authentication. Wallet sessions and scoped SERVICE
+   * credentials are both opaque bearer tokens: HTTP sends
+   * `Authorization: Bearer <token>` and WebSocket sends `jwt.<token>`.
+   */
   token?: string;
 
   /** Request timeout in milliseconds (default: 30000) */
@@ -39,128 +47,11 @@ export interface PokerSDKConfig {
 }
 
 /**
- * User balance information
+ * User-facing wire DTOs (`GET /user/me`, `/user/history`, `/notes`) are defined
+ * once as strict runtime schemas in `@pokertools/types` and re-exported here so
+ * existing SDK/React import paths keep working without duplicate declarations.
  */
-export interface UserBalances {
-  main: number;
-  inPlay: number;
-  pendingWithdrawal: number;
-}
-
-/**
- * User profile with balances
- */
-export interface UserProfile {
-  id: string;
-  username: string;
-  address: string;
-  role: "PLAYER" | "ADMIN" | "BOT";
-  createdAt: string;
-  balances: UserBalances;
-}
-
-/**
- * Blockchain configuration
- */
-export interface BlockchainInfo {
-  id: string;
-  name: string;
-  chainId: number;
-  tokens: TokenInfo[];
-}
-
-/**
- * Token configuration
- */
-export interface TokenInfo {
-  id: string;
-  symbol: string;
-  name: string;
-  decimals: number;
-  minDeposit: string;
-}
-
-/**
- * Deposit session info
- */
-export interface DepositSession {
-  address: string;
-  expiresAt: string;
-  message: string;
-}
-
-/**
- * Deposit record
- */
-export interface DepositRecord {
-  id: string;
-  txHash: string | null;
-  chain: string;
-  token: string;
-  amountRaw: string;
-  amountCredit: number;
-  status: "PENDING" | "PROCESSING" | "CONFIRMED" | "FAILED";
-  createdAt: string;
-  confirmedAt: string | null;
-  explorerUrl: string;
-}
-
-/**
- * Withdrawal request
- */
-export interface WithdrawalRequest {
-  amount: number;
-  blockchainId: string;
-  tokenId: string;
-  address: string;
-  message: string;
-  signature: `0x${string}`;
-  idempotencyKey?: string;
-}
-
-/**
- * Withdrawal record
- */
-export interface WithdrawalRecord {
-  id: string;
-  txHash: string | null;
-  chain: string;
-  token: string;
-  address: string;
-  amountRaw: string;
-  amountUSD: number;
-  status: "PENDING" | "PROCESSING" | "CONFIRMED" | "FAILED" | "REJECTED" | "CANCELLED";
-  createdAt: string;
-  confirmedAt: string | null;
-  explorerUrl: string | null;
-}
-
-/**
- * Hand history entry (simplified)
- */
-export interface HandHistoryEntry {
-  id: string;
-  amount: number;
-  type: "HAND_WIN" | "HAND_LOSS";
-  referenceId: string | null;
-  createdAt: string;
-}
-
-/**
- * Player note
- */
-export interface PlayerNote {
-  id: string;
-  targetId: string;
-  content: string;
-  label: string | null;
-  createdAt: string;
-  updatedAt: string;
-  target?: {
-    id: string;
-    username: string;
-  };
-}
+export type { UserBalances, UserProfile, HandHistoryEntry, PlayerNote } from "@pokertools/types";
 
 /**
  * SDK error class
@@ -190,8 +81,12 @@ export interface PokerSocketEvents {
   disconnect: (reason?: string) => void;
   reconnect: (attempt: number) => void;
   error: (error: Error) => void;
-  stateUpdate: (tableId: string, state: import("@pokertools/types").PublicState) => void;
-  snapshot: (tableId: string, state: import("@pokertools/types").PublicState) => void;
+  /** Full canonical observation for the joined table (auth-scoped). */
+  observation: (tableId: string, observation: import("@pokertools/types").SeatObservation) => void;
+  /** Canonical wire state on the first observation after join (ergonomic view). */
+  snapshot: (tableId: string, state: import("@pokertools/types").PublicWireState) => void;
+  /** Canonical wire state after a change (ergonomic view). */
+  stateUpdate: (tableId: string, state: import("@pokertools/types").PublicWireState) => void;
   action: (tableId: string, playerId: string, actionType: string, amount?: number) => void;
 }
 

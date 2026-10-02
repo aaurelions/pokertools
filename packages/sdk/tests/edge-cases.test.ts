@@ -1,17 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { PlayerStatus, Street, SitInOption } from "@pokertools/types";
-import type { PublicState, PublicPlayer, Pot } from "@pokertools/types";
+import type { PublicState, PublicPlayer } from "@pokertools/types";
 import {
   formatChips,
   parseChips,
   getActivePlayer,
-  getCallAmount,
-  getMinRaise,
-  canCheck,
-  canBet,
   getTotalPot,
   getActivePlayers,
-  getPotOdds,
   suitToEmoji,
   formatCard,
   formatCards,
@@ -22,7 +17,6 @@ import {
   createSiweMessage,
   parseSiweMessage,
   isSiweExpired,
-  createWithdrawalMessage,
   generateIdempotencyKey,
 } from "../src/auth";
 
@@ -83,80 +77,79 @@ const createState = (overrides: Partial<PublicState> = {}): PublicState => ({
 
 describe("Chip formatting edge cases", () => {
   describe("formatChips", () => {
-    it("formats zero", () => {
-      expect(formatChips(0)).toBe("$0.00");
+    it("formats zero as a bare integer", () => {
+      expect(formatChips(0)).toBe("0");
     });
 
-    it("formats single cent", () => {
-      expect(formatChips(1)).toBe("$0.01");
+    it("formats a single chip as a bare integer", () => {
+      expect(formatChips(1)).toBe("1");
     });
 
-    it("formats large amounts", () => {
-      expect(formatChips(1000000)).toBe("$10000.00");
-      expect(formatChips(1_000_000_000)).toBe("$10000000.00");
+    it("displays 100 chips as 100, never as $1.00", () => {
+      expect(formatChips(100)).toBe("100");
     });
 
-    it("uses custom currency (euro, pound, yen)", () => {
-      expect(formatChips(100, "€")).toBe("€1.00");
-      expect(formatChips(100, "£")).toBe("£1.00");
-      expect(formatChips(100, "¥")).toBe("¥1.00");
+    it("formats large amounts with grouping and no currency", () => {
+      expect(formatChips(1_000_000)).toBe("1,000,000");
+      expect(formatChips(1_000_000_000)).toBe("1,000,000,000");
     });
 
-    it("formatChips correctly handles negative input (mathematically)", () => {
-      expect(formatChips(-100)).toBe("$-1.00");
+    it("rejects fractions, unsafe integers and negatives", () => {
+      expect(() => formatChips(10.5)).toThrow();
+      expect(() => formatChips(Number.MAX_SAFE_INTEGER + 1)).toThrow();
+      expect(() => formatChips(-100)).toThrow();
     });
   });
 
   describe("parseChips", () => {
-    it("parses plain dollar string with decimals", () => {
-      expect(parseChips("$10.50")).toBe(1050);
-      expect(parseChips("$0.50")).toBe(50);
-    });
-
-    it("parses plain number string with decimals", () => {
-      expect(parseChips("10.50")).toBe(1050);
-      expect(parseChips("0.01")).toBe(1);
-    });
-
-    it("parses integer above 100 as cents directly (heuristic)", () => {
+    it("parses plain integer chip text", () => {
       expect(parseChips("1000")).toBe(1000);
       expect(parseChips("1050")).toBe(1050);
+      expect(parseChips("1")).toBe(1);
+      expect(parseChips("99")).toBe(99);
     });
 
-    it("interprets integer below 100 as dollars-to-cents conversion", () => {
-      // Value 1 (< 100) is non-integer dollar amount 1.00 -> 100 cents
-      expect(parseChips("1")).toBe(100);
-      expect(parseChips("99")).toBe(9900);
+    it("parses optional comma grouping without scaling", () => {
+      expect(parseChips("1,000")).toBe(1000);
+      expect(parseChips("1,234,567")).toBe(1_234_567);
     });
 
-    it("parses euro, pound, yen-stripped numeric amounts (currency-agnostic)", () => {
-      // parseChips strips currency symbols, then either parses as dollars
-      // or keeps as cents if integer >= 100. So "€10.50" -> 1050; "£1000" -> 1000
-      expect(parseChips("€10.50")).toBe(1050);
-      expect(parseChips("£1000")).toBe(1000);
-      expect(parseChips("¥10.50")).toBe(1050);
-    });
-
-    it("parses amounts with thousands separators (commas)", () => {
-      expect(parseChips("$1,000")).toBe(1000);
-      expect(parseChips("$1,000.50")).toBe(100050);
-      expect(parseChips("€1,234.56")).toBe(123456);
-    });
-
-    it("parses zero dollars", () => {
-      expect(parseChips("$0.00")).toBe(0);
+    it("parses zero", () => {
       expect(parseChips("0")).toBe(0);
     });
 
-    it("parses negative dollar amounts", () => {
-      expect(parseChips("-$10.00")).toBe(-1000);
-      // -1000 is not >= 100 so it's converted as dollars to cents: -1000 * 100 = -100000
-      expect(parseChips("-1000")).toBe(-100000);
+    it("parses surrounding whitespace but rejects internal junk", () => {
+      expect(parseChips(" 1000 ")).toBe(1000);
+      expect(() => parseChips(" 1 000 ")).toThrow();
     });
 
-    it("parses amounts with surrounding whitespace", () => {
-      expect(parseChips("  $10.00  ")).toBe(1000);
-      expect(parseChips(" 1000 ")).toBe(1000);
+    it("rejects currency symbols and dollar strings", () => {
+      expect(() => parseChips("$1000")).toThrow();
+      expect(() => parseChips("$1,000")).toThrow();
+      expect(() => parseChips("€10.50")).toThrow();
+      expect(() => parseChips("£1000")).toThrow();
+    });
+
+    it("rejects fractions", () => {
+      expect(() => parseChips("10.50")).toThrow();
+      expect(() => parseChips("0.01")).toThrow();
+      expect(() => parseChips("1.5")).toThrow();
+    });
+
+    it("rejects exponent notation and trailing junk", () => {
+      expect(() => parseChips("1e3")).toThrow();
+      expect(() => parseChips("1000abc")).toThrow();
+      expect(() => parseChips("1000 ")).not.toThrow();
+      expect(() => parseChips("1,00")).toThrow();
+    });
+
+    it("rejects negative amounts", () => {
+      expect(() => parseChips("-1000")).toThrow();
+      expect(() => parseChips("-$10.00")).toThrow();
+    });
+
+    it("rejects unsafe integers", () => {
+      expect(() => parseChips("9007199254740993")).toThrow();
     });
 
     it("throws on completely invalid strings", () => {
@@ -281,125 +274,6 @@ describe("State utilities edge cases", () => {
         ] as Array<PublicPlayer | null>,
       });
       expect(getActivePlayer(state)).toBeNull();
-    });
-  });
-
-  describe("getCallAmount edge cases", () => {
-    it("returns 0 when player is not found", () => {
-      const state = createState();
-      expect(getCallAmount(state, "ghost")).toBe(0);
-    });
-
-    it("returns 0 when no other player has bet above theirs", () => {
-      const state = createState({
-        players: [
-          createPlayer({ id: "player1", betThisStreet: 100 }),
-          createPlayer({ id: "player2", betThisStreet: 50 }),
-        ],
-      });
-      // player1 has highest bet themselves, so to-call is 0 (Math.min(0, stack) = 0)
-      expect(getCallAmount(state, "player1")).toBe(0);
-    });
-  });
-
-  describe("canBet edge cases", () => {
-    it("returns false when not player's turn", () => {
-      const state = createState({
-        actionTo: 1,
-        players: [
-          createPlayer({ id: "player1", betThisStreet: 0, stack: 100 }),
-          createPlayer({ id: "player2", betThisStreet: 0, stack: 100 }),
-        ],
-      });
-      expect(canBet(state, "player1")).toBe(false);
-    });
-
-    it("returns false when player has zero stack", () => {
-      const state = createState({
-        actionTo: 0,
-        players: [
-          createPlayer({ id: "player1", betThisStreet: 0, stack: 0 }),
-          createPlayer({ id: "player2", betThisStreet: 0, stack: 100 }),
-        ],
-      });
-      expect(canBet(state, "player1")).toBe(false);
-    });
-  });
-
-  describe("canCheck edge cases", () => {
-    it("returns false for non-existent player", () => {
-      const state = createState({ actionTo: 0 });
-      expect(canCheck(state, "ghost")).toBe(false);
-    });
-
-    it("returns true for player already at highest bet", () => {
-      const state = createState({
-        actionTo: 0,
-        players: [
-          createPlayer({ id: "player1", betThisStreet: 100 }),
-          createPlayer({ id: "player2", betThisStreet: 100 }),
-        ],
-      });
-      expect(canCheck(state, "player1")).toBe(true);
-    });
-  });
-
-  describe("getMinRaise", () => {
-    it("returns state.minRaise when present", () => {
-      const state = createState({ minRaise: 40 });
-      expect(getMinRaise(state)).toBe(40);
-    });
-
-    it("falls back to bigBlind when minRaise is missing (as undefined)", () => {
-      const state = createState();
-      // Simulate missing minRaise (undefined) — but PublicState types it as
-      // number with the mock default of 10. Construct a state without minRaise
-      const stateNoRaise = { ...state, minRaise: undefined as unknown as number };
-      expect(getMinRaise(stateNoRaise)).toBe(state.config.bigBlind);
-    });
-  });
-
-  describe("getPotOdds", () => {
-    it("returns Infinity when there is nothing to call", () => {
-      const state = createState({
-        actionTo: 0,
-        players: [
-          createPlayer({ id: "player1", betThisStreet: 0, stack: 100 }),
-          createPlayer({ id: "player2", betThisStreet: 0, stack: 100 }),
-        ],
-      });
-      expect(getPotOdds(state, "player1")).toBe(Infinity);
-    });
-
-    it("returns pot to amount ratio when facing a bet", () => {
-      const pot: Pot = {
-        amount: 100,
-        eligibleSeats: [0, 1],
-        type: "MAIN",
-        capPerPlayer: 100,
-      };
-      const state = createState({
-        actionTo: 0,
-        pots: [pot],
-        players: [
-          createPlayer({ id: "player1", betThisStreet: 0, stack: 50 }),
-          createPlayer({ id: "player2", betThisStreet: 100, stack: 0 }),
-        ],
-      });
-      // callAmount = min(100 - 0, 50) = 50; totalPot = 100; ratio = 100/50 = 2
-      expect(getPotOdds(state, "player1")).toBe(2);
-    });
-
-    it("returns 0 when pot is empty but a bet exists to call", () => {
-      const state = createState({
-        actionTo: 0,
-        players: [
-          createPlayer({ id: "player1", betThisStreet: 0, stack: 100 }),
-          createPlayer({ id: "player2", betThisStreet: 50, stack: 100 }),
-        ],
-      });
-      // callAmount = 50; totalPot = 0; ratio = 0/50 = 0
-      expect(getPotOdds(state, "player1")).toBe(0);
     });
   });
 
@@ -539,26 +413,6 @@ describe("Auth utility edge cases", () => {
         nonce: "abcdefgh1",
       });
       expect(isSiweExpired(message)).toBe(false);
-    });
-  });
-
-  describe("createWithdrawalMessage", () => {
-    it("includes amount integer in message", () => {
-      const m = createWithdrawalMessage(500, "0xabc", "nonce-500", 1719000000000);
-      expect(m).toBe("Withdraw 500 USD to 0xabc\nNonce: nonce-500\nTimestamp: 1719000000000");
-    });
-
-    it("includes amount 0 in message", () => {
-      expect(createWithdrawalMessage(0, "0xabc", "nonce-zero", 1719000000000)).toBe(
-        "Withdraw 0 USD to 0xabc\nNonce: nonce-zero\nTimestamp: 1719000000000"
-      );
-    });
-
-    it("handles long ethereum address with mixed case", () => {
-      const addr = "0x742d35Cc6634C0532925a3b844Bc454e4438f44e";
-      expect(createWithdrawalMessage(100, addr, "nonce-address", 1719000000000)).toBe(
-        `Withdraw 100 USD to ${addr}\nNonce: nonce-address\nTimestamp: 1719000000000`
-      );
     });
   });
 

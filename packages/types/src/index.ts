@@ -11,6 +11,12 @@ export * from "./schemas";
 export * from "./web-socket-messages";
 export * from "./error-codes";
 
+// Canonical runtime/wire contracts
+export * from "./canonical";
+
+// Compiled convergence evidence (release admission gate)
+export * from "./convergence";
+
 // API DTOs
 export * from "./api/common";
 export * from "./api/auth";

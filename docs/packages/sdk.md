@@ -1,7 +1,8 @@
 # @pokertools/sdk
 
-TypeScript SDK with REST helpers, WebSocket state sync, auth utilities and optional
-React 19 hooks. One client for browser and Node.js environments.
+TypeScript SDK with canonical REST helpers, WebSocket observation sync, auth
+utilities and optional React 19 hooks. One client for browser and Node.js
+environments.
 
 ## Installation
 
@@ -42,10 +43,21 @@ const message = createSiweMessage({
 // sign `message` with the wallet (viem / ethers / wagmi), then:
 await client.login({ message, signature });
 
-// 2. List tables and act
-const tables = await client.getTables();
-const state = await client.action("table_abc", { type: "RAISE", amount: 60 });
-const state2 = await client.raise("table_abc", 80); // or use the sugar method
+// 2. Read the authoritative decision boundary and submit a server-issued action
+const observation = await client.getObservation("table_abc");
+const fold = observation.legalActions.find((action) => action.family === "FOLD");
+if (fold) {
+  const result = await client.action("table_abc", {
+    requestId: crypto.randomUUID(),
+    turnId: observation.turnId,
+    expectedVersion: observation.version,
+    actionId: fold.actionId,
+  });
+  console.log(result.receipt, result.observation.state);
+}
+
+// Convenience wrappers fetch a fresh observation and return the new wire state
+const state = await client.raise("table_abc", 80);
 
 // 3. Real-time updates over WebSocket
 const socket = PokerSocket.fromConfig({
@@ -53,63 +65,58 @@ const socket = PokerSocket.fromConfig({
   token: client.getToken()!,
 });
 await socket.connect();
-const joined = await socket.join("table_abc"); // returns the current masked state
-socket.on("state", (next) => console.log("version", next.version));
+const joined = await socket.join("table_abc"); // SeatObservation
+socket.on("observation", (tableId, next) => console.log("version", next.version));
 ```
 
 ## HTTP client
 
 Constants and configuration:
 
-| Option                          | Default     | Description                                |
-| :------------------------------ | :---------- | :----------------------------------------- |
-| `baseUrl`                       | —           | API origin                                 |
-| `token`                         | —           | Bearer token; swapped into `Authorization` |
-| `timeout`                       | `10_000`    | Full request deadline (incl. body read)    |
-| `retry.count`                   | `2`         | Automatic retry attempts                   |
-| `retry.delay` / `retry.backoff` | `200` / `2` | Exponential backoff                        |
-| `idempotencyKey`                | —           | Client-generated key for mutating requests |
-| `debug`                         | `false`     | Log requests/retries                       |
+| Option                          | Default      | Description                             |
+| :------------------------------ | :----------- | :-------------------------------------- |
+| `baseUrl`                       | —            | API origin                              |
+| `token`                         | —            | Bearer token; wallet session or SERVICE |
+| `timeout`                       | `30_000`     | Full request deadline (incl. body read) |
+| `retry.count`                   | `3`          | Automatic retry attempts                |
+| `retry.delay` / `retry.backoff` | `1000` / `2` | Exponential backoff                     |
+| `debug`                         | `false`      | Log requests/retries                    |
+
+A wallet session and a scoped SERVICE credential are both opaque bearer tokens.
+HTTP sends `Authorization: Bearer <token>`; the WebSocket sends the
+`jwt.<token>` subprotocol.
 
 ### Retry policy
 
 | Request type                        | Retried? | Notes                               |
 | :---------------------------------- | :------- | :---------------------------------- |
 | `GET`                               | ✅       | Safe reads                          |
-| Mutations **with** `idempotencyKey` | ✅       | Server dedupes replays              |
-| Mutations **without** key           | ❌       | Never auto-replayed                 |
-| `429` / `503`                       | ✅       | Respects `Retry-After` when present |
+| Mutations with a stable identity    | ✅       | Exact serialized bytes are replayed |
+| Mutations without a stable identity | ❌       | Never auto-replayed                 |
+| `429` / `5xx`                       | ✅       | Backoff                             |
 | Other `4xx`                         | ❌       | `304` aborts immediately            |
-| Timeout / abort                     | ❌       | Throws `TIMEOUT` with the deadline  |
+| Timeout / abort                     | ❌       | Throws `TIMEOUT`                    |
 
-```ts
-const client = new PokerClient({
-  baseUrl: "https://api.example.com",
-  idempotencyKey: generateIdempotencyKey(), // every mutation is safe to retry
-});
-```
-
-Empty `204`/`205` responses are supported and return `undefined`.
+A stable identity is a `requestId`, an `idempotencyKey`, a signed withdrawal
+`intent` (`intentId` + `nonce`), or an exact deposit log identity
+(`txHash` + `logIndex`).
 
 ### Error handling
 
-Errors surface as `PokerSDKError` (from `@pokertools/sdk`) with a stable `code`, HTTP
-`statusCode` and optional `details`:
+Errors surface as `PokerSDKError` with a stable `code`, HTTP `statusCode` and
+optional `details`:
 
 ```ts
 import { PokerClient, PokerSDKError } from "@pokertools/sdk";
 
 try {
-  await client.action("table_abc", { type: "RAISE", amount: 60 });
+  await client.action("table_abc", request);
 } catch (err) {
   if (err instanceof PokerSDKError) {
     switch (err.code) {
-      case "NOT_YOUR_TURN":
-      case "CANNOT_RERAISE":
-      case "RAISE_TOO_SMALL": // engine rule violations
-        break;
-      case "RATE_LIMITED":
-        await new Promise((r) => setTimeout(r, 2000));
+      case "ILLEGAL_ACTION": // server did not offer this family for the turn
+      case "AMOUNT_BELOW_MIN":
+      case "AMOUNT_ABOVE_MAX":
         break;
       case "TIMEOUT":
         console.warn("request exceeded deadline", err.details);
@@ -119,38 +126,83 @@ try {
 }
 ```
 
-Socket errors arrive through the `error` event; the socket automatically reconnects with
-backoff and re-joins previously joined tables.
+Socket errors arrive through the `error` event; the socket automatically
+reconnects with backoff and re-joins previously joined tables.
 
 ### Client method groups
 
 | Group             | Methods                                                                                                                                                                              |
 | :---------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Auth              | `getNonce()`, `login(request)`, `logout()`, `setToken()`, `isAuthenticated()`                                                                                                        |
-| Tables            | `getTables()`, `createTable()`, `getTableState(id, since?)`, `buyIn()`, `action()`, `addChips()`, `stand()`                                                                          |
-| Table sugar       | `fold()`, `check()`, `call()`, `bet()`, `raise()`, `deal()`, `show()`, `muck()`, `timeBank()`                                                                                        |
+| Tables            | `getTables()`, `createTable()`, `getObservation(id)`, `action(id, request)`, `buyIn()`, `addChips()`                                                                                 |
+| Table sugar       | `fold()`, `check()`, `call()`, `bet()`, `raise()`, `deal()`, `show()`, `muck()`, `timeBank()`, `stand()`                                                                             |
 | Tournaments       | `getTournaments()`, `createTournament()`, `getTournament()`, `registerTournament()`, `startTournament()`, `reconcileTournament()`, `advanceTournamentBlinds()`, `settleTournament()` |
 | Profile & history | `getProfile()`, `getHandHistory()`                                                                                                                                                   |
-| Finance           | `withdraw()`, `getWithdrawals()`, `getChains()`, `startDeposit()`, `getDepositAddress()`, `getDeposits()`                                                                            |
-| Notes             | `getNotes()`                                                                                                                                                                         |
+| Finance           | `getAssets()`, `getBalances()`, `claimDeposit()`, `getDeposit()`, `submitWithdrawal()`, `getWithdrawal()`                                                                            |
+| Notes             | `getNotes()`, `getNote()`, `saveNote()`, `deleteNote()`                                                                                                                              |
+
+`getObservation(id)` returns the authoritative `SeatObservation`: masked
+`PublicWireState` plus the server-issued `legalActions` for the acting seat.
+`action(id, request)` takes a strict `CanonicalActionRequest`
+(`{ requestId, turnId, expectedVersion, actionId, amount? }`) and returns
+`{ receipt, observation }`. `getTableState(id, since?)` remains a deprecated
+engine-shaped view; prefer `getObservation`.
+
+## Canonical withdrawals
+
+Chain amounts are atomic decimal strings, never chips or cents. Sign the fixed
+EIP-712 typed data from the shared contract; the API rebuilds and verifies it.
+
+```ts
+import { createWithdrawalTypedData, bigIntToAtomicAmount } from "@pokertools/sdk";
+import { parseUnits } from "viem";
+
+const intent = {
+  intentId: crypto.randomUUID(),
+  principalId,
+  assetId: asset.assetId,
+  destination: destination.toLowerCase(),
+  amountAtomic: bigIntToAtomicAmount(parseUnits("100", asset.decimals)),
+  nonce: Date.now(),
+  deadline: Math.floor(Date.now() / 1000) + 3600,
+  chainId: asset.chainId,
+};
+
+const domain = {
+  name: "PokerTools Withdrawal", // fixed
+  version: "1", // fixed
+  chainId: asset.chainId,
+  verifyingContract: treasury.toLowerCase(),
+};
+
+const typedData = createWithdrawalTypedData(intent, domain);
+const signature = await account.signTypedData({ ...typedData });
+await client.submitWithdrawal({ intent, signature });
+```
 
 ## WebSocket transport
 
-`PokerSocket` (created with `fromConfig`) keeps a versioned cache per joined table:
+`PokerSocket` (created with `fromConfig`) keeps the latest full observation per
+joined table:
 
-| Method                                                                   | Description                                                           |
-| :----------------------------------------------------------------------- | :-------------------------------------------------------------------- |
-| `connect()`                                                              | Establish the authenticated socket connection                         |
-| `disconnect()`                                                           | Close (used on logout / token rotation)                               |
-| `join(tableId)`                                                          | Subscribe to a table — resolves with the current masked `PublicState` |
-| `leave(tableId)`                                                         | Unsubscribe                                                           |
-| `getJoinedTables()`                                                      | List active subscriptions                                             |
-| `getState()` / `isConnected()`                                           | Connection introspection                                              |
-| `on("state" \| "connect" \| "disconnect" \| "reconnect" \| "error", cb)` | Event subscription                                                    |
+| Method                                                                         | Description                                             |
+| :----------------------------------------------------------------------------- | :------------------------------------------------------ |
+| `connect()`                                                                    | Establish the authenticated socket connection           |
+| `disconnect()`                                                                 | Close (used on logout / token rotation)                 |
+| `join(tableId)`                                                                | Subscribe — resolves with the current `SeatObservation` |
+| `leave(tableId)`                                                               | Unsubscribe                                             |
+| `getJoinedTables()`                                                            | List active subscriptions                               |
+| `getCachedObservation(tableId)`                                                | Latest `SeatObservation`                                |
+| `getCachedState(tableId)`                                                      | Latest `PublicWireState` (ergonomic view)               |
+| `getTableVersion(tableId)`                                                     | Latest server version                                   |
+| `getTableEventSeq(tableId)`                                                    | Latest table event sequence                             |
+| `getState()` / `isConnected()`                                                 | Connection introspection                                |
+| `on("observation" \| "connect" \| "disconnect" \| "reconnect" \| "error", cb)` | Event subscription                                      |
 
 - Reconnects with exponential backoff and restores table subscriptions
 - Token rotation **replaces the socket** (and its cached private state)
-- A table's version cache lets `getTableState(id, since)` fetch deltas only
+- Stale or reordered observations are dropped; a version is never advanced
+  without the full projection that carries it
 
 ## React hooks
 
@@ -166,48 +218,55 @@ function App() {
 }
 
 function Table() {
-  const { state, action } = useTable("table_abc");
-  const { status } = useConnection();
+  const { state, observation, action } = useTable("table_abc");
+  const { isConnected } = useConnection();
 
-  if (status !== "connected") return <p>Connecting…</p>;
+  if (!isConnected) return <p>Connecting…</p>;
+  if (!state) return <p>Loading…</p>;
 
   return (
     <>
       <div>Street: {state.street}</div>
-      <button onClick={() => action("RAISE", 40)}>Raise to 40</button>
+      {(observation?.legalActions ?? []).map((legal) => (
+        <button key={legal.actionId} onClick={() => action(legal.family)}>
+          {legal.family}
+        </button>
+      ))}
     </>
   );
 }
 ```
 
-| Hook                      | Returns                                                  | Purpose                                                         |
-| :------------------------ | :------------------------------------------------------- | :-------------------------------------------------------------- |
-| `usePoker()`              | `{ client, socket, state, connect, disconnect, config }` | Global context access                                           |
-| `usePokerClient()`        | `PokerClient`                                            | Raw client                                                      |
-| `usePokerSocket()`        | `PokerSocket \| null`                                    | Live socket                                                     |
-| `useTable(tableId, opts)` | `{ state, action, version, error }`                      | Table state + action helper                                     |
-| `useUser()`               | `{ user, loading }`                                      | Current profile                                                 |
-| `useTables()`             | `{ tables, refresh }`                                    | Table list                                                      |
-| `useTournaments()`        | `{ tournaments, refresh }`                               | Tournament list                                                 |
-| `useTournament(id)`       | `{ tournament, refresh }`                                | Tournament details                                              |
-| `useConnection()`         | `{ status }`                                             | `connecting` \| `connected` \| `reconnecting` \| `disconnected` |
+| Hook                      | Returns                                                         | Purpose                                                         |
+| :------------------------ | :-------------------------------------------------------------- | :-------------------------------------------------------------- |
+| `usePoker()`              | `{ client, socket, isAuthenticated, connectionState, ... }`     | Global context access                                           |
+| `usePokerClient()`        | `PokerClient`                                                   | Raw client                                                      |
+| `usePokerSocket()`        | `PokerSocket \| null`                                           | Live socket                                                     |
+| `useTable(tableId, opts)` | `{ state, observation, action, observe, refresh, leave }`       | Table state + server-issued action helper                       |
+| `useUser()`               | `{ profile, balances, isLoading, error, refresh }`              | Current profile + chip balances                                 |
+| `useTables()`             | `{ tables, isLoading, error, refresh }`                         | Table list                                                      |
+| `useTournaments()`        | `{ tournaments, isLoading, error, refresh }`                    | Tournament list                                                 |
+| `useTournament(id)`       | `{ tournament, isLoading, error, refresh }`                     | Tournament details                                              |
+| `useConnection()`         | `{ state, isConnected, isConnecting, isReconnecting, latency }` | `connecting` \| `connected` \| `reconnecting` \| `disconnected` |
 
 ### Provider behavior
 
 - Auto-connects when a token is present and never reconnects for inline config
   object identity changes
-- Replacing `config.token` disconnects the old socket, clears its private state cache
-  and connects with the new credentials
+- Replacing `config.token` disconnects the old socket, clears its private state
+  cache and connects with the new credentials
 
-## Auth utilities
+## Auth and chip utilities
 
 ```ts
 import {
   createSiweMessage,
   parseSiweMessage,
   isSiweExpired,
-  createWithdrawalMessage,
+  createWithdrawalTypedData,
   generateIdempotencyKey,
+  formatChips,
+  parseChips,
 } from "@pokertools/sdk";
 
 const message = createSiweMessage({
@@ -223,7 +282,9 @@ const message = createSiweMessage({
 const parsed = parseSiweMessage(message);
 console.log(isSiweExpired(message)); // false
 
-// Withdrawal consent messages
-const withdrawalMsg = createWithdrawalMessage(5000, "0xabc…", nonce);
-// "Withdraw 5000 USD to 0xabc…\nNonce: …\nTimestamp: …"
+// Chips are integer game units: no currency symbol, no ÷100
+formatChips(100); // "100"
+formatChips(1_000_000); // "1,000,000"
+parseChips("1,000"); // 1000
+parseChips("$1.00"); // throws
 ```

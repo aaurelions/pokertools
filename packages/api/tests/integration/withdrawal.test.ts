@@ -1,516 +1,305 @@
 /// <reference path="../../types/fastify.d.ts" />
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { buildApp } from "../../src/app.js";
+import crypto from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import { PrismaClient } from "../../generated/prisma/index.js";
-import { privateKeyToAccount } from "viem/accounts";
-import { ANVIL_PUBLIC_PRIVATE_KEY } from "../fixtures/anvil-public-key.js";
+import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import {
+  WITHDRAWAL_DOMAIN_NAME,
+  WITHDRAWAL_DOMAIN_VERSION,
+  WITHDRAWAL_INTENT_EIP712_FIELDS,
+  WITHDRAWAL_INTENT_PRIMARY_TYPE,
+  createWithdrawalDomain,
+  WithdrawalRecordSchema,
+} from "@pokertools/types";
+import { buildApp } from "../../src/app.js";
+import { AtomicLedger } from "../../src/services/atomic-ledger.js";
 
-describe("Withdrawal Endpoint", () => {
+const CHAIN_ID = 31337;
+const TREASURY = "0x00000000000000000000000000000000000000aa";
+const DESTINATION = "0x70997970c51812dc3a010c7d01b50e0d17dc79c8";
+
+/**
+ * Canonical withdrawal endpoint.
+ *
+ * The legacy `/user/withdraw` string-message flow is gone. Withdrawals are now
+ * EIP-712-bound intents: every field (principal, asset, destination, amount,
+ * nonce, deadline, chainId) is signed against the fixed treasury domain, and
+ * the actor is derived from the authenticated wallet principal.
+ */
+describe("Canonical withdrawal endpoint (EIP-712)", () => {
   let app: FastifyInstance;
-  let prisma: PrismaClient;
-  let authToken: string;
+  let assetId: string;
   let userId: string;
-  let blockchainId: string;
-  let tokenId: string;
+  let authToken: string;
 
-  // Test wallet
-  const testPrivateKey = ANVIL_PUBLIC_PRIVATE_KEY;
-  const testAccount = privateKeyToAccount(testPrivateKey);
-  const testAddress = testAccount.address;
+  const signer = privateKeyToAccount(generatePrivateKey());
+  const walletAddress = signer.address.toLowerCase();
 
-  const createWithdrawalMessage = (
-    amount: number,
-    address: string,
-    nonce = `nonce-${Date.now()}`
-  ) => {
-    const timestamp = Date.now();
+  const ledger = () => new AtomicLedger(app.prisma);
+
+  function makeIntent(
+    overrides: Partial<{
+      intentId: string;
+      principalId: string;
+      assetId: string;
+      destination: string;
+      amountAtomic: string;
+      nonce: number;
+      deadline: number;
+      chainId: number;
+    }> = {}
+  ) {
     return {
-      nonce,
-      timestamp,
-      message: `Withdraw ${amount} USD to ${address}\nNonce: ${nonce}\nTimestamp: ${timestamp}`,
+      intentId: `intent-${crypto.randomUUID()}`,
+      principalId: userId,
+      assetId,
+      destination: DESTINATION,
+      amountAtomic: "100",
+      nonce: Date.now() + Math.floor(Math.random() * 100_000),
+      deadline: Math.floor(Date.now() / 1000) + 600,
+      chainId: CHAIN_ID,
+      ...overrides,
     };
-  };
+  }
+
+  async function signIntent(
+    intent: ReturnType<typeof makeIntent>,
+    account: ReturnType<typeof privateKeyToAccount> = signer,
+    domain = createWithdrawalDomain(CHAIN_ID, TREASURY)
+  ): Promise<`0x${string}`> {
+    return account.signTypedData({
+      domain,
+      types: { [WITHDRAWAL_INTENT_PRIMARY_TYPE]: [...WITHDRAWAL_INTENT_EIP712_FIELDS] },
+      primaryType: WITHDRAWAL_INTENT_PRIMARY_TYPE,
+      message: intent,
+    } as never);
+  }
+
+  async function submit(intent: unknown, signature?: string) {
+    return app.inject({
+      method: "POST",
+      url: "/finance/withdrawals/intents",
+      headers: { authorization: `Bearer ${authToken}` },
+      payload: signature === undefined ? { intent } : { intent, signature },
+    });
+  }
+
+  async function fund(amountAtomic: string): Promise<void> {
+    const chips = ledger();
+    const user = await chips.ensureAccount(app.prisma, {
+      assetId,
+      ownerId: userId,
+      class: "USER_AVAILABLE",
+    });
+    const treasury = await chips.ensureAccount(app.prisma, {
+      assetId,
+      ownerId: null,
+      class: "TREASURY_RESERVE",
+    });
+    await chips.postAtomic({
+      requestId: `fund-${crypto.randomUUID()}`,
+      assetId,
+      postings: [
+        { accountId: treasury.accountId, amountAtomic: `-${amountAtomic}` },
+        { accountId: user.accountId, amountAtomic },
+      ],
+    });
+  }
+
+  async function balanceClass(accountClass: "USER_AVAILABLE" | "PENDING_WITHDRAWAL") {
+    return ledger().getAccount(app.prisma, { assetId, ownerId: userId, class: accountClass });
+  }
 
   beforeAll(async () => {
     app = await buildApp();
     await app.ready();
-    prisma = app.prisma;
+    const prisma = app.prisma;
 
-    // Clean up any existing test data
-    // Fix: Ensure we delete by lowercase address (as stored in DB) to prevent unique constraint errors
-    // Delete PaymentTransactions first (child table)
-    const existingUser = await prisma.user.findUnique({
-      where: { address: testAddress.toLowerCase() },
-      include: { accounts: { include: { entries: { include: { paymentTx: true } } } } },
-    });
-    if (existingUser) {
-      await prisma.paymentTransaction.deleteMany({ where: { userId: existingUser.id } });
-      await prisma.ledgerEntry.deleteMany({ where: { account: { userId: existingUser.id } } });
-      await prisma.userWallet.deleteMany({ where: { userId: existingUser.id } });
-      await prisma.depositSession.deleteMany({ where: { userId: existingUser.id } });
-      await prisma.session.deleteMany({ where: { userId: existingUser.id } });
-      await prisma.account.deleteMany({ where: { userId: existingUser.id } });
-    }
-    await prisma.user.deleteMany({ where: { address: testAddress.toLowerCase() } });
-    // Also clean up by username to be safe
-    await prisma.user.deleteMany({ where: { username: "testuser" } });
-
-    // Pre-emptive cleanup to avoid unique constraint collisions on restart
-    // We must delete dependents (Transactions, Tokens) before deleting the Blockchain
-    const existingChain = await prisma.blockchain.findUnique({
-      where: { chainId: 31337 },
-    });
-
-    if (existingChain) {
-      // 1. Delete PaymentTransactions linked to this chain
-      await prisma.paymentTransaction.deleteMany({
-        where: { blockchainId: existingChain.id },
-      });
-
-      // 2. Delete Tokens linked to this chain
-      await prisma.token.deleteMany({
-        where: { blockchainId: existingChain.id },
-      });
-
-      // 3. Now safe to delete the Blockchain
-      await prisma.blockchain.delete({
-        where: { id: existingChain.id },
-      });
-    }
-
-    // Create test blockchain
-    const blockchain = await prisma.blockchain.create({
+    const tokenAddress = `0x${crypto.randomBytes(20).toString("hex")}`;
+    const asset = await prisma.asset.create({
       data: {
-        name: "Local Testnet",
-        chainId: 31337,
-        rpcUrl: "http://localhost:8545",
-        explorerUrl: "http://localhost:4000",
-        nativeCurrency: JSON.stringify({
-          name: "Ether",
-          symbol: "ETH",
-          decimals: 18,
-        }),
-        isEnabled: true,
-        confirmations: 1,
-      },
-    });
-    blockchainId = blockchain.id;
-
-    // Create test token
-    const token = await prisma.token.create({
-      data: {
-        blockchainId: blockchain.id,
-        address: "0x1234567890123456789012345678901234567890",
+        id: `eip155:${CHAIN_ID}/erc20:${tokenAddress}`,
+        chainId: CHAIN_ID,
+        tokenAddress,
         symbol: "USDC",
-        name: "USD Coin",
         decimals: 6,
-        minDeposit: "1000000", // 1 USDC
-        isEnabled: true,
+        status: "ACTIVE",
+        confirmations: 1,
+        deepFinality: 2,
+        treasuryAddress: TREASURY,
+        rpcUrls: [],
+        minGasAtomic: "0",
       },
     });
-    tokenId = token.id;
+    assetId = asset.id;
 
-    // Create test user
     const user = await prisma.user.create({
       data: {
-        username: "testuser",
-        address: testAddress.toLowerCase(),
+        username: `withdrawal_${Date.now()}`,
+        address: walletAddress,
         role: "PLAYER",
+        kind: "WALLET",
       },
     });
     userId = user.id;
 
-    // Create MAIN account with balance
-    await prisma.account.create({
-      data: {
-        userId: user.id,
-        currency: "USDC",
-        type: "MAIN",
-        balance: 100000, // $1000.00
-      },
+    const jti = `wd_jti_${Date.now()}`;
+    await prisma.session.create({
+      data: { userId, jti, expiresAt: new Date(Date.now() + 3600_000) },
     });
+    authToken = app.jwt.sign({ userId, jti }, { jti, expiresIn: "1h" });
 
-    // Create JWT session
-    const session = await prisma.session.create({
-      data: {
-        userId: user.id,
-        jti: "test-jti-withdraw",
-        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-      },
-    });
-
-    authToken = app.jwt.sign({ userId: user.id, jti: session.jti });
-  });
+    await fund("100000");
+  }, 30000);
 
   afterAll(async () => {
-    // Fix foreign key constraint violation by deleting dependents first
-    // 1. Delete PaymentTransactions (depend on Token and Blockchain, User)
-    await prisma.paymentTransaction.deleteMany({ where: { userId } });
-
-    // 2. Delete LedgerEntries
-    await prisma.ledgerEntry.deleteMany({ where: { account: { userId } } });
-
-    // 3. Delete Tokens (depend on Blockchain)
-    await prisma.token.deleteMany({ where: { blockchainId } });
-
-    // 4. Delete User (cascades to Accounts -> LedgerEntries)
-    await prisma.account.deleteMany({ where: { userId } });
+    const prisma = app.prisma;
+    await prisma.withdrawalIntentRecord.deleteMany({ where: { assetId } });
+    await prisma.journalPosting.deleteMany({ where: { assetId } });
+    await prisma.journalTransaction.deleteMany({ where: { assetId } });
+    await prisma.atomicAccount.deleteMany({ where: { assetId } });
+    await prisma.asset.deleteMany({ where: { id: assetId } });
     await prisma.session.deleteMany({ where: { userId } });
     await prisma.user.deleteMany({ where: { id: userId } });
-
-    // 5. Delete Blockchain (now safe as Tokens are gone)
-    await prisma.blockchain.deleteMany({ where: { id: blockchainId } });
-
     await app.close();
-  });
+  }, 30000);
 
-  it("should reject withdrawal without signature", async () => {
-    const response = await app.inject({
-      method: "POST",
-      url: "/user/withdraw",
-      headers: {
-        authorization: `Bearer ${authToken}`,
-      },
-      payload: {
-        amount: 100,
-        blockchainId,
-        tokenId,
-        address: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
-        message: "Withdraw 100 USD to 0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
-        // Missing signature
-      },
-    });
-
+  it("rejects a submission without a signature", async () => {
+    const response = await submit(makeIntent());
     expect(response.statusCode).toBe(400);
+    expect(response.json().error).toBe("VALIDATION_ERROR");
   });
 
-  it("should reject withdrawal with invalid signature", async () => {
-    const invalidSignature = "0x" + "0".repeat(130); // Invalid signature
+  it("rejects an invalid signature", async () => {
+    const response = await submit(makeIntent(), `0x${"0".repeat(130)}`);
+    expect(response.statusCode).toBe(401);
+    expect(response.json().code).toBe("AUTH_FAILED");
+  });
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/user/withdraw",
-      headers: {
-        authorization: `Bearer ${authToken}`,
-      },
-      payload: {
-        amount: 100,
-        blockchainId,
-        tokenId,
-        address: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
-        message: "Withdraw 100 USD to 0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
-        signature: invalidSignature,
-      },
-    });
+  it("rejects a signature from a different wallet", async () => {
+    const other = privateKeyToAccount(`0x${crypto.randomBytes(32).toString("hex")}`);
+    const intent = makeIntent();
+    const response = await submit(intent, await signIntent(intent, other));
+    expect(response.statusCode).toBe(401);
+    expect(response.json().code).toBe("AUTH_FAILED");
+  });
 
+  it("rejects an intent bound to a different principal", async () => {
+    const intent = makeIntent({ principalId: "someone-else" });
+    const response = await submit(intent, await signIntent(intent));
+    expect(response.statusCode).toBe(403);
+    expect(response.json().code).toBe("FORBIDDEN");
+  });
+
+  it("rejects a signature over a tampered amount", async () => {
+    const intent = makeIntent({ amountAtomic: "100" });
+    const signature = await signIntent(intent);
+    const tampered = { ...intent, amountAtomic: "200" };
+    const response = await submit(tampered, signature);
+    expect(response.statusCode).toBe(401);
+    expect(response.json().code).toBe("AUTH_FAILED");
+  });
+
+  it("rejects a signature over a mismatched chain id", async () => {
+    const intent = makeIntent();
+    // Sign against a different chain's domain; the intent chainId is bound.
+    const signature = await signIntent(
+      intent,
+      signer,
+      createWithdrawalDomain(1, TREASURY) as never
+    );
+    const response = await submit(intent, signature);
+    expect([400, 401]).toContain(response.statusCode);
+  });
+
+  it("rejects an expired intent", async () => {
+    const intent = makeIntent({ deadline: Math.floor(Date.now() / 1000) - 10 });
+    const response = await submit(intent, await signIntent(intent));
     expect(response.statusCode).toBe(400);
-    // Error comes from Zod validation or verifyMessage
-    expect(response.json().error).toBeDefined();
+    expect(response.json().message).toContain("expired");
   });
 
-  it("should successfully create withdrawal request with valid signature", async () => {
-    const withdrawalAddress = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
-    const amount = 100; // $100 USD
-    const { message, nonce } = createWithdrawalMessage(amount, withdrawalAddress);
+  it("reserves funds atomically, is idempotent on replay and rejects a re-used nonce", async () => {
+    const availableBefore = BigInt((await balanceClass("USER_AVAILABLE"))?.balanceAtomic ?? "0");
+    const pendingBefore = BigInt((await balanceClass("PENDING_WITHDRAWAL"))?.balanceAtomic ?? "0");
 
-    // Sign the message with the test account
-    const signature = await testAccount.signMessage({ message });
+    const intent = makeIntent({ amountAtomic: "100" });
+    const signature = await signIntent(intent);
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/user/withdraw",
-      headers: {
-        authorization: `Bearer ${authToken}`,
-      },
-      payload: {
-        amount,
-        blockchainId,
-        tokenId,
-        address: withdrawalAddress,
-        message,
-        signature,
-        idempotencyKey: nonce,
-      },
-    });
+    const first = await submit(intent, signature);
+    expect(first.statusCode, first.body).toBe(200);
+    const record = WithdrawalRecordSchema.parse(first.json());
+    expect(record.intentId).toBe(intent.intentId);
+    expect(record.status).toBe("RESERVED");
 
-    expect(response.statusCode).toBe(200);
-    const body = response.json();
-    expect(body.status).toBe("pending");
-    expect(body.amount).toBe(amount);
-    expect(body.destination).toBe(withdrawalAddress);
-    expect(body.id).toBeDefined();
+    expect(BigInt((await balanceClass("USER_AVAILABLE"))!.balanceAtomic)).toBe(
+      availableBefore - 100n
+    );
+    expect(BigInt((await balanceClass("PENDING_WITHDRAWAL"))!.balanceAtomic)).toBe(
+      pendingBefore + 100n
+    );
 
-    // Verify PaymentTransaction was created (in the same DB transaction)
-    const paymentTx = await prisma.paymentTransaction.findUnique({
-      where: { id: body.id },
-    });
-    expect(paymentTx).toBeDefined();
-    expect(paymentTx!.type).toBe("WITHDRAWAL");
-    expect(paymentTx!.status).toBe("PENDING");
-    expect(paymentTx!.amountCredit).toBe(10000n); // $100 in cents
+    // Same intent + signature replays the stored record without a second debit.
+    const replay = await submit(intent, signature);
+    expect(replay.statusCode).toBe(200);
+    expect(WithdrawalRecordSchema.parse(replay.json()).intentId).toBe(intent.intentId);
+    expect(BigInt((await balanceClass("USER_AVAILABLE"))!.balanceAtomic)).toBe(
+      availableBefore - 100n
+    );
+    expect(BigInt((await balanceClass("PENDING_WITHDRAWAL"))!.balanceAtomic)).toBe(
+      pendingBefore + 100n
+    );
+    expect(
+      await app.prisma.journalTransaction.count({ where: { requestId: intent.intentId } })
+    ).toBe(1);
 
-    // Verify ledger entry was created and linked
-    expect(body.ledgerEntryId).toBeDefined();
-    const ledgerEntry = await prisma.ledgerEntry.findUnique({
-      where: { id: body.ledgerEntryId },
-    });
-    expect(ledgerEntry).toBeDefined();
-    expect(ledgerEntry!.type).toBe("WITHDRAWAL");
-    expect(ledgerEntry!.amount).toBe(-10000n); // -$100 in cents
-
-    // Verify metadata contains proof
-    const metadata = ledgerEntry!.metadata as any;
-    expect(metadata.proof.signer).toBe(testAddress.toLowerCase());
-    expect(metadata.proof.signature).toBe(signature);
-
-    // Verify balance was debited (moved to PENDING_WITHDRAWAL hold)
-    const mainAccount = await prisma.account.findUnique({
-      where: {
-        userId_currency_type: {
-          userId,
-          currency: "USDC",
-          type: "MAIN",
-        },
-      },
-    });
-    expect(mainAccount!.balance).toBe(90000n); // $1000 - $100 = $900
-
-    // Verify funds are held in PENDING_WITHDRAWAL account (recoverable)
-    const pendingAccount = await prisma.account.findUnique({
-      where: {
-        userId_currency_type: {
-          userId,
-          currency: "USDC",
-          type: "PENDING_WITHDRAWAL",
-        },
-      },
-    });
-    expect(pendingAccount).toBeDefined();
-    expect(pendingAccount!.balance).toBe(10000n); // $100 held
-
-    // Verify withdrawal is durably available for admin DB polling
-    const queuedPaymentTx = await prisma.paymentTransaction.findUniqueOrThrow({
-      where: { id: body.id },
-    });
-    expect(queuedPaymentTx.ledgerEntryId).toBe(body.ledgerEntryId);
-    expect(queuedPaymentTx.recoveryState).toBe("AWAITING_BROADCAST");
+    // Re-using the nonce with a different intent is a conflict, never a replay.
+    const conflicting = {
+      ...intent,
+      intentId: `other-${crypto.randomUUID()}`,
+      amountAtomic: "150",
+    };
+    const conflict = await submit(conflicting, await signIntent(conflicting));
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json().code).toBe("CONFLICT");
   });
 
-  it("should support idempotency key for duplicate withdrawal prevention", async () => {
-    const withdrawalAddress = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
-    const amount = 50;
-    const idempotencyKey = `test-idem-${Date.now()}`;
-    const { message } = createWithdrawalMessage(amount, withdrawalAddress, idempotencyKey);
-    const signature = await testAccount.signMessage({ message });
-
-    // First request
-    const response1 = await app.inject({
-      method: "POST",
-      url: "/user/withdraw",
-      headers: { authorization: `Bearer ${authToken}` },
-      payload: {
-        amount,
-        blockchainId,
-        tokenId,
-        address: withdrawalAddress,
-        message,
-        signature,
-        idempotencyKey,
-      },
-    });
-
-    expect(response1.statusCode).toBe(200);
-
-    // Second request with same idempotencyKey - should return idempotent response
-    const response2 = await app.inject({
-      method: "POST",
-      url: "/user/withdraw",
-      headers: { authorization: `Bearer ${authToken}` },
-      payload: {
-        amount,
-        blockchainId,
-        tokenId,
-        address: withdrawalAddress,
-        message,
-        signature,
-        idempotencyKey,
-      },
-    });
-
-    expect(response2.statusCode).toBe(200);
-    const body2 = response2.json();
-    expect(body2.message).toContain("already submitted");
-
-    // Verify balance was debited only once
-    const mainAccount = await prisma.account.findUnique({
-      where: { userId_currency_type: { userId, currency: "USDC", type: "MAIN" } },
-    });
-    // After first withdrawal ($100) then second idempotent ($50), total debited should be $150
-    // Starting at $1000: $1000 - $100 - $50 = $850
-    expect(mainAccount!.balance).toBe(85000n); // $1000 - $100 - $50 = $850
-
-    // Verify PENDING_WITHDRAWAL holds the sum of both withdrawals
-    const pendingAccount = await prisma.account.findUnique({
-      where: { userId_currency_type: { userId, currency: "USDC", type: "PENDING_WITHDRAWAL" } },
-    });
-    expect(pendingAccount).toBeDefined();
-    expect(pendingAccount!.balance).toBe(15000n); // $100 + $50 = $150 held
-  });
-
-  it("should accept withdrawal with nonce and timestamp in signed message", async () => {
-    const withdrawalAddress = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
-    const amount = 25;
-    const nonce = `nonce-${Date.now()}`;
-    const timestamp = Date.now();
-    const message = `Withdraw ${amount} USD to ${withdrawalAddress}\nNonce: ${nonce}\nTimestamp: ${timestamp}`;
-    const signature = await testAccount.signMessage({ message });
-
-    const response = await app.inject({
-      method: "POST",
-      url: "/user/withdraw",
-      headers: { authorization: `Bearer ${authToken}` },
-      payload: {
-        amount,
-        blockchainId,
-        tokenId,
-        address: withdrawalAddress,
-        message,
-        signature,
-        idempotencyKey: nonce,
-      },
-    });
-
-    expect(response.statusCode).toBe(200);
-    const body = response.json();
-    expect(body.status).toBe("pending");
-
-    // Verify ledger entry
-    const ledgerEntry = await prisma.ledgerEntry.findUnique({
-      where: { id: body.ledgerEntryId },
-    });
-    expect(ledgerEntry).toBeDefined();
-    const metadata = ledgerEntry!.metadata as any;
-    expect(metadata.idempotencyKey).toBe(nonce);
-  });
-
-  it("should reject withdrawal with expired timestamp in message", async () => {
-    const withdrawalAddress = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
-    const amount = 10;
-    const nonce = `expired-${Date.now()}`;
-    // Timestamp from 10 minutes ago
-    const timestamp = Date.now() - 10 * 60 * 1000;
-    const message = `Withdraw ${amount} USD to ${withdrawalAddress}\nNonce: ${nonce}\nTimestamp: ${timestamp}`;
-    const signature = await testAccount.signMessage({ message });
-
-    const response = await app.inject({
-      method: "POST",
-      url: "/user/withdraw",
-      headers: { authorization: `Bearer ${authToken}` },
-      payload: {
-        amount,
-        blockchainId,
-        tokenId,
-        address: withdrawalAddress,
-        message,
-        signature,
-      },
-    });
-
+  it("rejects a withdrawal above the available balance", async () => {
+    const intent = makeIntent({ amountAtomic: "999999999" });
+    const response = await submit(intent, await signIntent(intent));
     expect(response.statusCode).toBe(400);
-    expect(response.json().error).toContain("expired");
+    expect(response.json().code).toBe("INSUFFICIENT_FUNDS");
   });
 
-  it("should reject withdrawal below minimum deposit amount", async () => {
-    const withdrawalAddress = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
-    const amount = 0.001; // Way below minDeposit of 1 USDC
-    const { message, nonce } = createWithdrawalMessage(amount, withdrawalAddress);
-    const signature = await testAccount.signMessage({ message });
-
-    const response = await app.inject({
-      method: "POST",
-      url: "/user/withdraw",
-      headers: { authorization: `Bearer ${authToken}` },
-      payload: {
-        amount,
-        blockchainId,
-        tokenId,
-        address: withdrawalAddress,
-        message,
-        signature,
-        idempotencyKey: nonce,
-      },
-    });
-
-    expect(response.statusCode).toBe(400);
-    expect(response.json().error).toContain("below minimum");
-  });
-
-  it("should reject withdrawal with mismatched message", async () => {
-    const withdrawalAddress = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
-    const amount = 50;
-    const wrongMessage = "Some other message";
-    const signature = await testAccount.signMessage({ message: wrongMessage });
-
-    const response = await app.inject({
-      method: "POST",
-      url: "/user/withdraw",
-      headers: {
-        authorization: `Bearer ${authToken}`,
-      },
-      payload: {
-        amount,
-        blockchainId,
-        tokenId,
-        address: withdrawalAddress,
-        message: wrongMessage,
-        signature,
-      },
-    });
-
-    expect(response.statusCode).toBe(400);
-    expect(response.json().error).toContain("does not match withdrawal details");
-  });
-
-  it("should reject withdrawal with insufficient balance", async () => {
-    const withdrawalAddress = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
-    const amount = 10000; // $10,000 - more than available
-    const { message, nonce } = createWithdrawalMessage(amount, withdrawalAddress);
-    const signature = await testAccount.signMessage({ message });
-
-    const response = await app.inject({
-      method: "POST",
-      url: "/user/withdraw",
-      headers: {
-        authorization: `Bearer ${authToken}`,
-      },
-      payload: {
-        amount,
-        blockchainId,
-        tokenId,
-        address: withdrawalAddress,
-        message,
-        signature,
-        idempotencyKey: nonce,
-      },
-    });
-
-    expect(response.statusCode).toBe(400);
-    expect(response.json().error).toBe("Insufficient balance");
-  });
-
-  it("should get withdrawal history", async () => {
+  it("lists the principal's durable withdrawal intents", async () => {
     const response = await app.inject({
       method: "GET",
-      url: "/user/withdrawals",
-      headers: {
-        authorization: `Bearer ${authToken}`,
-      },
+      url: "/finance/withdrawals",
+      headers: { authorization: `Bearer ${authToken}` },
     });
-
     expect(response.statusCode).toBe(200);
     const body = response.json();
-    expect(body.withdrawals).toBeDefined();
     expect(Array.isArray(body.withdrawals)).toBe(true);
+    for (const withdrawal of body.withdrawals) {
+      WithdrawalRecordSchema.parse(withdrawal);
+      // The full signed intent is projected (destination/amount/deadline/...).
+      expect(withdrawal.destination).toBeTypeOf("string");
+      expect(withdrawal.amountAtomic).toBeTypeOf("string");
+      expect(withdrawal.deadline).toBeTypeOf("number");
+      // Internal/signing material is never projected publicly.
+      expect(withdrawal.signature).toBeUndefined();
+      expect(withdrawal.reservedJournalId).toBeUndefined();
+      expect(withdrawal.signedRawTx).toBeUndefined();
+      expect(withdrawal.signedCallData).toBeUndefined();
+      expect(withdrawal.idempotent).toBeUndefined();
+    }
+  });
+
+  it("uses the fixed domain name/version binding", () => {
+    const domain = createWithdrawalDomain(CHAIN_ID, TREASURY);
+    expect(domain.name).toBe(WITHDRAWAL_DOMAIN_NAME);
+    expect(domain.version).toBe(WITHDRAWAL_DOMAIN_VERSION);
+    expect(domain.chainId).toBe(CHAIN_ID);
+    expect(domain.verifyingContract).toBe(TREASURY);
   });
 });

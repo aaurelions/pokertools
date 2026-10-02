@@ -11,7 +11,11 @@
 # Environment variables expected:
 #   DATABASE_URL   – Prisma datasource URL (e.g. file:.runtime/app.db)
 #   NODE_ENV       – set to "production" by the Dockerfile
-#   PORT, HOST, REDIS_URL, JWT_SECRET, COOKIE_SECRET, WALLET_ENCRYPTION_SECRET
+#   PORT, HOST, REDIS_URL, JWT_SECRET, COOKIE_SECRET
+#
+# Compiled convergence evidence and the full production configuration gate are
+# enforced by the API process itself (`assertPublicProcessSafety`), so an
+# unverified or unsafe build still refuses to serve.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -26,8 +30,6 @@ echo "    PORT      = ${PORT:-3000}"
 # docker-compose fallback) will abort startup with a clear error.
 # ---------------------------------------------------------------------------
 if [ "${NODE_ENV:-production}" = "production" ]; then
-  echo "ARCHITECTURE_CONVERGENCE_INCOMPLETE: production startup is blocked"
-  exit 1
   DEV_SECRET_PATTERNS=(
     "dev-jwt-secret-not-for-production"
     "dev-cookie-secret-not-for-production"
@@ -57,9 +59,8 @@ if [ "${NODE_ENV:-production}" = "production" ]; then
     done
   }
 
-  check_secret "JWT_SECRET"               "${JWT_SECRET:-}"
-  check_secret "COOKIE_SECRET"            "${COOKIE_SECRET:-}"
-  check_secret "WALLET_ENCRYPTION_SECRET" "${WALLET_ENCRYPTION_SECRET:-}"
+  check_secret "JWT_SECRET"    "${JWT_SECRET:-}"
+  check_secret "COOKIE_SECRET" "${COOKIE_SECRET:-}"
 
   # ---------------------------------------------------------------------------
   # Production database gate — reject file: SQLite URLs.

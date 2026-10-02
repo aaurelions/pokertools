@@ -89,7 +89,7 @@ function main() {
   // -----------------------------------------------------------------------
   const tableExists = db
     .prepare(
-      "SELECT count(*) AS cnt FROM sqlite_master WHERE type = 'table' AND name = 'AdminWallet'",
+      "SELECT count(*) AS cnt FROM sqlite_master WHERE type = 'table' AND name = 'Asset'",
     )
     .get();
 
@@ -129,12 +129,12 @@ function main() {
   // -----------------------------------------------------------------------
   const verify = db
     .prepare(
-      "SELECT count(*) AS cnt FROM sqlite_master WHERE type = 'table' AND name = 'AdminWallet'",
+      "SELECT count(*) AS cnt FROM sqlite_master WHERE type = 'table' AND name = 'Asset'",
     )
     .get();
 
   if (verify.cnt === 0) {
-    console.error("Verification failed: AdminWallet table not found after schema application.");
+    console.error("Verification failed: Asset table not found after schema application.");
     db.close();
     process.exit(1);
   }

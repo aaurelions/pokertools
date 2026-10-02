@@ -43,19 +43,25 @@ COPY packages/api/scripts packages/api/scripts
 COPY packages/custody/src packages/custody/src
 
 # ---- Generate Prisma client (output -> packages/api/generated/prisma) ----
-# prisma.config.ts requires DATABASE_URL at generation time.  A throw-away
-# SQLite URL is perfectly safe — the generated client is identical regardless
-# of the datasource.
+# prisma.config.ts derives the schema provider from DATABASE_URL. The default
+# generates the PostgreSQL-provider client, which is what the production image
+# (API + custody with @prisma/adapter-pg) requires. Callers that build a
+# SQLite-only image (local dev / Docker E2E) override the build arg with a
+# `file:` URL so the generated client matches their datasource. The URL is only
+# read at generation time; no database connection is made.
+ARG PRISMA_GENERATE_DATABASE_URL="postgresql://prisma:generate@localhost:5432/prisma_generate"
 RUN cd packages/api && \
-    DATABASE_URL="file:../.runtime/prisma-generate.db" npx prisma generate
+    DATABASE_URL="${PRISMA_GENERATE_DATABASE_URL}" npx prisma generate
 
 # ---- Export SQLite DDL as idempotent SQL (runtime bootstrap artifact) ----
 # Uses prisma db push against a throw-away SQLite db, then better-sqlite3
 # to dump the schema.  Output: packages/api/prisma/schema.sql
+# This is a local-dev/test convenience only; production uses the reviewed
+# PostgreSQL migrations below rather than this artifact.
 RUN node packages/api/scripts/export-schema.mjs
 
 # ---- Build workspace packages in topological order ----
-# Build dependency packages first, then the API, then admin.
+# Build dependency packages first, then the API, then custody.
 # We skip SDK and bench — the API runtime does not need them.
 RUN npm run build -w @pokertools/types && \
     npm run build -w @pokertools/evaluator && \
@@ -63,7 +69,7 @@ RUN npm run build -w @pokertools/types && \
     npm run build -w @pokertools/api && \
     npm run build -w @pokertools/custody
 
-# ---- Remove dev-only workspaces (not part of the API/admin runtime) ----
+# ---- Remove dev-only workspaces (not part of the API/custody runtime) ----
 # This removes their package.json manifests so the following prune step drops
 # their entire dependency sub-trees (poker-evaluator ~178 MB, etc.).
 RUN rm -rf packages/bench packages/sdk

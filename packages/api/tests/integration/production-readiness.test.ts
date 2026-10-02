@@ -34,7 +34,15 @@ describe("Production readiness controls", () => {
 
     expect(response.statusCode).toBe(200);
     expect(JSON.parse(response.body).state.version).toBe(0);
-    expect(await ctx.app.redis.get(`table:${tableId}`)).toBeTruthy();
+    // PostgreSQL is authoritative: the state is served from the durable
+    // snapshot even while Redis hot state is absent.
+    const again = await ctx.app.inject({
+      method: "GET",
+      url: `/tables/${tableId}`,
+      headers: { authorization: `Bearer ${ctx.users[0].token}` },
+    });
+    expect(again.statusCode).toBe(200);
+    expect(JSON.parse(again.body).state.version).toBe(0);
   });
 
   it("persists high-value endpoint idempotency and rejects key reuse with a different payload", async () => {
@@ -71,8 +79,8 @@ describe("Production readiness controls", () => {
     expect(replay.statusCode).toBe(200);
     expect(conflict.statusCode).toBe(409);
 
-    const balances = await ctx.app.financialManager.getBalances(ctx.users[0].id);
-    expect(balances.main).toBe(9_000);
+    const balances = await ctx.app.financialManager.getChipBalances(ctx.users[0].id);
+    expect(Number(balances.available)).toBe(9_000);
   });
 
   it("exposes dependency health checks and Prometheus metrics", async () => {
@@ -84,11 +92,18 @@ describe("Production readiness controls", () => {
     const readiness = await ctx.app.inject({ method: "GET", url: "/ready" });
     expect(readiness.statusCode).toBe(503);
     const body = JSON.parse(readiness.body);
-    expect(body.checks.db.status).toBe("ok");
-    expect(body.checks.redis.status).toBe("ok");
-    expect(body.checks.queue.status).toBe("ok");
-    expect(body.financial.status).toBe("blocked");
-    expect(body.migrations.status).toBe("unverified");
+    // Canonical readiness shape: an ordered array of platform checks plus a
+    // fail-closed financial readiness block.
+    expect(Array.isArray(body.checks)).toBe(true);
+    const check = (name: string) =>
+      body.checks.find((entry: { name: string }) => entry.name === name);
+    expect(check("database")?.state).toBe("READY");
+    expect(check("redis")?.state).toBe("READY");
+    expect(check("queue")?.state).toBe("READY");
+    expect(check("migrations")?.state).toBeDefined();
+    // Convergence evidence is not yet verified, so readiness stays blocked.
+    expect(body.financial.state).toBe("BLOCKED");
+    expect(body.financial.reasons.length).toBeGreaterThan(0);
 
     const metrics = await ctx.app.inject({ method: "GET", url: "/metrics" });
     expect(metrics.statusCode).toBe(200);

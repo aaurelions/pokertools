@@ -2,19 +2,26 @@ import type { FastifyPluginAsync } from "fastify";
 import { verifyMessage } from "viem";
 import { generateSiweNonce, parseSiweMessage, validateSiweMessage } from "viem/siwe";
 import crypto from "node:crypto";
-import { LoginRequest } from "@pokertools/types";
-import { z } from "zod";
+import {
+  CreateServiceCredentialRequestSchema,
+  CreatedServiceCredentialSchema,
+  CredentialIdSchema,
+  ListServiceCredentialsResponseSchema,
+  LoginRequestSchema,
+  LoginResponseSchema,
+  LogoutResponseSchema,
+  NonceResponseSchema,
+  PrincipalSchema,
+  RevokeServiceCredentialResponseSchema,
+  type LoginRequest,
+} from "@pokertools/types";
 import { allowedSiweChainIds, config } from "../../config.js";
+import { toWirePrincipal } from "../../services/principal-manager.js";
 import type { PrismaClient } from "../../../generated/prisma/index.js";
 
 // Wallets and the API can run on different clocks (including Docker's VM).
 // Bound tolerance tightly; nonce TTL and atomic consumption still govern replay.
 const SIWE_MAX_FUTURE_SKEW_MS = 30_000;
-
-const loginSchema = z.object({
-  message: z.string().min(1).max(4096),
-  signature: z.string().regex(/^0x[a-fA-F0-9]{130}$/, "Invalid signature format"),
-});
 
 function normalizeHost(host: string | undefined): string {
   return (host ?? "localhost").split(":")[0].toLowerCase();
@@ -45,7 +52,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     async (_request, _reply) => {
       const nonce = generateSiweNonce();
       await fastify.redis.set(`nonce:${nonce}`, "1", "EX", config.NONCE_TTL_SECONDS);
-      return { nonce };
+      return NonceResponseSchema.parse({ nonce });
     }
   );
 
@@ -63,7 +70,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     async (request, reply) => {
-      const validation = loginSchema.safeParse(request.body);
+      const validation = LoginRequestSchema.safeParse(request.body);
       if (!validation.success) {
         return reply.code(400).send({ error: "Validation failed" });
       }
@@ -188,9 +195,20 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
         path: "/",
       });
 
-      return { token, user: { id: user.id, username: user.username } };
+      return LoginResponseSchema.parse({
+        token,
+        user: { id: user.id, username: user.username },
+      });
     }
   );
+
+  // GET /auth/me - Canonical three-field wire principal for the caller.
+  fastify.get("/me", { onRequest: [fastify.authenticate] }, async (request, reply) => {
+    if (!request.principal) {
+      return reply.code(401).send({ error: "Unauthorized" });
+    }
+    return PrincipalSchema.parse(toWirePrincipal(request.principal));
+  });
 
   // POST /auth/logout
   fastify.post("/logout", { onRequest: [fastify.authenticate] }, async (request, reply) => {
@@ -202,6 +220,90 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     });
 
     reply.clearCookie("token");
-    return { success: true };
+    return LogoutResponseSchema.parse({ success: true });
   });
+
+  // -------------------------------------------------------------------------
+  // SERVICE credential administration (operator-only, auditable).
+  //
+  // Only an explicit ADMIN wallet principal may mint or revoke machine
+  // credentials. Service principals can never reach these routes (the global
+  // SERVICE scope boundary denies /auth), and `requireOperator` enforces the
+  // wallet-admin property in depth.
+  // -------------------------------------------------------------------------
+
+  // POST /auth/service-credentials
+  fastify.post(
+    "/service-credentials",
+    { onRequest: [fastify.authenticate, fastify.requireOperator] },
+    async (request, reply) => {
+      const parsed = CreateServiceCredentialRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: "Validation failed", issues: parsed.error.issues });
+      }
+
+      const created = await fastify.principalManager.createServiceCredential({
+        name: parsed.data.name,
+        scopes: parsed.data.scopes,
+        tableId: parsed.data.tableId ?? null,
+        seat: parsed.data.seat ?? null,
+        expiresAt: parsed.data.expiresAt ? new Date(parsed.data.expiresAt) : null,
+        createdById: request.principal?.id ?? null,
+        // Durable, atomic audit: committed in the same transaction as the row.
+        audit: {
+          actorId: request.principal?.id ?? null,
+          ip: request.ip,
+          userAgent: request.headers["user-agent"] ?? null,
+        },
+      });
+
+      return reply.code(201).send(
+        CreatedServiceCredentialSchema.parse({
+          ...created,
+          expiresAt: created.expiresAt ? created.expiresAt.toISOString() : null,
+        })
+      );
+    }
+  );
+
+  // GET /auth/service-credentials
+  fastify.get(
+    "/service-credentials",
+    { onRequest: [fastify.authenticate, fastify.requireOperator] },
+    async () => {
+      const credentials = await fastify.principalManager.listServiceCredentials();
+      return ListServiceCredentialsResponseSchema.parse({
+        credentials: credentials.map((credential) => ({
+          ...credential,
+          expiresAt: credential.expiresAt ? credential.expiresAt.toISOString() : null,
+          lastUsedAt: credential.lastUsedAt ? credential.lastUsedAt.toISOString() : null,
+          revokedAt: credential.revokedAt ? credential.revokedAt.toISOString() : null,
+          createdAt: credential.createdAt.toISOString(),
+        })),
+      });
+    }
+  );
+
+  // POST /auth/service-credentials/:id/revoke
+  fastify.post<{ Params: { id: string } }>(
+    "/service-credentials/:id/revoke",
+    { onRequest: [fastify.authenticate, fastify.requireOperator] },
+    async (request, reply) => {
+      const parsed = CredentialIdSchema.safeParse(request.params.id);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: "Invalid credential id" });
+      }
+
+      const revoked = await fastify.principalManager.revokeServiceCredential(parsed.data, {
+        actorId: request.principal?.id ?? null,
+        ip: request.ip,
+        userAgent: request.headers["user-agent"] ?? null,
+      });
+      if (!revoked) {
+        return reply.code(404).send({ error: "SERVICE_CREDENTIAL_NOT_FOUND" });
+      }
+
+      return RevokeServiceCredentialResponseSchema.parse({ success: true });
+    }
+  );
 };

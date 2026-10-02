@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { buildApp } from "../../src/app.js";
 import type { FastifyInstance } from "fastify";
+import { BalanceSchema } from "@pokertools/types";
 import { cleanupTestUser } from "../helpers/test-utils.js";
 
 describe("User Routes Test", () => {
@@ -13,21 +14,12 @@ describe("User Routes Test", () => {
     app = await buildApp();
     await app.ready();
 
-    // Create test user and token
     const randomId = Date.now();
     testUser = await app.prisma.user.create({
       data: {
         username: `test_user_${randomId}`,
-        address: `0xtest${randomId}`,
-        accounts: {
-          create: [
-            {
-              currency: "USDC",
-              type: "MAIN",
-              balance: 10000,
-            },
-          ],
-        },
+        address: `0x${randomId.toString(16).padStart(40, "0").slice(-40)}`,
+        kind: "WALLET",
       },
     });
 
@@ -51,70 +43,62 @@ describe("User Routes Test", () => {
     await app.close();
   });
 
-  it("should get user balances", async () => {
+  it("serves the canonical chip/asset profile projection (no cents default)", async () => {
+    await app.financialManager.grantChips(testUser.id, 100, {
+      reason: "test-fixture",
+      operatorId: testUser.id,
+      idempotencyKey: `fixture-grant-${testUser.id}`,
+    });
+
     const response = await app.inject({
       method: "GET",
       url: "/user/me",
-      headers: {
-        authorization: `Bearer ${token}`,
-      },
+      headers: { authorization: `Bearer ${token}` },
     });
 
     expect(response.statusCode).toBe(200);
     const data = JSON.parse(response.body);
+
     expect(data.id).toBe(testUser.id);
     expect(data.address).toBe(testUser.address);
-    expect(data.balances).toBeDefined();
-    expect(data.balances.main).toBe(10000);
+    // Chips are integer gameplay units as decimal strings.
+    expect(data.chipBalances).toBeDefined();
+    expect(data.chipBalances.available).toBe("100");
+    expect(data.chipBalances.pendingWithdrawal).toBe("0");
+    // Atomic asset balances are a separate, canonical multi-asset projection.
+    expect(Array.isArray(data.assetBalances)).toBe(true);
+    for (const balance of data.assetBalances) BalanceSchema.parse(balance);
+    // No legacy cents/default-currency balance view.
+    expect(data.balances).toBeUndefined();
   });
 
-  it("should get transaction history", async () => {
-    // Create some ledger entries for testing
-    const account = await app.prisma.account.findFirstOrThrow({
-      where: {
-        userId: testUser.id,
-        type: "MAIN",
-      },
-    });
-
-    await app.prisma.ledgerEntry.createMany({
-      data: [
-        {
-          accountId: account.id,
-          amount: 100,
-          type: "HAND_WIN",
-          referenceId: "hand_1",
-        },
-        {
-          accountId: account.id,
-          amount: -50,
-          type: "HAND_LOSS",
-          referenceId: "hand_2",
-        },
-      ],
+  it("returns canonical chip journal history as decimal strings", async () => {
+    await app.financialManager.grantChips(testUser.id, 250, {
+      reason: "history-fixture",
+      operatorId: testUser.id,
+      idempotencyKey: `fixture-history-${testUser.id}`,
     });
 
     const response = await app.inject({
       method: "GET",
       url: "/user/history",
-      headers: {
-        authorization: `Bearer ${token}`,
-      },
+      headers: { authorization: `Bearer ${token}` },
     });
 
     expect(response.statusCode).toBe(200);
     const data = JSON.parse(response.body);
-    expect(data.history).toBeDefined();
     expect(Array.isArray(data.history)).toBe(true);
     expect(data.history.length).toBeGreaterThan(0);
 
-    // Check structure of history entries
     const entry = data.history[0];
     expect(entry).toHaveProperty("id");
     expect(entry).toHaveProperty("amount");
     expect(entry).toHaveProperty("type");
     expect(entry).toHaveProperty("referenceId");
     expect(entry).toHaveProperty("createdAt");
+    // Canonical chip strings, never JS-number cents.
+    expect(typeof entry.amount).toBe("string");
+    expect(entry.amount).toMatch(/^-?[0-9]+$/);
   });
 
   it("should require authentication for protected routes", async () => {

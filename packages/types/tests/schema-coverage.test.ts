@@ -17,8 +17,8 @@ import {
   CreateTableSchema,
   BuyInRequestSchema,
   AddChipsRequestSchema,
-  GameActionRequestSchema,
 } from "../src/schemas";
+import { CanonicalActionRequestSchema } from "../src";
 
 describe("Individual Action Schemas (coverage gap-fill)", () => {
   describe("StandActionSchema", () => {
@@ -623,61 +623,36 @@ describe("API Request Schemas (gap-fill)", () => {
     });
   });
 
-  describe("GameActionRequestSchema", () => {
-    test("accepts CHECK without amount", () => {
-      expect(GameActionRequestSchema.safeParse({ type: "CHECK" }).success).toBe(true);
+  describe("CanonicalActionRequestSchema", () => {
+    const base = { requestId: "req-1", turnId: "turn-1", expectedVersion: 1, actionId: "a1" };
+
+    test("accepts an amount-free canonical request", () => {
+      expect(CanonicalActionRequestSchema.safeParse(base).success).toBe(true);
     });
 
-    test("accepts CALL without amount", () => {
-      expect(GameActionRequestSchema.safeParse({ type: "CALL" }).success).toBe(true);
+    test("accepts a positive integer chip amount", () => {
+      expect(CanonicalActionRequestSchema.safeParse({ ...base, amount: 50 }).success).toBe(true);
     });
 
-    test("accepts FOLD without amount", () => {
-      expect(GameActionRequestSchema.safeParse({ type: "FOLD" }).success).toBe(true);
-    });
-
-    test("accepts DEAL without amount", () => {
-      expect(GameActionRequestSchema.safeParse({ type: "DEAL" }).success).toBe(true);
-    });
-
-    test("accepts SHOW with single cardIndex [0]", () => {
-      expect(GameActionRequestSchema.safeParse({ type: "SHOW", cardIndices: [0] }).success).toBe(
-        true
+    test("rejects an unknown/obsolete action type body", () => {
+      expect(CanonicalActionRequestSchema.safeParse({ ...base, type: "INVALID" }).success).toBe(
+        false
       );
     });
 
-    test("accepts STAND", () => {
-      expect(GameActionRequestSchema.safeParse({ type: "STAND" }).success).toBe(true);
+    test("rejects a zero or negative chip amount", () => {
+      expect(CanonicalActionRequestSchema.safeParse({ ...base, amount: 0 }).success).toBe(false);
+      expect(CanonicalActionRequestSchema.safeParse({ ...base, amount: -5 }).success).toBe(false);
     });
 
-    test("accepts NEXT_BLIND_LEVEL", () => {
-      expect(GameActionRequestSchema.safeParse({ type: "NEXT_BLIND_LEVEL" }).success).toBe(true);
-    });
-
-    test("rejects unknown action type", () => {
-      expect(GameActionRequestSchema.safeParse({ type: "INVALID" }).success).toBe(false);
-    });
-
-    test("rejects zero amount on RAISE", () => {
-      expect(GameActionRequestSchema.safeParse({ type: "RAISE", amount: 0 }).success).toBe(false);
-    });
-
-    test("rejects negative amount on BET", () => {
-      expect(GameActionRequestSchema.safeParse({ type: "BET", amount: -5 }).success).toBe(false);
-    });
-
-    test("rejects too many cardIndices [0,1,2]", () => {
-      // schema limit each index to 0-1, but an extra element is still accepted
-      // individually as long as each entry is 0 or 1; here index 2 fails.
-      expect(
-        GameActionRequestSchema.safeParse({ type: "SHOW", cardIndices: [0, 1, 2] }).success
-      ).toBe(false);
-    });
-
-    test("accepts empty cardIndices array", () => {
-      expect(GameActionRequestSchema.safeParse({ type: "SHOW", cardIndices: [] }).success).toBe(
-        true
+    test("rejects extra wire fields such as cardIndices", () => {
+      expect(CanonicalActionRequestSchema.safeParse({ ...base, cardIndices: [0, 1] }).success).toBe(
+        false
       );
+    });
+
+    test("rejects a non-integer chip amount", () => {
+      expect(CanonicalActionRequestSchema.safeParse({ ...base, amount: 1.5 }).success).toBe(false);
     });
   });
 });

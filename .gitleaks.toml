@@ -52,3 +52,26 @@ condition = "AND"
 paths = ['''(^|/)packages/(api|custody|e2e)/tests/fixtures/anvil-public-key\.ts$''']
 regexTarget = "secret"
 regexes = ['''^0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80$''']
+
+[[allowlists]]
+description = "Public Anvil account zero key in reviewed acceptance fixtures (exact value only)"
+targetRules = ["generic-api-key", "evm-signing-key"]
+condition = "AND"
+paths = [
+  '''(^|/)packages/e2e/tests/finance/withdrawal-custody\.acceptance\.test\.ts$''',
+  '''(^|/)packages/e2e/tests/finance/reconciliation-incidents\.acceptance\.test\.ts$''',
+  '''(^|/)packages/e2e/tests/docker-e2e\.test\.ts$''',
+]
+regexTarget = "secret"
+regexes = ['''^0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80$''']
+
+[[allowlists]]
+description = "Deterministic public Anvil MockUSDC deployment address in reviewed fixtures"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = [
+  '''(^|/)packages/api/prisma/seed-crypto\.ts$''',
+  '''(^|/)packages/sdk/tests/client\.test\.ts$''',
+]
+regexTarget = "secret"
+regexes = ['''^0x5fbdb2315678afecb367f032d93f642f64180aa3$''']

@@ -1,7 +1,12 @@
 /// <reference path="../../types/fastify.d.ts" />
 import { expect, it } from "vitest";
 import type { PublicState } from "@pokertools/types";
-import { initTestContext, runCleanup } from "../helpers/test-utils.js";
+import {
+  initTestContext,
+  runCleanup,
+  getObservation,
+  toCanonicalActionRequest,
+} from "../helpers/test-utils.js";
 import { persistSnapshotProjection } from "../../src/services/snapshot-projection.js";
 
 it("preserves all-in contenders, merges 4 -> 2 -> 1 and settles through the API", async () => {
@@ -56,16 +61,13 @@ it("preserves all-in contenders, merges 4 -> 2 -> 1 and settles through the API"
       const actor = ctx.users.find((user) => user.id === player.id)!;
       const maxBet = Math.max(...current.players.map((candidate) => candidate?.betThisStreet ?? 0));
       const amount = player.stack + player.betThisStreet;
-      await request(
-        "POST",
-        `/tables/${id}/action`,
-        {
-          type: amount <= maxBet ? "CALL" : maxBet === 0 ? "BET" : "RAISE",
-          ...(amount > maxBet ? { amount } : {}),
-          idempotencyKey: `action-${id}-${current.version}`,
-        },
-        actor.token
-      );
+      // Resolve the server-issued legal action and submit canonically.
+      const observation = await getObservation(ctx.app, actor.token, id);
+      const payload = toCanonicalActionRequest(observation, {
+        type: amount <= maxBet ? "CALL" : maxBet === 0 ? "BET" : "RAISE",
+        ...(amount > maxBet ? { amount } : {}),
+      });
+      await request("POST", `/tables/${id}/action`, payload, actor.token);
     };
     // A zero-stack all-in contender is not eliminated before showdown.
     await shove(tableIds[0]);
@@ -93,15 +95,9 @@ it("preserves all-in contenders, merges 4 -> 2 -> 1 and settles through the API"
         let current = await state(table.id);
         if (current.actionTo == null) {
           const dealer = ctx.users.find((user) => user.id === assigned[0].userId)!;
-          await request(
-            "POST",
-            `/tables/${table.id}/action`,
-            {
-              type: "DEAL",
-              idempotencyKey: `deal-${table.id}-${current.version}`,
-            },
-            dealer.token
-          );
+          const observation = await getObservation(ctx.app, dealer.token, table.id);
+          const payload = toCanonicalActionRequest(observation, { type: "DEAL" });
+          await request("POST", `/tables/${table.id}/action`, payload, dealer.token);
         }
         for (let action = 0; action < 10; action++) {
           current = await state(table.id);

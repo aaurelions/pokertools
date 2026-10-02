@@ -68,7 +68,6 @@ export async function stopAnvil(): Promise<void> {
 
 export interface DeployedContracts {
   usdcAddress: Address;
-  sweeperAddress: Address;
 }
 
 export async function deployContracts(): Promise<DeployedContracts> {
@@ -78,23 +77,18 @@ export async function deployContracts(): Promise<DeployedContracts> {
   const contractsDir = path.resolve(__dirname, "../../../custody/contracts/out");
 
   const usdcArtifactPath = path.join(contractsDir, "MockUSDC.sol/MockUSDC.json");
-  const sweeperArtifactPath = path.join(contractsDir, "BatchSweeper.sol/BatchSweeper.json");
 
   if (!fs.existsSync(usdcArtifactPath)) {
     throw new Error(
       `MockUSDC artifact not found at ${usdcArtifactPath}. Run 'forge build' in packages/custody first.`
     );
   }
-  if (!fs.existsSync(sweeperArtifactPath)) {
-    throw new Error(
-      `BatchSweeper artifact not found at ${sweeperArtifactPath}. Run 'forge build' in packages/custody first.`
-    );
-  }
 
   const usdcArtifact = JSON.parse(fs.readFileSync(usdcArtifactPath, "utf8"));
-  const sweeperArtifact = JSON.parse(fs.readFileSync(sweeperArtifactPath, "utf8"));
 
-  // Deploy MockUSDC
+  // Deploy MockUSDC. The canonical finance path credits via direct treasury
+  // claims and does not require the optional BatchSweeper contract, so the
+  // obsolete sweeper deploy bootstrap was removed.
   const usdcHash = await walletClient.deployContract({
     abi: usdcArtifact.abi,
     bytecode: usdcArtifact.bytecode.object,
@@ -104,17 +98,5 @@ export async function deployContracts(): Promise<DeployedContracts> {
   const usdcReceipt = await publicClient.waitForTransactionReceipt({ hash: usdcHash });
   const usdcAddress = usdcReceipt.contractAddress!;
 
-  // Deploy BatchSweeper (owned by deployer)
-  const sweeperHash = await walletClient.deployContract({
-    abi: sweeperArtifact.abi,
-    bytecode: sweeperArtifact.bytecode.object,
-    account: walletClient.account,
-    args: [walletClient.account.address],
-  });
-  const sweeperReceipt = await publicClient.waitForTransactionReceipt({
-    hash: sweeperHash,
-  });
-  const sweeperAddress = sweeperReceipt.contractAddress!;
-
-  return { usdcAddress, sweeperAddress };
+  return { usdcAddress };
 }

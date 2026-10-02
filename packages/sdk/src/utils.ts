@@ -1,45 +1,93 @@
 /**
- * Utility functions for the PokerTools SDK
+ * Utility functions for the PokerTools SDK.
+ *
+ * Chips are integer game units — not cents and not dollars. The chip helpers
+ * only format/parse canonical integer chip quantities: there is no implicit
+ * currency symbol and no division by 100. Chain value is a separate asset
+ * concern exposed through the canonical finance contracts.
+ *
+ * The table view helpers operate on the canonical `PublicWireState` /
+ * `PublicWirePlayer` projection carried by a `SeatObservation` (the server's
+ * per-seat decision boundary), never on the engine's Map-based `PublicState`.
  */
 
-import type { PublicState, PublicPlayer } from "@pokertools/types";
+import type { PublicWirePlayer, PublicWireState } from "@pokertools/types";
 
 /**
- * Format chip amount to display string
- * @param chips - Amount in cents (1 chip = 1 cent)
- * @param currency - Currency symbol (default: "$")
+ * Structural projection of a canonical wire player consumed by the view
+ * helpers. A `PublicWirePlayer` (from a server observation) satisfies it, and
+ * callers may supply any object with the same scalar fields.
  */
-export function formatChips(chips: number, currency = "$"): string {
-  const dollars = chips / 100;
-  return `${currency}${dollars.toFixed(2)}`;
+export type ViewPlayer = Pick<PublicWirePlayer, "id" | "name" | "seat" | "stack" | "status">;
+
+/**
+ * Structural projection of a canonical wire state for seat-aware helpers.
+ */
+export interface ViewState {
+  readonly players: ReadonlyArray<ViewPlayer | null>;
+  readonly actionTo: number | null;
 }
 
 /**
- * Parse display amount to chips (cents)
- * @param amount - Display amount string (e.g., "$10.50", "10.50", "1050")
+ * Structural projection of the pot collection for `getTotalPot`.
+ */
+export interface ViewPotState {
+  readonly pots: ReadonlyArray<Pick<PublicWireState["pots"][number], "amount">>;
+}
+
+/** Number formatting helper shared by the chip formatter. */
+function groupThousands(digits: string): string {
+  return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
+/**
+ * Format a chip amount (integer game units) for display.
+ *
+ * Chips are never treated as currency and are never divided by 100. The
+ * result is the grouped integer, so `100` → `"100"` and `1_000_000` →
+ * `"1,000,000"`.
+ *
+ * @throws when `chips` is not a non-negative safe integer.
+ */
+export function formatChips(chips: number): string {
+  if (!Number.isSafeInteger(chips) || chips < 0) {
+    throw new Error(`formatChips expects a non-negative safe integer, received: ${chips}`);
+  }
+  return groupThousands(String(chips));
+}
+
+/**
+ * Matches canonical chip text: plain digits, or digits with well-formed
+ * comma grouping. Signs, decimals, currency symbols, exponents and any
+ * trailing junk are rejected.
+ */
+const CHIP_TEXT_PATTERN = /^(?:\d+|\d{1,3}(?:,\d{3})+)$/;
+
+/**
+ * Parse a chip amount (integer game units) from display text.
+ *
+ * Accepts an optional comma grouping and surrounding whitespace. Rejects
+ * currency symbols, signed values, fractions, exponent notation, unsafe
+ * integers and trailing junk.
+ *
+ * @throws when `amount` is not a non-negative safe integer chip string.
  */
 export function parseChips(amount: string): number {
-  // Remove currency symbols and whitespace
-  const cleaned = amount.replace(/[$€£¥,\s]/g, "");
-  const value = parseFloat(cleaned);
-
-  if (isNaN(value)) {
-    throw new Error(`Invalid amount: ${amount}`);
+  const trimmed = amount.trim();
+  if (trimmed.length === 0 || !CHIP_TEXT_PATTERN.test(trimmed)) {
+    throw new Error(`Invalid chip amount: ${amount}`);
   }
-
-  // If it looks like it's already in cents (integer), return as-is
-  if (Number.isInteger(value) && value >= 100) {
-    return value;
+  const value = Number(trimmed.replace(/,/g, ""));
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`Invalid chip amount: ${amount}`);
   }
-
-  // Otherwise, convert from dollars to cents
-  return Math.round(value * 100);
+  return value;
 }
 
 /**
  * Get the player whose turn it is
  */
-export function getActivePlayer(state: PublicState): PublicPlayer | null {
+export function getActivePlayer(state: ViewState): ViewPlayer | null {
   if (state.actionTo === null) {
     return null;
   }
@@ -49,14 +97,14 @@ export function getActivePlayer(state: PublicState): PublicPlayer | null {
 /**
  * Get player by ID
  */
-export function getPlayerById(state: PublicState, playerId: string): PublicPlayer | null {
+export function getPlayerById(state: ViewState, playerId: string): ViewPlayer | null {
   return state.players.find((p) => p?.id === playerId) ?? null;
 }
 
 /**
  * Get player seat index by ID
  */
-export function getPlayerSeat(state: PublicState, playerId: string): number | null {
+export function getPlayerSeat(state: ViewState, playerId: string): number | null {
   const index = state.players.findIndex((p) => p?.id === playerId);
   return index === -1 ? null : index;
 }
@@ -64,7 +112,7 @@ export function getPlayerSeat(state: PublicState, playerId: string): number | nu
 /**
  * Check if it's a specific player's turn
  */
-export function isPlayerTurn(state: PublicState, playerId: string): boolean {
+export function isPlayerTurn(state: ViewState, playerId: string): boolean {
   if (state.actionTo === null) {
     return false;
   }
@@ -73,86 +121,26 @@ export function isPlayerTurn(state: PublicState, playerId: string): boolean {
 }
 
 /**
- * Get the amount needed to call
- */
-export function getCallAmount(state: PublicState, playerId: string): number {
-  const player = getPlayerById(state, playerId);
-  if (!player) {
-    return 0;
-  }
-
-  const currentBet = player.betThisStreet;
-  const activePlayers = state.players.filter((p): p is PublicPlayer => p !== null);
-  const bets = activePlayers.map((p) => p.betThisStreet);
-
-  const highestBet = Math.max(...bets);
-
-  return Math.min(highestBet - currentBet, player.stack);
-}
-
-/**
- * Get minimum raise amount
- */
-export function getMinRaise(state: PublicState): number {
-  return state.minRaise ?? state.config.bigBlind;
-}
-
-/**
- * Check if player can check
- */
-export function canCheck(state: PublicState, playerId: string): boolean {
-  const player = getPlayerById(state, playerId);
-  if (!player || !isPlayerTurn(state, playerId)) {
-    return false;
-  }
-
-  const currentBet = player.betThisStreet;
-  const activePlayers = state.players.filter((p): p is PublicPlayer => p !== null);
-  const bets = activePlayers.map((p) => p.betThisStreet);
-
-  const highestBet = Math.max(...bets);
-
-  return currentBet >= highestBet;
-}
-
-/**
- * Check if player can bet (no prior bets this round)
- */
-export function canBet(state: PublicState, playerId: string): boolean {
-  const player = getPlayerById(state, playerId);
-  if (!player || !isPlayerTurn(state, playerId)) {
-    return false;
-  }
-
-  const activePlayers = state.players.filter((p): p is PublicPlayer => p !== null);
-  const bets = activePlayers.map((p) => p.betThisStreet);
-
-  const highestBet = Math.max(...bets);
-
-  return highestBet === 0 && player.stack > 0;
-}
-
-/**
  * Get total pot size (main pot + side pots)
  */
-export function getTotalPot(state: PublicState): number {
+export function getTotalPot(state: ViewPotState): number {
   return state.pots.reduce((sum, pot) => sum + pot.amount, 0);
 }
 
 /**
  * Get number of active players (not folded, has chips)
  */
-export function getActivePlayers(state: PublicState): PublicPlayer[] {
+export function getActivePlayers(state: ViewState): ViewPlayer[] {
   return state.players.filter(
-    (p): p is PublicPlayer => p !== null && p.status !== "FOLDED" && p.stack > 0
+    (p): p is ViewPlayer => p !== null && p.status !== "FOLDED" && p.stack > 0
   );
 }
 
 /**
  * Get number of players in hand (not folded)
  */
-export function getPlayersInHand(state: PublicState): PublicPlayer[] {
-  return state.players.filter((p): p is PublicPlayer => p !== null && p.status !== "FOLDED");
+export function getPlayersInHand(state: ViewState): ViewPlayer[] {
+  return state.players.filter((p): p is ViewPlayer => p !== null && p.status !== "FOLDED");
 }
 
 /**
@@ -207,26 +195,15 @@ export function getStreetName(street: string): string {
 /**
  * Check if game is in showdown phase
  */
-export function isShowdown(state: PublicState): boolean {
+export function isShowdown(state: Pick<PublicWireState, "street">): boolean {
   return state.street === "SHOWDOWN";
 }
 
 /**
  * Check if hand is complete (has winners)
  */
-export function isHandComplete(state: PublicState): boolean {
+export function isHandComplete(state: Pick<PublicWireState, "winners">): boolean {
   return state.winners !== undefined && state.winners !== null;
-}
-
-/**
- * Calculate pot odds as a ratio
- */
-export function getPotOdds(state: PublicState, playerId: string): number {
-  const callAmount = getCallAmount(state, playerId);
-  if (callAmount === 0) {
-    return Infinity;
-  }
-  return getTotalPot(state) / callAmount;
 }
 
 /**

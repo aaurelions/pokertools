@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type { SeatObservation } from "@pokertools/types";
 import { PokerSocket } from "../src/socket";
 import { PokerSDKError } from "../src/types";
 
@@ -45,6 +46,70 @@ class MockWebSocket {
       }
     }, 0);
   }
+}
+
+function makeWireState(version = 1, handId = "hand-1") {
+  return {
+    config: { smallBlind: 5, bigBlind: 10, maxPlayers: 2 },
+    players: [null, null],
+    maxPlayers: 2,
+    handNumber: 1,
+    buttonSeat: null,
+    bigBlindSeat: null,
+    deck: [],
+    board: [],
+    street: "PREFLOP",
+    pots: [],
+    currentBets: {},
+    minRaise: 10,
+    lastRaiseAmount: 0,
+    actionTo: null,
+    lastAggressorSeat: null,
+    activePlayers: [],
+    winners: null,
+    rakeThisHand: 0,
+    smallBlind: 5,
+    bigBlind: 10,
+    ante: 0,
+    blindLevel: 0,
+    timeBanks: {},
+    timeBankActiveSeat: null,
+    actionHistory: [],
+    timestamp: 1700000000000,
+    handId,
+    viewingPlayerId: null,
+    version,
+  };
+}
+
+function makeObservation(overrides: Partial<SeatObservation> = {}): SeatObservation {
+  const { state, ...rest } = overrides;
+  const observation = {
+    tableId: "table-1",
+    handId: "hand-1",
+    turnId: "turn-1",
+    version: 1,
+    eventSeq: 1,
+    legalActions: [],
+    ...rest,
+  };
+  // The seat observation schema requires the state projection to carry the
+  // same hand identity and version as the observation envelope. Derive the
+  // state from the resolved observation args so fixtures stay consistent.
+  return {
+    ...observation,
+    state: state ?? makeWireState(observation.version, observation.handId),
+  } as SeatObservation;
+}
+
+function observationFrame(observation: SeatObservation, requestId?: string) {
+  return JSON.stringify({
+    type: "OBSERVATION",
+    tableId: observation.tableId,
+    observation,
+    timestamp: Date.now(),
+    ...(requestId ? { requestId } : {}),
+  });
 }
 
 describe("PokerSocket", () => {
@@ -102,23 +167,17 @@ describe("PokerSocket", () => {
   });
 
   describe("disconnect", () => {
-    it("ignores delayed close and private-state messages from a replaced socket", async () => {
+    it("ignores delayed close and private messages from a replaced socket", async () => {
       await socket.connect();
       const oldSocket = (socket as any).ws as MockWebSocket;
       socket.disconnect();
       await socket.connect();
       oldSocket.onclose?.({ code: 1000, reason: "late close" });
       oldSocket.onmessage?.({
-        data: JSON.stringify({
-          type: "SNAPSHOT",
-          tableId: "old-private-table",
-          version: 1,
-          state: { version: 1, players: [{ hand: ["As", "Ks"] }] },
-          timestamp: Date.now(),
-        }),
+        data: observationFrame(makeObservation({ tableId: "old-private-table" })),
       });
       expect(socket.isConnected()).toBe(true);
-      expect(socket.getCachedState("old-private-table")).toBeUndefined();
+      expect(socket.getCachedObservation("old-private-table")).toBeUndefined();
     });
 
     it("rejects a connection attempt cancelled before open", async () => {
@@ -142,7 +201,7 @@ describe("PokerSocket", () => {
   });
 
   describe("join", () => {
-    it("sends JOIN message and waits for SNAPSHOT", async () => {
+    it("sends JOIN and resolves with the first canonical observation", async () => {
       await socket.connect();
       const ws = (socket as any).ws as MockWebSocket;
 
@@ -150,24 +209,17 @@ describe("PokerSocket", () => {
         const msg = JSON.parse(data);
         if (msg.type === "JOIN") {
           setTimeout(() => {
-            if (ws.onmessage) {
-              ws.onmessage({
-                data: JSON.stringify({
-                  type: "SNAPSHOT",
-                  tableId: msg.tableId,
-                  state: { version: 1, players: [] },
-                  version: 1,
-                  timestamp: Date.now(),
-                }),
-              });
-            }
+            ws.onmessage?.({
+              data: observationFrame(makeObservation({ version: 4, eventSeq: 9 }), msg.requestId),
+            });
           }, 10);
         }
       });
 
-      const state = await socket.join("table-1");
+      const observation = await socket.join("table-1");
       expect(ws.send).toHaveBeenCalledWith(expect.stringContaining('"type":"JOIN"'));
-      expect(state).toEqual({ version: 1, players: [] });
+      expect(observation.version).toBe(4);
+      expect(observation.eventSeq).toBe(9);
       expect(socket.getJoinedTables()).toContain("table-1");
     });
 
@@ -175,7 +227,7 @@ describe("PokerSocket", () => {
       await expect(socket.join("table-1")).rejects.toThrow("Not connected");
     });
 
-    it("times out if no snapshot received", async () => {
+    it("times out if no observation received", async () => {
       await socket.connect();
 
       vi.useFakeTimers();
@@ -191,119 +243,140 @@ describe("PokerSocket", () => {
   });
 
   describe("leave", () => {
-    it("sends LEAVE message", async () => {
+    it("sends LEAVE message and drops the cached observation", async () => {
       await socket.connect();
-      (socket as any).joinedTables.add("table-1");
       const ws = (socket as any).ws as MockWebSocket;
+      ws.onmessage?.({ data: observationFrame(makeObservation()) });
+      expect(socket.getCachedObservation("table-1")).toBeDefined();
 
       socket.leave("table-1");
 
       expect(ws.send).toHaveBeenCalledWith(expect.stringContaining('"type":"LEAVE"'));
       expect(socket.getJoinedTables()).not.toContain("table-1");
+      expect(socket.getCachedObservation("table-1")).toBeUndefined();
     });
   });
 
-  describe("events", () => {
-    it("emits stateUpdate with cached state when cache exists", async () => {
+  describe("observations", () => {
+    it("emits observation, snapshot and exposes the canonical view state", async () => {
       await socket.connect();
       const ws = (socket as any).ws as MockWebSocket;
 
-      const onStateUpdate = vi.fn();
-      socket.on("stateUpdate", onStateUpdate);
+      const onObservation = vi.fn();
+      const onSnapshot = vi.fn();
+      socket.on("observation", onObservation);
+      socket.on("snapshot", onSnapshot);
 
-      // First, inject a SNAPSHOT to populate the cache
-      if (ws.onmessage) {
-        ws.onmessage({
-          data: JSON.stringify({
-            type: "SNAPSHOT",
-            tableId: "table-1",
-            state: { version: 1, players: [], deck: [], viewingPlayerId: null },
-            version: 1,
-            timestamp: Date.now(),
-          }),
-        });
-      }
+      const first = makeObservation({ version: 1, eventSeq: 1 });
+      ws.onmessage?.({ data: observationFrame(first) });
 
-      // Clear the spy since SNAPSHOT triggers stateUpdate?
-      onStateUpdate.mockClear();
-
-      // Now send STATE_UPDATE
-      if (ws.onmessage) {
-        ws.onmessage({
-          data: JSON.stringify({
-            type: "STATE_UPDATE",
-            tableId: "table-1",
-            version: 2,
-            timestamp: Date.now(),
-          }),
-        });
-      }
-
-      // Should emit the CACHED full state with updated version
-      expect(onStateUpdate).toHaveBeenCalledWith(
-        "table-1",
-        expect.objectContaining({ version: 2, players: [], viewingPlayerId: null })
-      );
-    });
-
-    it("does NOT emit stateUpdate when no cached state exists (regression: no phantom partial state)", async () => {
-      await socket.connect();
-      const ws = (socket as any).ws as MockWebSocket;
-
-      const onStateUpdate = vi.fn();
-      socket.on("stateUpdate", onStateUpdate);
-
-      // Send STATE_UPDATE for a table with NO cached state
-      if (ws.onmessage) {
-        ws.onmessage({
-          data: JSON.stringify({
-            type: "STATE_UPDATE",
-            tableId: "table-unknown",
-            version: 5,
-            timestamp: Date.now(),
-          }),
-        });
-      }
-
-      // Must NOT emit a phantom partial PublicState
-      expect(onStateUpdate).not.toHaveBeenCalled();
-    });
-
-    it("getTableVersion exposes version metadata safely", async () => {
-      await socket.connect();
-      const ws = (socket as any).ws as MockWebSocket;
-
-      // Unknown table returns undefined
-      expect(socket.getTableVersion("table-1")).toBeUndefined();
-
-      // Receive SNAPSHOT
-      if (ws.onmessage) {
-        ws.onmessage({
-          data: JSON.stringify({
-            type: "SNAPSHOT",
-            tableId: "table-1",
-            state: { version: 1, players: [], deck: [], viewingPlayerId: null },
-            version: 1,
-            timestamp: Date.now(),
-          }),
-        });
-      }
-
+      expect(onObservation).toHaveBeenCalledWith("table-1", first);
+      expect(onSnapshot).toHaveBeenCalledWith("table-1", first.state);
+      expect(socket.getCachedObservation("table-1")).toEqual(first);
+      expect(socket.getCachedState("table-1")).toEqual(first.state);
       expect(socket.getTableVersion("table-1")).toBe(1);
+      expect(socket.getTableEventSeq("table-1")).toBe(1);
+    });
 
-      // Receive STATE_UPDATE
-      if (ws.onmessage) {
-        ws.onmessage({
-          data: JSON.stringify({
-            type: "STATE_UPDATE",
-            tableId: "table-1",
-            version: 3,
-            timestamp: Date.now(),
-          }),
-        });
-      }
+    it("emits stateUpdate with the full wire state for a newer observation", async () => {
+      await socket.connect();
+      const ws = (socket as any).ws as MockWebSocket;
+      socket.on("observation", () => undefined);
 
-      expect(socket.getTableVersion("table-1")).toBe(3);
+      ws.onmessage?.({ data: observationFrame(makeObservation({ version: 1, eventSeq: 1 })) });
+
+      const onStateUpdate = vi.fn();
+      socket.on("stateUpdate", onStateUpdate);
+
+      const newer = makeObservation({ version: 2, eventSeq: 2, state: makeWireState(2) });
+      ws.onmessage?.({ data: observationFrame(newer) });
+
+      expect(onStateUpdate).toHaveBeenCalledWith("table-1", newer.state);
+      expect(socket.getTableVersion("table-1")).toBe(2);
+    });
+
+    it("rejects lower and equal (version, eventSeq) observations", async () => {
+      await socket.connect();
+      const ws = (socket as any).ws as MockWebSocket;
+      const onObservation = vi.fn();
+      socket.on("observation", onObservation);
+
+      ws.onmessage?.({ data: observationFrame(makeObservation({ version: 5, eventSeq: 5 })) });
+      expect(onObservation).toHaveBeenCalledTimes(1);
+
+      // Reordered older notification with a full stale projection
+      ws.onmessage?.({ data: observationFrame(makeObservation({ version: 4, eventSeq: 9 })) });
+      // Duplicate of the latest boundary
+      ws.onmessage?.({ data: observationFrame(makeObservation({ version: 5, eventSeq: 5 })) });
+      expect(onObservation).toHaveBeenCalledTimes(1);
+      expect(socket.getTableVersion("table-1")).toBe(5);
+
+      // Same version but a new event sequence is newer and must be accepted
+      ws.onmessage?.({ data: observationFrame(makeObservation({ version: 5, eventSeq: 6 })) });
+      expect(onObservation).toHaveBeenCalledTimes(2);
+      expect(socket.getTableEventSeq("table-1")).toBe(6);
+    });
+
+    it("never resets table-global versions for a different hand", async () => {
+      await socket.connect();
+      const ws = (socket as any).ws as MockWebSocket;
+      socket.on("observation", () => undefined);
+
+      ws.onmessage?.({ data: observationFrame(makeObservation({ version: 9, eventSeq: 20 })) });
+
+      const newHand = makeObservation({
+        handId: "hand-2",
+        version: 1,
+        eventSeq: 1,
+        state: { ...makeWireState(1), handId: "hand-2" },
+      });
+      ws.onmessage?.({ data: observationFrame(newHand) });
+
+      expect(socket.getCachedObservation("table-1")?.handId).toBe("hand-1");
+      expect(socket.getTableVersion("table-1")).toBe(9);
+
+      ws.onmessage?.({
+        data: observationFrame(
+          makeObservation({
+            handId: "hand-2",
+            version: 10,
+            eventSeq: 21,
+            state: { ...makeWireState(10), handId: "hand-2" },
+          })
+        ),
+      });
+      expect(socket.getCachedObservation("table-1")?.handId).toBe("hand-2");
+      expect(socket.getTableVersion("table-1")).toBe(10);
+    });
+
+    it("strictly rejects notification-only and malformed server frames", async () => {
+      await socket.connect();
+      const ws = (socket as any).ws as MockWebSocket;
+      const onObservation = vi.fn();
+      socket.on("observation", onObservation);
+      socket.on("stateUpdate", () => undefined);
+
+      ws.onmessage?.({ data: JSON.stringify({ type: "SNAPSHOT", tableId: "table-1", state: {} }) });
+      ws.onmessage?.({
+        data: JSON.stringify({
+          type: "STATE_UPDATE",
+          tableId: "table-1",
+          version: 3,
+          timestamp: 1,
+        }),
+      });
+      // Valid type but invalid observation payload
+      ws.onmessage?.({
+        data: JSON.stringify({
+          type: "OBSERVATION",
+          tableId: "table-1",
+          observation: { ...makeObservation(), legalActions: [{ family: "FOLD" }] },
+          timestamp: 1,
+        }),
+      });
+
+      expect(onObservation).not.toHaveBeenCalled();
+      expect(socket.getCachedObservation("table-1")).toBeUndefined();
     });
 
     it("emits action", async () => {
@@ -312,18 +385,16 @@ describe("PokerSocket", () => {
       const onAction = vi.fn();
       socket.on("action", onAction);
 
-      if (ws.onmessage) {
-        ws.onmessage({
-          data: JSON.stringify({
-            type: "ACTION",
-            tableId: "table-1",
-            playerId: "p1",
-            actionType: "BET",
-            amount: 100,
-            timestamp: Date.now(),
-          }),
-        });
-      }
+      ws.onmessage?.({
+        data: JSON.stringify({
+          type: "ACTION",
+          tableId: "table-1",
+          playerId: "p1",
+          actionType: "BET",
+          amount: 100,
+          timestamp: Date.now(),
+        }),
+      });
 
       expect(onAction).toHaveBeenCalledWith("table-1", "p1", "BET", 100);
     });
@@ -334,15 +405,13 @@ describe("PokerSocket", () => {
       const onError = vi.fn();
       socket.on("error", onError);
 
-      if (ws.onmessage) {
-        ws.onmessage({
-          data: JSON.stringify({
-            type: "ERROR",
-            code: "TEST_ERROR",
-            message: "Something went wrong",
-          }),
-        });
-      }
+      ws.onmessage?.({
+        data: JSON.stringify({
+          type: "ERROR",
+          code: "TEST_ERROR",
+          message: "Something went wrong",
+        }),
+      });
 
       expect(onError).toHaveBeenCalledWith(expect.any(PokerSDKError));
     });
@@ -380,7 +449,7 @@ describe("PokerSocket", () => {
       const ws = (socket as any).ws as MockWebSocket;
 
       // Spy on join method
-      const joinSpy = vi.spyOn(socket, "join").mockResolvedValue({} as any);
+      const joinSpy = vi.spyOn(socket, "join").mockResolvedValue(makeObservation());
 
       vi.useFakeTimers();
       ws.close();
@@ -402,15 +471,13 @@ describe("PokerSocket", () => {
         const msg = JSON.parse(data);
         if (msg.type === "PING") {
           setTimeout(() => {
-            if (ws.onmessage) {
-              ws.onmessage({
-                data: JSON.stringify({
-                  type: "PONG",
-                  requestId: msg.requestId,
-                  timestamp: Date.now(),
-                }),
-              });
-            }
+            ws.onmessage?.({
+              data: JSON.stringify({
+                type: "PONG",
+                requestId: msg.requestId,
+                timestamp: Date.now(),
+              }),
+            });
           }, 5);
         }
       });

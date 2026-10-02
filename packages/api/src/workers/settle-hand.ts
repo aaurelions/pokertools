@@ -5,8 +5,10 @@ import pino from "pino";
 import { config } from "../config.js";
 import { getHouseUserId } from "../utils/house-user.js";
 import { createPrismaClient } from "../utils/prisma-client.js";
+import { FinancialManager } from "../services/financial-manager.js";
 
 const prisma = createPrismaClient();
+const financialManager = new FinancialManager(prisma);
 const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
 const redlock = new Redlock([redis as unknown as Redlock.CompatibleRedisClient], {
   driftFactor: config.REDLOCK_DRIFT_FACTOR,
@@ -18,21 +20,15 @@ const logger = pino({ name: "settle-hand" });
 /**
  * Hand Settlement Worker
  *
- * Syncs engine state with the financial ledger after each hand.
- * Credits House account with rake.
+ * Syncs engine state with the chip economy after each hand. Player net changes
+ * are applied to their table reserve chip accounts and rake is credited to the
+ * house operator chip account. No legacy cents/Account/LedgerEntry rows are
+ * touched. Settlement is idempotent on `handId`: a repeated job is a no-op.
  */
 const worker = new Worker(
   "settle-hand",
   async (job) => {
     const { tableId, handId, playerNetChanges, rakeTotal } = job.data;
-    const rakeAmount = BigInt(rakeTotal);
-    const netTotal = Object.values(playerNetChanges as Record<string, string>).reduce(
-      (sum, change) => sum + BigInt(change),
-      0n
-    );
-    if (rakeAmount < 0n || netTotal + rakeAmount !== 0n) {
-      throw new Error(`Unbalanced settlement for hand ${handId}`);
-    }
 
     const lockKey = `lock:table:${tableId}`;
     let lock;
@@ -43,83 +39,18 @@ const worker = new Worker(
     }
 
     try {
-      await prisma.$transaction(async (tx: any) => {
-        const existingSettlement = await tx.ledgerEntry.findFirst({
-          where: { referenceId: handId, type: { in: ["HAND_WIN", "HAND_LOSS", "RAKE"] } },
-        });
-        if (existingSettlement) return;
-
-        if (rakeAmount > 0n) {
-          const houseUserId = await getHouseUserId(prisma);
-          const houseAccount = await tx.account.findUniqueOrThrow({
-            where: {
-              userId_currency_type: {
-                userId: houseUserId,
-                currency: config.DEFAULT_CURRENCY,
-                type: "MAIN",
-              },
-            },
-          });
-
-          await tx.ledgerEntry.create({
-            data: {
-              accountId: houseAccount.id,
-              amount: rakeAmount,
-              type: "RAKE",
-              referenceId: handId,
-              metadata: { tableId },
-            },
-          });
-
-          await tx.account.update({
-            where: { id: houseAccount.id },
-            data: { balance: { increment: rakeAmount } },
-          });
-        }
-
-        // Process player changes
-        for (const [userId, netChangeStr] of Object.entries(playerNetChanges)) {
-          const netChange = BigInt(netChangeStr as string);
-          if (netChange === 0n) continue;
-
-          const account = await tx.account.findUniqueOrThrow({
-            where: {
-              userId_currency_type: { userId, currency: config.DEFAULT_CURRENCY, type: "IN_PLAY" },
-            },
-          });
-
-          const newBalance = BigInt(account.balance) + netChange;
-          if (newBalance < 0n) {
-            throw new Error(
-              `Settlement would make IN_PLAY negative for user ${userId}: ${newBalance}`
-            );
-          }
-
-          // Always create ledger entry for audit trail in the same transaction as
-          // the corresponding balance update.
-          await tx.ledgerEntry.create({
-            data: {
-              accountId: account.id,
-              amount: netChange,
-              type: netChange > 0n ? "HAND_WIN" : "HAND_LOSS",
-              referenceId: handId,
-              metadata: { tableId },
-            },
-          });
-
-          if (netChange > 0n) {
-            await tx.account.update({
-              where: { id: account.id },
-              data: { balance: { increment: netChange } },
-            });
-          } else {
-            await tx.account.update({
-              where: { id: account.id },
-              data: { balance: { decrement: -netChange } },
-            });
-          }
-        }
+      const houseUserId = await getHouseUserId(prisma);
+      const result = await financialManager.settleHand({
+        tableId,
+        handId,
+        playerNetChanges: playerNetChanges as Record<string, string>,
+        rakeTotal,
+        houseUserId,
       });
+      if (result.replayed) {
+        logger.info({ handId }, "Hand settlement already applied (no-op)");
+        return;
+      }
     } finally {
       await lock.unlock().catch(() => undefined);
     }

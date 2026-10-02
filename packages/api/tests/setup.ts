@@ -27,62 +27,27 @@ if (process.env.DATABASE_URL?.startsWith("file:")) {
 let testRedis: Redis;
 
 /**
- * Ensure the system HOUSE user and its ledger accounts exist in the test
- * database. Tournament registration/settlement depend on these accounts for
- * double-entry escrow accounting. This replaces the production `npm run seed`
- * step in the self-contained test environment.
+ * Ensure the system HOUSE operator principal exists in the test database.
+ * Tournament registration/settlement and hand settlement resolve the HOUSE
+ * user id as the canonical chip-ledger operator (`getHouseUserId`). This
+ * replaces the production `npm run seed` step in the self-contained test
+ * environment; no legacy cents `Account` rows are created.
  */
 async function ensureHouseUser(): Promise<void> {
   const prisma = createPrismaClient();
   try {
-    let houseUser = await prisma.user.findUnique({
+    const houseUser = await prisma.user.findUnique({
       where: { username: "HOUSE" },
     });
 
     if (!houseUser) {
-      houseUser = await prisma.user.create({
+      await prisma.user.create({
         data: {
           id: createId(),
           username: "HOUSE",
           address: "0x0000000000000000000000000000000000000000",
           role: "ADMIN",
         },
-      });
-    }
-
-    await prisma.account.upsert({
-      where: {
-        userId_currency_type: {
-          userId: houseUser.id,
-          currency: "USDC",
-          type: "MAIN",
-        },
-      },
-      create: {
-        userId: houseUser.id,
-        currency: "USDC",
-        type: "MAIN",
-        balance: 0,
-      },
-      update: {},
-    });
-
-    for (const type of ["HOUSE_RESERVE", "TOURNAMENT_ESCROW"] as const) {
-      await prisma.account.upsert({
-        where: {
-          userId_currency_type: {
-            userId: houseUser.id,
-            currency: "USDC",
-            type,
-          },
-        },
-        create: {
-          userId: houseUser.id,
-          currency: "USDC",
-          type,
-          balance: 0,
-        },
-        update: {},
       });
     }
   } finally {
@@ -111,8 +76,8 @@ beforeAll(async () => {
   // DO NOT flush in afterAll to avoid race conditions between test files
   await testRedis.flushdb();
 
-  // Seed the HOUSE user and system accounts. Tournament registration and
-  // settlement routes require these for double-entry escrow bookkeeping.
+  // Seed the HOUSE operator principal. Tournament registration and settlement
+  // routes resolve it as the canonical chip-ledger operator.
   await ensureHouseUser();
 });
 

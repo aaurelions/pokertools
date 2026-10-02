@@ -15,7 +15,13 @@ import {
   useContext,
 } from "react";
 import type { ReactNode } from "react";
-import type { PublicState, TournamentDetails, TournamentListItem } from "@pokertools/types";
+import type {
+  PublicWireState,
+  TournamentDetails,
+  TournamentListItem,
+  LegalActionFamily,
+  SeatObservation,
+} from "@pokertools/types";
 import { PokerClient } from "../client";
 import { PokerSocket } from "../socket";
 import type { PokerSDKConfig, ConnectionState, UserProfile, UserBalances } from "../types";
@@ -187,16 +193,20 @@ interface UseTableOptions {
 }
 
 interface UseTableResult {
-  /** Current table state */
-  state: PublicState | null;
+  /** Current canonical wire state (from the latest full observation) */
+  state: PublicWireState | null;
+  /** Authoritative observation for the acting seat, when available */
+  observation: SeatObservation | null;
   /** Loading state */
   isLoading: boolean;
   /** Error if any */
   error: Error | null;
-  /** Refresh state from server */
+  /** Refresh the observation from server */
   refresh: () => Promise<void>;
-  /** Execute an action */
-  action: (type: string, amount?: number) => Promise<void>;
+  /** Fetch the authoritative legal-action observation */
+  observe: () => Promise<SeatObservation>;
+  /** Submit a server-issued legal action family */
+  action: (family: LegalActionFamily, amount?: number) => Promise<void>;
   /** Leave the table */
   leave: () => Promise<void>;
 }
@@ -227,20 +237,20 @@ export function useTable(tableId: string, options: UseTableOptions = {}): UseTab
   const { pollInterval, autoJoin = true } = options;
   const { client, socket } = usePoker();
 
-  const [state, setState] = useState<PublicState | null>(null);
+  const [state, setState] = useState<PublicWireState | null>(null);
+  const [observation, setObservation] = useState<SeatObservation | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
   const versionRef = useRef<number>(0);
 
-  // Fetch initial state
+  // Fetch the latest canonical observation
   const refresh = useCallback(async () => {
     try {
       setIsLoading(true);
-      const newState = await client.getTableState(tableId);
-      if (newState) {
-        setState(newState);
-        versionRef.current = newState.version;
-      }
+      const next = await client.getObservation(tableId);
+      setObservation(next);
+      setState(next.state);
+      versionRef.current = next.version;
       setError(null);
     } catch (err) {
       setError(err as Error);
@@ -254,27 +264,20 @@ export function useTable(tableId: string, options: UseTableOptions = {}): UseTab
     void refresh();
   }, [refresh]);
 
-  // WebSocket subscription
+  // WebSocket subscription: full observations only, never version-only stubs.
   useEffect(() => {
     if (!socket || !autoJoin) return;
 
-    const handleStateUpdate = (id: string, newState: PublicState) => {
+    const handleObservation = (id: string, next: SeatObservation) => {
       if (id === tableId) {
-        setState(newState);
-        versionRef.current = newState.version;
-      }
-    };
-
-    const handleSnapshot = (id: string, newState: PublicState) => {
-      if (id === tableId) {
-        setState(newState);
-        versionRef.current = newState.version;
+        setObservation(next);
+        setState(next.state);
+        versionRef.current = next.version;
         setIsLoading(false);
       }
     };
 
-    socket.on("stateUpdate", handleStateUpdate);
-    socket.on("snapshot", handleSnapshot);
+    socket.on("observation", handleObservation);
 
     // Join table if connected
     if (socket.isConnected()) {
@@ -282,8 +285,7 @@ export function useTable(tableId: string, options: UseTableOptions = {}): UseTab
     }
 
     return () => {
-      socket.off("stateUpdate", handleStateUpdate);
-      socket.off("snapshot", handleSnapshot);
+      socket.off("observation", handleObservation);
       socket.leave(tableId);
     };
   }, [socket, tableId, autoJoin]);
@@ -293,29 +295,69 @@ export function useTable(tableId: string, options: UseTableOptions = {}): UseTab
     if (!pollInterval) return;
 
     const interval = setInterval(() => {
-      void (async () => {
-        const newState = await client.getTableState(tableId, versionRef.current);
-        if (newState) {
-          setState(newState);
-          versionRef.current = newState.version;
-        }
-      })();
+      void client
+        .getObservation(tableId)
+        .then((next) => {
+          setObservation(next);
+          setState(next.state);
+          versionRef.current = next.version;
+        })
+        .catch(() => undefined);
     }, pollInterval);
 
     return () => clearInterval(interval);
   }, [client, tableId, pollInterval]);
 
-  // Action helper
+  // Fetch the authoritative decision boundary for the acting seat
+  const observe = useCallback(async () => {
+    const next = await client.getObservation(tableId);
+    setObservation(next);
+    setState(next.state);
+    versionRef.current = next.version;
+    return next;
+  }, [client, tableId]);
+
+  // Action helper: fetch a fresh observation and submit the matching
+  // server-issued legal action. Never derives legality locally.
   const action = useCallback(
-    async (type: string, amount?: number) => {
-      const newState = await client.action(tableId, {
-        type: type as Parameters<typeof client.action>[1]["type"],
-        amount,
-      });
-      setState(newState);
-      versionRef.current = newState.version;
+    async (family: LegalActionFamily, amount?: number) => {
+      switch (family) {
+        case "FOLD":
+          await client.fold(tableId);
+          break;
+        case "CHECK":
+          await client.check(tableId);
+          break;
+        case "CALL":
+          await client.call(tableId);
+          break;
+        case "BET":
+          await client.bet(tableId, amount);
+          break;
+        case "RAISE":
+          await client.raise(tableId, amount);
+          break;
+        case "DEAL":
+          await client.deal(tableId);
+          break;
+        case "SHOW":
+          await client.show(tableId);
+          break;
+        case "MUCK":
+          await client.muck(tableId);
+          break;
+        case "TIME_BANK":
+          await client.timeBank(tableId);
+          break;
+        case "STAND":
+          await client.stand(tableId);
+          break;
+        default:
+          throw new Error(`Unsupported action family: ${family as string}`);
+      }
+      await refresh();
     },
-    [client, tableId]
+    [client, tableId, refresh]
   );
 
   // Leave table
@@ -326,7 +368,7 @@ export function useTable(tableId: string, options: UseTableOptions = {}): UseTab
     }
   }, [client, socket, tableId]);
 
-  return { state, isLoading, error, refresh, action, leave };
+  return { state, observation, isLoading, error, refresh, observe, action, leave };
 }
 
 // ============================================================================
@@ -379,7 +421,7 @@ export function useUser(): UseUserResult {
 
   return {
     profile,
-    balances: profile?.balances ?? null,
+    balances: profile?.chipBalances ?? null,
     isLoading,
     error,
     refresh,

@@ -1,905 +1,671 @@
 /// <reference path="../../types/fastify.d.ts" />
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
-import { buildApp } from "../../src/app.js";
-import type { FastifyInstance } from "fastify";
-import { parseAbi, formatUnits } from "viem";
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
+import type { PrismaClient } from "../../generated/prisma/index.js";
+import { createPrismaClient } from "../../src/utils/prisma-client.js";
+import {
+  CanonicalDepositService,
+  DepositClaimRejected,
+  type DepositClaimVerifier,
+} from "../../src/services/canonical-deposits.js";
+import {
+  createCanonicalDepositVerifier,
+  type DepositVerifierPrisma,
+} from "../../src/services/canonical-deposit-verifier.js";
+import { AtomicLedger } from "../../src/services/atomic-ledger.js";
+import { FinancialIntentService } from "../../src/services/financial-intents.js";
+import { FinancialIncidentService } from "../../src/services/financial-incidents.js";
+import {
+  runCanonicalDepositMonitorOnce,
+  type CanonicalDepositMonitorDeps,
+  type MonitorRegistry,
+} from "../../src/workers/canonical-deposit-monitor.js";
+import {
+  RpcQuorumError,
+  TRANSFER_TOPIC,
+  type CanonicalReceipt,
+  type NormalizedBlock,
+  type NormalizedLog,
+  type NormalizedReceipt,
+  type QuorumReader,
+} from "../../src/services/chain-registry.js";
 
 /**
- * Integration tests for deposit security fixes
+ * Deposit security integration tests — canonical direct-treasury path.
  *
- * Tests cover:
- * 1. Blockchain reorganization protection (confirmation checking + blockHash canonicality)
- * 2. Block scanning gap prevention (lastScannedBlock tracking)
- * 3. BigInt financial math (no floating point)
- * 4. RPC failover behavior
- * 5. Idempotent confirmation (status-guarded transaction)
+ * Migrated from the removed derived-address custodial architecture. The old
+ * assertions targeted `BlockchainManager` per-user derived deposit addresses,
+ * `DepositSession`/`PaymentTransaction` scanning and the `Account`/`LedgerEntry`
+ * cents ledger. Those components are gone; every still-valid security property
+ * is now asserted against the canonical
+ * `CanonicalDepositService` + `createCanonicalDepositVerifier` path:
+ *
+ *  - wrong chain / token / sender / recipient / log identity are rejected with
+ *    stable machine reasons (`ASSET_MISMATCH`, `WRONG_TOKEN`, `WRONG_SENDER`,
+ *    `WRONG_RECIPIENT`, `LOG_NOT_FOUND`, `NOT_ERC20_TRANSFER`);
+ *  - one transaction with multiple deposit logs is resolved by exact `logIndex`;
+ *  - zero-address mint transfers are rejected (`MINT_TRANSFER`);
+ *  - confirmation depth is enforced (`INSUFFICIENT_CONFIRMATIONS`);
+ *  - a reverted tx is rejected (`TX_NOT_SUCCESS`);
+ *  - no credit is issued without verification, and no verifier means no credit;
+ *  - duplicate claims are idempotent and never double-credit;
+ *  - a reorg preserves the credited user liability and posts no duplicate order
+ *    (the old "blockHash canonicality" assertion, now canonical);
+ *  - RPC quorum failure is infrastructure, never a negative verification.
+ *
+ * The removed `BigInt cents conversion`, `minDeposit` and `lastScannedBlock`
+ * assertions were properties of the deleted scanner; the equivalent canonical
+ * properties are exact atomic on-chain amounts and deep-finality monitoring,
+ * covered in `canonical-deposit-verifier.test.ts` and
+ * `canonical-deposit-monitor.test.ts`.
  */
-describe("Deposit Security Tests", () => {
-  let app: FastifyInstance;
 
-  beforeAll(async () => {
-    app = await buildApp();
-    await app.ready();
+const CHAIN_ID = 31337;
+const TOKEN = "0x1111111111111111111111111111111111111111";
+const TREASURY = "0x2222222222222222222222222222222222222222";
+const WALLET = "0x3333333333333333333333333333333333333333";
+const STRANGER = "0x4444444444444444444444444444444444444444";
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+const TX = `0x${"ab".repeat(32)}`;
+const OTHER_TX = `0x${"cd".repeat(32)}`;
+const BLOCK_HASH = `0x${"11".repeat(32)}`;
+const OTHER_BLOCK_HASH = `0x${"22".repeat(32)}`;
+
+let prisma: PrismaClient;
+const createdAssetIds: string[] = [];
+let assetSeq = 0;
+
+function nextTokenAddress(): string {
+  assetSeq += 1;
+  return `0x${assetSeq.toString(16).padStart(40, "0")}`;
+}
+
+async function createAsset(
+  overrides: {
+    tokenAddress?: string;
+    status?: "ACTIVE" | "DEGRADED" | "FROZEN";
+    confirmations?: number;
+    deepFinality?: number;
+    treasuryAddress?: string;
+  } = {}
+) {
+  const tokenAddress = overrides.tokenAddress ?? nextTokenAddress();
+  const id = `eip155:${CHAIN_ID}/erc20:${tokenAddress}`;
+  const asset = await prisma.asset.create({
+    data: {
+      id,
+      chainId: CHAIN_ID,
+      tokenAddress,
+      symbol: "USDC",
+      decimals: 6,
+      status: overrides.status ?? "ACTIVE",
+      confirmations: overrides.confirmations ?? 5,
+      deepFinality: overrides.deepFinality ?? 12,
+      treasuryAddress: overrides.treasuryAddress ?? TREASURY,
+      rpcUrls: ["http://127.0.0.1:8545"],
+      minGasAtomic: "0",
+    },
+  });
+  createdAssetIds.push(id);
+  return asset;
+}
+
+async function cleanupAsset(assetId: string): Promise<void> {
+  await prisma.depositClaimRecord.deleteMany({ where: { assetId } });
+  await prisma.journalPosting.deleteMany({ where: { assetId } });
+  await prisma.journalTransaction.deleteMany({ where: { assetId } });
+  await prisma.atomicAccount.deleteMany({ where: { assetId } });
+  await prisma.financialIncident.deleteMany({ where: { assetId } });
+  await prisma.asset.deleteMany({ where: { id: assetId } });
+}
+
+// ---------------------------------------------------------------------------
+// Canonical verifier fixtures (mirrors canonical-deposit-verifier.test.ts).
+// ---------------------------------------------------------------------------
+
+function pad32(address: string): string {
+  return `0x${address.replace(/^0x/, "").padStart(64, "0")}`;
+}
+
+function transferLog(
+  logIndex: number,
+  amount: bigint,
+  to = TREASURY,
+  from = WALLET,
+  token = TOKEN
+): NormalizedLog {
+  return {
+    address: token,
+    topics: [TRANSFER_TOPIC, pad32(from), pad32(to)],
+    data: `0x${amount.toString(16).padStart(64, "0")}`,
+    logIndex,
+    removed: false,
+  };
+}
+
+function makeReceipt(
+  logs: NormalizedLog[],
+  overrides: Partial<NormalizedReceipt> = {}
+): NormalizedReceipt {
+  return {
+    transactionHash: TX,
+    blockHash: BLOCK_HASH,
+    blockNumber: 100n,
+    from: WALLET,
+    to: TOKEN,
+    contractAddress: null,
+    status: "success",
+    logs,
+    ...overrides,
+  };
+}
+
+function canonical(receipt: NormalizedReceipt, confirmations = 10): CanonicalReceipt {
+  return {
+    receipt,
+    block: {
+      number: receipt.blockNumber,
+      hash: receipt.blockHash,
+      parentHash: `0x${"01".repeat(32)}`,
+    },
+    confirmations,
+  };
+}
+
+function makeRegistry(canonicalReceipt: CanonicalReceipt | null, authorized = true): QuorumReader {
+  return {
+    getCanonicalReceipt: vi.fn(async () => canonicalReceipt),
+    getTransactionReceipt: vi.fn(async () => canonicalReceipt?.receipt ?? null),
+    getBlock: vi.fn(async () => canonicalReceipt!.block),
+    getBlockNumber: vi.fn(async () => 120n),
+    getSettlementBlockNumber: vi.fn(async () => 120n),
+    getBalance: vi.fn(async () => 0n),
+    getTokenBalance: vi.fn(async () => 0n),
+    isChainAuthorized: vi.fn(() => authorized),
+  };
+}
+
+function verifierFor(
+  canonicalReceipt: CanonicalReceipt | null,
+  authorized = true
+): DepositClaimVerifier {
+  return createCanonicalDepositVerifier({
+    prisma: prisma as unknown as DepositVerifierPrisma,
+    getRegistry: async () => makeRegistry(canonicalReceipt, authorized),
+  });
+}
+
+function verificationInput(assetId: string, overrides: Record<string, unknown> = {}) {
+  return {
+    assetId,
+    chainId: CHAIN_ID,
+    txHash: TX,
+    logIndex: 0,
+    principalId: "principal_1",
+    walletAddress: WALLET,
+    ...overrides,
+  };
+}
+
+function verifyOk(amountAtomic = "1000"): DepositClaimVerifier {
+  return vi.fn(async () => ({
+    verified: true,
+    amountAtomic,
+    blockNumber: "100",
+    blockHash: BLOCK_HASH,
+    confirmations: 5,
+    provenance: "DIRECT_TREASURY" as const,
+  }));
+}
+
+function verifyNo(reason = "WRONG_SENDER"): DepositClaimVerifier {
+  return vi.fn(async () => ({ verified: false, reason }));
+}
+
+async function claim(
+  service: CanonicalDepositService,
+  assetId: string,
+  overrides: Record<string, unknown> = {}
+) {
+  return service.claimDirectTreasury({
+    principalId: "principal_1",
+    walletAddress: WALLET,
+    assetId,
+    txHash: TX,
+    logIndex: 0,
+    ...overrides,
+  });
+}
+
+beforeAll(() => {
+  prisma = createPrismaClient();
+});
+
+afterEach(async () => {
+  for (const assetId of createdAssetIds.splice(0)) {
+    await cleanupAsset(assetId);
+  }
+});
+
+afterAll(async () => {
+  await prisma.$disconnect();
+});
+
+describe("deposit security: canonical on-chain verification", () => {
+  it("verifies an exact direct-treasury transfer and derives the on-chain amount", async () => {
+    const asset = await createAsset();
+    const verifier = verifierFor(
+      canonical(makeReceipt([transferLog(0, 1000n, TREASURY, WALLET, asset.tokenAddress)]), 10)
+    );
+
+    const result = await verifier(verificationInput(asset.id));
+
+    expect(result.verified).toBe(true);
+    expect(result.amountAtomic).toBe("1000");
+    expect(result.blockNumber).toBe("100");
+    expect(result.blockHash).toBe(BLOCK_HASH);
+    expect(result.confirmations).toBe(10);
+    expect(result.provenance).toBe("DIRECT_TREASURY");
   });
 
-  afterAll(async () => {
-    await app.close();
+  it("rejects a claim for a different chain", async () => {
+    const asset = await createAsset();
+    const verifier = verifierFor(
+      canonical(makeReceipt([transferLog(0, 1000n, TREASURY, WALLET, asset.tokenAddress)]))
+    );
+
+    const result = await verifier(verificationInput(asset.id, { chainId: CHAIN_ID + 1 }));
+    expect(result).toEqual({ verified: false, reason: "ASSET_MISMATCH" });
   });
 
-  describe("Confirmation Checking", () => {
-    it("should store deposit as PENDING when confirmations are insufficient", async () => {
-      // Setup: Create blockchain with 12 confirmation requirement
-      const blockchain = await app.prisma.blockchain.create({
-        data: {
-          name: "Test Ethereum",
-          chainId: 999,
-          rpcUrl: "http://localhost:8545",
-          explorerUrl: "https://etherscan.io",
-          nativeCurrency: {
-            name: "Ether",
-            symbol: "ETH",
-            decimals: 18,
-          },
-          confirmations: 12, // Require 12 confirmations
-        },
-      });
+  it("rejects a log emitted by a different token", async () => {
+    const asset = await createAsset();
+    const log = {
+      ...transferLog(0, 1000n, TREASURY, WALLET, asset.tokenAddress),
+      address: STRANGER,
+    };
+    const verifier = verifierFor(canonical(makeReceipt([log])));
 
-      const token = await app.prisma.token.create({
-        data: {
-          blockchainId: blockchain.id,
-          address: "0x1234567890123456789012345678901234567890",
-          symbol: "USDC",
-          name: "USD Coin",
-          decimals: 6,
-          minDeposit: "1000000", // 1 USDC
-        },
-      });
-
-      const user = await app.prisma.user.create({
-        data: {
-          username: `test_conf_${Date.now()}`,
-          address: `0xtest_conf_${Date.now()}`,
-          accounts: {
-            create: {
-              currency: "USDC",
-              type: "MAIN",
-              balance: 0,
-            },
-          },
-        },
-      });
-
-      // Simulate deposit detected at block 1000, current block is 1005 (5 confirmations)
-      const deposit = await app.prisma.paymentTransaction.create({
-        data: {
-          userId: user.id,
-          type: "DEPOSIT",
-          blockchainId: blockchain.id,
-          tokenId: token.id,
-          txHash: "0xtest_pending_tx",
-          address: user.address,
-          blockNumber: "1000",
-          amountRaw: "100000000", // 100 USDC
-          amountCredit: 10000, // 100.00 in cents
-          status: "PENDING", // Should be PENDING with only 5 confirmations
-        },
-      });
-
-      expect(deposit.status).toBe("PENDING");
-      expect(deposit.confirmedAt).toBeNull();
-
-      // Verify balance was NOT credited
-      const account = await app.prisma.account.findFirst({
-        where: { userId: user.id, type: "MAIN" },
-      });
-      expect(account?.balance).toBe(0n);
-
-      // Cleanup
-      await app.prisma.paymentTransaction.delete({ where: { id: deposit.id } });
-      await app.prisma.token.delete({ where: { id: token.id } });
-      await app.prisma.blockchain.delete({ where: { id: blockchain.id } });
-      await app.prisma.user.delete({ where: { id: user.id } });
-    });
-
-    it("should upgrade PENDING deposit to CONFIRMED after sufficient confirmations", async () => {
-      // This test simulates the checkPendingDeposits function
-      const blockchain = await app.prisma.blockchain.create({
-        data: {
-          name: "Test Polygon",
-          chainId: 998,
-          rpcUrl: "http://localhost:8545",
-          explorerUrl: "https://polygonscan.com",
-          nativeCurrency: {
-            name: "MATIC",
-            symbol: "MATIC",
-            decimals: 18,
-          },
-          confirmations: 5, // Lower requirement for test
-        },
-      });
-
-      const token = await app.prisma.token.create({
-        data: {
-          blockchainId: blockchain.id,
-          address: "0x2222222222222222222222222222222222222222",
-          symbol: "USDC",
-          name: "USD Coin",
-          decimals: 6,
-          minDeposit: "1000000",
-        },
-      });
-
-      const user = await app.prisma.user.create({
-        data: {
-          username: `test_upgrade_${Date.now()}`,
-          address: `0xtest_upgrade_${Date.now()}`,
-          accounts: {
-            create: {
-              currency: "USDC",
-              type: "MAIN",
-              balance: 0,
-            },
-          },
-        },
-      });
-
-      // Create PENDING deposit
-      const deposit = await app.prisma.paymentTransaction.create({
-        data: {
-          userId: user.id,
-          type: "DEPOSIT",
-          blockchainId: blockchain.id,
-          tokenId: token.id,
-          txHash: "0xtest_upgrade_tx",
-          address: user.address,
-          blockNumber: "1000",
-          amountRaw: "50000000", // 50 USDC
-          amountCredit: 5000, // 50.00 in cents
-          status: "PENDING",
-        },
-      });
-
-      // Simulate enough blocks have passed (currentBlock: 1006, depositBlock: 1000 = 6 confirmations > 5 required)
-      // In real code, checkPendingDeposits would upgrade this
-
-      // Manually upgrade to simulate worker behavior
-      await app.prisma.$transaction(async (tx) => {
-        const account = await tx.account.findFirstOrThrow({
-          where: { userId: user.id, type: "MAIN" },
-        });
-
-        const ledgerEntry = await tx.ledgerEntry.create({
-          data: {
-            accountId: account.id,
-            amount: deposit.amountCredit,
-            type: "DEPOSIT",
-            referenceId: deposit.txHash!,
-            metadata: { test: true },
-          },
-        });
-
-        await tx.account.update({
-          where: { id: account.id },
-          data: { balance: { increment: deposit.amountCredit } },
-        });
-
-        await tx.paymentTransaction.update({
-          where: { id: deposit.id },
-          data: {
-            status: "CONFIRMED",
-            ledgerEntryId: ledgerEntry.id,
-            confirmedAt: new Date(),
-          },
-        });
-      });
-
-      // Verify upgrade
-      const updated = await app.prisma.paymentTransaction.findUnique({
-        where: { id: deposit.id },
-      });
-      expect(updated?.status).toBe("CONFIRMED");
-      expect(updated?.confirmedAt).not.toBeNull();
-
-      // Verify balance was credited
-      const account = await app.prisma.account.findFirst({
-        where: { userId: user.id, type: "MAIN" },
-      });
-      expect(account?.balance).toBe(5000n);
-
-      // Cleanup
-      await app.prisma.paymentTransaction.delete({ where: { id: deposit.id } });
-      await app.prisma.token.delete({ where: { id: token.id } });
-      await app.prisma.blockchain.delete({ where: { id: blockchain.id } });
-      await app.prisma.user.delete({ where: { id: user.id } });
-    });
+    const result = await verifier(verificationInput(asset.id));
+    expect(result).toEqual({ verified: false, reason: "WRONG_TOKEN" });
   });
 
-  describe("Block Scanning Gap Prevention", () => {
-    it("should track lastScannedBlock to prevent missed deposits", async () => {
-      const blockchain = await app.prisma.blockchain.create({
-        data: {
-          name: "Test Gap Chain",
-          chainId: 997,
-          rpcUrl: "http://localhost:8545",
-          explorerUrl: "https://explorer.io",
-          nativeCurrency: {
-            name: "ETH",
-            symbol: "ETH",
-            decimals: 18,
-          },
-          confirmations: 12,
-          lastScannedBlock: null, // Start with no tracking
-        },
-      });
+  it("rejects a transfer whose sender is not the authenticated wallet", async () => {
+    const asset = await createAsset();
+    const verifier = verifierFor(
+      canonical(makeReceipt([transferLog(0, 1000n, TREASURY, STRANGER, asset.tokenAddress)]))
+    );
 
-      // Initial state: no lastScannedBlock
-      expect(blockchain.lastScannedBlock).toBeNull();
+    const result = await verifier(verificationInput(asset.id));
+    expect(result).toEqual({ verified: false, reason: "WRONG_SENDER" });
+  });
 
-      // Simulate first scan up to block 1000
-      await app.prisma.blockchain.update({
-        where: { id: blockchain.id },
-        data: { lastScannedBlock: "1000" },
-      });
+  it("rejects a transfer whose recipient is not the treasury", async () => {
+    const asset = await createAsset();
+    const verifier = verifierFor(
+      canonical(makeReceipt([transferLog(0, 1000n, STRANGER, WALLET, asset.tokenAddress)]))
+    );
 
-      let updated = await app.prisma.blockchain.findUnique({
-        where: { id: blockchain.id },
-      });
-      expect(updated?.lastScannedBlock).toBe("1000");
+    const result = await verifier(verificationInput(asset.id));
+    expect(result).toEqual({ verified: false, reason: "WRONG_RECIPIENT" });
+  });
 
-      // Simulate next scan should start from 1001
-      const lastScanned = BigInt(updated!.lastScannedBlock!);
-      const fromBlock = lastScanned + 1n; // Should be 1001
-      expect(fromBlock).toBe(1001n);
+  it("rejects a missing log index and a non-Transfer log", async () => {
+    const asset = await createAsset();
+    const nonTransfer: NormalizedLog = {
+      ...transferLog(1, 1000n, TREASURY, WALLET, asset.tokenAddress),
+      topics: [`0x${"00".repeat(32)}`, pad32(WALLET), pad32(TREASURY)],
+    };
+    const verifier = verifierFor(
+      canonical(
+        makeReceipt([transferLog(0, 1000n, TREASURY, WALLET, asset.tokenAddress), nonTransfer])
+      )
+    );
 
-      // Simulate scan up to block 1150
-      await app.prisma.blockchain.update({
-        where: { id: blockchain.id },
-        data: { lastScannedBlock: "1150" },
-      });
-
-      updated = await app.prisma.blockchain.findUnique({
-        where: { id: blockchain.id },
-      });
-      expect(updated?.lastScannedBlock).toBe("1150");
-
-      // Cleanup
-      await app.prisma.blockchain.delete({ where: { id: blockchain.id } });
+    expect(await verifier(verificationInput(asset.id, { logIndex: 7 }))).toEqual({
+      verified: false,
+      reason: "LOG_NOT_FOUND",
     });
-
-    it("should resume scanning from lastScannedBlock after worker restart", async () => {
-      const blockchain = await app.prisma.blockchain.create({
-        data: {
-          name: "Test Resume Chain",
-          chainId: 996,
-          rpcUrl: "http://localhost:8545",
-          explorerUrl: "https://explorer.io",
-          nativeCurrency: {
-            name: "ETH",
-            symbol: "ETH",
-            decimals: 18,
-          },
-          confirmations: 12,
-          lastScannedBlock: "5000", // Worker crashed at block 5000
-        },
-      });
-
-      // Simulate worker restart
-      const chain = await app.prisma.blockchain.findUnique({
-        where: { id: blockchain.id },
-      });
-
-      // Worker should resume from 5001, not currentBlock - 100
-      const resumeFrom = BigInt(chain!.lastScannedBlock!) + 1n;
-      expect(resumeFrom).toBe(5001n);
-
-      // Even if current block is 6000, we scan from 5001 to catch any gaps
-      const currentBlock = 6000n;
-      const scanRange = Number(currentBlock - resumeFrom + 1n);
-      expect(scanRange).toBe(1000); // Scans 1000 blocks to catch up
-
-      // Cleanup
-      await app.prisma.blockchain.delete({ where: { id: blockchain.id } });
+    expect(await verifier(verificationInput(asset.id, { logIndex: 1 }))).toEqual({
+      verified: false,
+      reason: "NOT_ERC20_TRANSFER",
     });
   });
 
-  describe("BigInt Financial Math", () => {
-    it("should use BigInt arithmetic for token conversion (no floating point)", () => {
-      // Test Case 1: Standard USDC (6 decimals)
-      const usdc6Decimals = {
-        amount: 100000000n, // 100 USDC raw
-        decimals: 6,
-      };
+  it("resolves each exact log when one transaction emits multiple deposit logs", async () => {
+    const asset = await createAsset();
+    const verifier = verifierFor(
+      canonical(
+        makeReceipt([
+          transferLog(2, 2000n, TREASURY, WALLET, asset.tokenAddress),
+          transferLog(5, 5000n, TREASURY, WALLET, asset.tokenAddress),
+        ])
+      )
+    );
 
-      const chips1 = Number((usdc6Decimals.amount * 100n) / 10n ** BigInt(usdc6Decimals.decimals));
-      expect(chips1).toBe(10000); // 100.00 USDC = 10000 cents
+    const first = await verifier(verificationInput(asset.id, { logIndex: 2 }));
+    const second = await verifier(verificationInput(asset.id, { logIndex: 5 }));
 
-      // Test Case 2: Token with 18 decimals (like ETH)
-      const eth18Decimals = {
-        amount: 1000000000000000000n, // 1 ETH raw
-        decimals: 18,
-      };
-
-      const chips2 = Number((eth18Decimals.amount * 100n) / 10n ** BigInt(eth18Decimals.decimals));
-      expect(chips2).toBe(100); // 1 ETH = 100 cents (if 1 ETH = $1 for test)
-
-      // Test Case 3: Large amount that demonstrates BigInt precision
-      const largeAmount = {
-        amount: 1000000000000n, // 1 million USDC (6 decimals)
-        decimals: 6,
-      };
-
-      const chips3 = Number((largeAmount.amount * 100n) / 10n ** BigInt(largeAmount.decimals));
-      // This should not lose precision in BigInt calculation
-      expect(chips3).toBe(100000000); // 1,000,000.00 USDC = 100,000,000 cents
-
-      // Test Case 4: Verify we NEVER use parseFloat
-      const badExample = "100.123456789"; // More precision than float can handle
-      const floatResult = Math.floor(parseFloat(badExample) * 100);
-      expect(floatResult).toBe(10012); // Loses precision
-
-      // Correct BigInt approach
-      const amountRaw = 100123456n; // 100.123456 USDC (6 decimals)
-      const correctResult = Number((amountRaw * 100n) / 1000000n);
-      expect(correctResult).toBe(10012); // Same result, but calculated correctly
-    });
-
-    it("should handle edge cases with BigInt conversion", () => {
-      // Edge Case 1: Very small amount (less than 1 cent)
-      const tinyAmount = 5000n; // 0.005 USDC (6 decimals)
-      const tinyChips = Number((tinyAmount * 100n) / 1000000n);
-      expect(tinyChips).toBe(0); // Correctly rounds down to 0 cents
-
-      // Edge Case 2: Exactly 1 cent
-      const oneCent = 10000n; // 0.01 USDC (6 decimals)
-      const oneCentChips = Number((oneCent * 100n) / 1000000n);
-      expect(oneCentChips).toBe(1); // Exactly 1 chip
-
-      // Edge Case 3: Max safe integer check
-      const hugeAmount = BigInt(Number.MAX_SAFE_INTEGER) * 1000000n; // Way too large
-      const hugeChips = Number((hugeAmount * 100n) / 1000000n);
-      // Should overflow Number.MAX_SAFE_INTEGER, worker should reject this
-      expect(hugeChips).toBeGreaterThan(Number.MAX_SAFE_INTEGER);
-    });
+    expect(first.verified).toBe(true);
+    expect(first.amountAtomic).toBe("2000");
+    expect(second.verified).toBe(true);
+    expect(second.amountAtomic).toBe("5000");
   });
 
-  describe("RPC Failover", () => {
-    it("should support backup RPC URL in blockchain config", async () => {
-      const blockchain = await app.prisma.blockchain.create({
-        data: {
-          name: "Test Failover Chain",
-          chainId: 995,
-          rpcUrl: "https://primary-rpc.example.com",
-          rpcUrlBackup: "https://backup-rpc.example.com", // Backup RPC
-          explorerUrl: "https://explorer.io",
-          nativeCurrency: {
-            name: "ETH",
-            symbol: "ETH",
-            decimals: 18,
-          },
-          confirmations: 12,
-        },
-      });
+  it("rejects zero-address mint transfers", async () => {
+    const asset = await createAsset();
+    const verifier = verifierFor(
+      canonical(makeReceipt([transferLog(0, 1000n, TREASURY, ZERO_ADDRESS, asset.tokenAddress)]))
+    );
 
-      expect(blockchain.rpcUrl).toBe("https://primary-rpc.example.com");
-      expect(blockchain.rpcUrlBackup).toBe("https://backup-rpc.example.com");
-
-      // BlockchainManager should use fallback transport with both URLs
-      // (Actual RPC failover testing would require mocking viem clients)
-
-      // Cleanup
-      await app.prisma.blockchain.delete({ where: { id: blockchain.id } });
-    });
+    const result = await verifier(verificationInput(asset.id));
+    expect(result).toEqual({ verified: false, reason: "MINT_TRANSFER" });
   });
 
-  describe("Deposit Deduplication", () => {
-    it("should not double-credit the same transaction", async () => {
-      const blockchain = await app.prisma.blockchain.create({
-        data: {
-          name: "Test Dedup Chain",
-          chainId: 994,
-          rpcUrl: "http://localhost:8545",
-          explorerUrl: "https://explorer.io",
-          nativeCurrency: {
-            name: "ETH",
-            symbol: "ETH",
-            decimals: 18,
-          },
-          confirmations: 1,
-        },
-      });
+  it("enforces the configured confirmation depth", async () => {
+    const asset = await createAsset({ confirmations: 5 });
+    const verifier = verifierFor(
+      canonical(makeReceipt([transferLog(0, 1000n, TREASURY, WALLET, asset.tokenAddress)]), 1)
+    );
 
-      const token = await app.prisma.token.create({
-        data: {
-          blockchainId: blockchain.id,
-          address: "0x3333333333333333333333333333333333333333",
-          symbol: "USDC",
-          name: "USD Coin",
-          decimals: 6,
-          minDeposit: "1000000",
-        },
-      });
+    const result = await verifier(verificationInput(asset.id));
+    expect(result).toEqual({ verified: false, reason: "INSUFFICIENT_CONFIRMATIONS" });
+  });
 
-      const user = await app.prisma.user.create({
-        data: {
-          username: `test_dedup_${Date.now()}`,
-          address: `0xtest_dedup_${Date.now()}`,
-          accounts: {
-            create: {
-              currency: "USDC",
-              type: "MAIN",
-              balance: 0,
-            },
-          },
-        },
-      });
-
-      const txHash = "0xtest_duplicate_tx";
-
-      // First deposit
-      await app.prisma.paymentTransaction.create({
-        data: {
-          userId: user.id,
-          type: "DEPOSIT",
-          blockchainId: blockchain.id,
-          tokenId: token.id,
-          txHash,
-          address: user.address,
-          blockNumber: "1000",
-          amountRaw: "100000000",
-          amountCredit: 10000,
-          status: "CONFIRMED",
-          confirmedAt: new Date(),
-        },
-      });
-
-      // Attempt to create duplicate
-      await expect(
-        app.prisma.paymentTransaction.create({
-          data: {
-            userId: user.id,
-            type: "DEPOSIT",
-            blockchainId: blockchain.id,
-            tokenId: token.id,
-            txHash, // Same txHash
-            address: user.address,
-            blockNumber: "1000",
-            amountRaw: "100000000",
-            amountCredit: 10000,
-            status: "CONFIRMED",
-            confirmedAt: new Date(),
-          },
+  it("rejects a reverted transaction", async () => {
+    const asset = await createAsset();
+    const verifier = verifierFor(
+      canonical(
+        makeReceipt([transferLog(0, 1000n, TREASURY, WALLET, asset.tokenAddress)], {
+          status: "reverted",
         })
-      ).rejects.toThrow(); // Should fail on unique constraint
+      )
+    );
 
-      // Verify only one deposit exists
-      const deposits = await app.prisma.paymentTransaction.findMany({
-        where: { txHash },
-      });
-      expect(deposits).toHaveLength(1);
-
-      // Cleanup
-      await app.prisma.paymentTransaction.deleteMany({ where: { txHash } });
-      await app.prisma.token.delete({ where: { id: token.id } });
-      await app.prisma.blockchain.delete({ where: { id: blockchain.id } });
-      await app.prisma.user.delete({ where: { id: user.id } });
-    });
+    const result = await verifier(verificationInput(asset.id));
+    expect(result).toEqual({ verified: false, reason: "TX_NOT_SUCCESS" });
   });
 
-  describe("Minimum Deposit Enforcement", () => {
-    it("should reject deposits below Token.minDeposit", async () => {
-      const blockchain = await app.prisma.blockchain.create({
-        data: {
-          name: "Test MinDep Chain",
-          chainId: 993,
-          rpcUrl: "http://localhost:8545",
-          explorerUrl: "https://explorer.io",
-          nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
-          confirmations: 1,
-        },
-      });
-
-      const token = await app.prisma.token.create({
-        data: {
-          blockchainId: blockchain.id,
-          address: "0x4444444444444444444444444444444444444444",
-          symbol: "USDC",
-          name: "USD Coin",
-          decimals: 6,
-          minDeposit: "10000000", // 10 USDC minimum
-        },
-      });
-
-      // Simulating the BigInt check that the deposit monitor would do
-      const belowMinAmount = BigInt("5000000"); // 5 USDC - below 10 USDC min
-      const minDepositBigInt = BigInt(token.minDeposit);
-      expect(belowMinAmount < minDepositBigInt).toBe(true);
-
-      // At minimum
-      const atMinAmount = BigInt("10000000"); // 10 USDC - exactly at min
-      expect(atMinAmount >= minDepositBigInt).toBe(true);
-
-      // Above minimum
-      const aboveMinAmount = BigInt("20000000"); // 20 USDC - above min
-      expect(aboveMinAmount >= minDepositBigInt).toBe(true);
-
-      // Cleanup
-      await app.prisma.token.delete({ where: { id: token.id } });
-      await app.prisma.blockchain.delete({ where: { id: blockchain.id } });
+  it("rejects a frozen asset and an unauthorized chain", async () => {
+    const frozenAsset = await createAsset({ status: "FROZEN" });
+    expect(await verifierFor(null)(verificationInput(frozenAsset.id))).toEqual({
+      verified: false,
+      reason: "ASSET_FROZEN",
     });
 
-    it("should enforce zero minimum deposit (allow all deposits)", async () => {
-      const blockchain = await app.prisma.blockchain.create({
-        data: {
-          name: "Test ZeroMin Chain",
-          chainId: 992,
-          rpcUrl: "http://localhost:8545",
-          explorerUrl: "https://explorer.io",
-          nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
-          confirmations: 1,
-        },
-      });
-
-      const token = await app.prisma.token.create({
-        data: {
-          blockchainId: blockchain.id,
-          address: "0x5555555555555555555555555555555555555555",
-          symbol: "TEST",
-          name: "Test Token",
-          decimals: 6,
-          minDeposit: "0", // No minimum
-        },
-      });
-
-      // Even tiny amounts should pass when minDeposit is 0
-      const tinyAmount = BigInt("1");
-      const minDepositBigInt = BigInt(token.minDeposit);
-      expect(tinyAmount >= minDepositBigInt).toBe(true);
-
-      // Cleanup
-      await app.prisma.token.delete({ where: { id: token.id } });
-      await app.prisma.blockchain.delete({ where: { id: blockchain.id } });
-    });
+    const asset = await createAsset();
+    expect(
+      await verifierFor(
+        canonical(makeReceipt([transferLog(0, 1000n, TREASURY, WALLET, asset.tokenAddress)])),
+        false
+      )(verificationInput(asset.id))
+    ).toEqual({ verified: false, reason: "CHAIN_NOT_AUTHORIZED" });
   });
 
-  describe("Zero-Address Mint Transfer Filtering", () => {
-    it("should identify zero-address transfers (mints) as not real deposits", () => {
-      const zeroAddress = "0x0000000000000000000000000000000000000000";
-      const realAddress: string = "0x1234567890123456789012345678901234567890";
-
-      // Zero-address as 'from' = mint (should be filtered)
-      const isMint = zeroAddress === "0x0000000000000000000000000000000000000000";
-      expect(isMint).toBe(true);
-
-      // Real address as 'from' = actual transfer (should be processed)
-      const isTransfer = !!(realAddress.length === 42 && realAddress !== zeroAddress);
-      expect(isTransfer).toBe(true);
-
-      // Check case-insensitive comparison
-      const upperZero = "0x0000000000000000000000000000000000000000".toLowerCase();
-      expect(upperZero).toBe(zeroAddress);
+  it("treats an RPC quorum failure as infrastructure, not a negative verification", async () => {
+    // Replaces the removed rpcUrl/rpcUrlBackup failover assertion: the canonical
+    // path fails closed and throws so the route maps it to 503, rather than
+    // silently treating a lost RPC as a reverted/non-canonical deposit.
+    const asset = await createAsset();
+    const verifier = createCanonicalDepositVerifier({
+      prisma: prisma as unknown as DepositVerifierPrisma,
+      getRegistry: async () => {
+        throw new RpcQuorumError("no endpoints", CHAIN_ID, {
+          chainId: CHAIN_ID,
+          method: "eth_getTransactionReceipt",
+          reason: "no_responses",
+          endpoints: [],
+        });
+      },
     });
 
-    it("should log and skip zero-address mint transfers in deposit processing", () => {
-      // This test validates the logic that would be used in the deposit monitor
-      const fromAddress: string = "0x0000000000000000000000000000000000000000";
-      const isZeroAddress =
-        fromAddress === "0x0000000000000000000000000000000000000000" || !fromAddress;
-      expect(isZeroAddress).toBe(true);
+    await expect(verifier(verificationInput(asset.id))).rejects.toBeInstanceOf(RpcQuorumError);
+  });
+});
 
-      // A valid non-zero from address
-      const validFrom: string = "0xabcdef1234567890abcdef1234567890abcdef12";
-      const isValidFrom = !!(
-        validFrom.length > 0 && validFrom !== "0x0000000000000000000000000000000000000000"
-      );
-      expect(isValidFrom).toBe(true);
+describe("deposit security: canonical credit path", () => {
+  it("issues no credit when the verifier does not verify", async () => {
+    const asset = await createAsset();
+    const service = new CanonicalDepositService(prisma, { verifier: verifyNo() });
+
+    await expect(claim(service, asset.id)).rejects.toMatchObject({
+      code: "DEPOSIT_NOT_VERIFIED",
     });
+
+    expect(await prisma.depositClaimRecord.count({ where: { assetId: asset.id } })).toBe(0);
+    expect(await prisma.journalTransaction.count({ where: { assetId: asset.id } })).toBe(0);
+    expect(await prisma.atomicAccount.count({ where: { assetId: asset.id } })).toBe(0);
   });
 
-  describe("Block Hash Canonicality", () => {
-    it("should store blockHash with deposit for reorg protection", async () => {
-      const blockchain = await app.prisma.blockchain.create({
-        data: {
-          name: "Test BlockHash Chain",
-          chainId: 991,
-          rpcUrl: "http://localhost:8545",
-          explorerUrl: "https://explorer.io",
-          nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
-          confirmations: 12,
-        },
-      });
+  it("issues no credit when no verifier is configured", async () => {
+    const asset = await createAsset();
+    const service = new CanonicalDepositService(prisma);
 
-      const token = await app.prisma.token.create({
-        data: {
-          blockchainId: blockchain.id,
-          address: "0x6666666666666666666666666666666666666666",
-          symbol: "USDC",
-          name: "USD Coin",
-          decimals: 6,
-          minDeposit: "1000000",
-        },
-      });
-
-      const user = await app.prisma.user.create({
-        data: {
-          username: `test_blockhash_${Date.now()}`,
-          address: `0xtest_blockhash_${Date.now()}`,
-          accounts: {
-            create: { currency: "USDC", type: "MAIN", balance: 0 },
-          },
-        },
-      });
-
-      // Simulate a deposit with blockHash stored
-      const testBlockHash = "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
-      const deposit = await app.prisma.paymentTransaction.create({
-        data: {
-          userId: user.id,
-          type: "DEPOSIT",
-          blockchainId: blockchain.id,
-          tokenId: token.id,
-          txHash: "0xtest_blockhash_tx",
-          address: user.address,
-          blockNumber: "1000",
-          blockHash: testBlockHash,
-          amountRaw: "100000000",
-          amountCredit: 10000,
-          status: "PENDING",
-        },
-      });
-
-      expect(deposit.blockHash).toBe(testBlockHash);
-      expect(deposit.blockHash).toBeTruthy();
-
-      // blockHash should be null for deposits without it
-      const depositWithout = await app.prisma.paymentTransaction.create({
-        data: {
-          userId: user.id,
-          type: "DEPOSIT",
-          blockchainId: blockchain.id,
-          tokenId: token.id,
-          txHash: "0xtest_no_blockhash",
-          address: user.address,
-          blockNumber: "1001",
-          amountRaw: "200000000",
-          amountCredit: 20000,
-          status: "PENDING",
-        },
-      });
-
-      expect(depositWithout.blockHash).toBeNull();
-
-      // Cleanup
-      await app.prisma.paymentTransaction.deleteMany({
-        where: { userId: user.id },
-      });
-      await app.prisma.token.delete({ where: { id: token.id } });
-      await app.prisma.blockchain.delete({ where: { id: blockchain.id } });
-      await app.prisma.user.delete({ where: { id: user.id } });
+    await expect(claim(service, asset.id)).rejects.toMatchObject({
+      code: "VERIFICATION_UNAVAILABLE",
     });
-
-    it("should detect reorg by comparing stored blockHash with canonical chain", () => {
-      // This is a pure logic test verifying the reorg detection algorithm
-      const storedBlockHash = "0xabc0000000000000000000000000000000000000000000000000000000000000";
-      const canonicalBlockHash =
-        "0xdef0000000000000000000000000000000000000000000000000000000000000";
-
-      const isReorg = storedBlockHash.toLowerCase() !== canonicalBlockHash.toLowerCase();
-      expect(isReorg).toBe(true);
-
-      // Same hash = no reorg
-      const sameHash = "0x1111111111111111111111111111111111111111111111111111111111111111";
-      const isNotReorg = sameHash.toLowerCase() === sameHash.toLowerCase();
-      expect(isNotReorg).toBe(true);
-
-      // When blockHash is null, reorg check should be skipped
-      const nullBlockHash: string | null = null;
-      const shouldSkipReorg = !nullBlockHash;
-      expect(shouldSkipReorg).toBe(true);
-    });
+    expect(await prisma.depositClaimRecord.count({ where: { assetId: asset.id } })).toBe(0);
   });
 
-  describe("Idempotent Deposit Confirmation", () => {
-    it("should only credit once when updating status with status-guarded updateMany", async () => {
-      const blockchain = await app.prisma.blockchain.create({
-        data: {
-          name: "Test Idempotent Chain",
-          chainId: 990,
-          rpcUrl: "http://localhost:8545",
-          explorerUrl: "https://explorer.io",
-          nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
-          confirmations: 1,
+  it("rejects a non-canonical claim identity before verification", async () => {
+    const asset = await createAsset();
+    const verifier = verifyOk();
+    const service = new CanonicalDepositService(prisma, { verifier });
+
+    await expect(
+      claim(service, asset.id, { txHash: "not-a-hash", logIndex: -1 })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(verifier).not.toHaveBeenCalled();
+  });
+
+  it("credits a verified claim exactly once and is idempotent on replay", async () => {
+    const asset = await createAsset();
+    const verifier = verifyOk("1000");
+    const service = new CanonicalDepositService(prisma, { verifier });
+
+    const first = await claim(service, asset.id);
+    expect(first.status).toBe("CREDITED");
+    expect(first.amountAtomic).toBe("1000");
+    expect(first.idempotent).toBe(false);
+
+    const balance = await prisma.atomicAccount.findUnique({
+      where: {
+        assetId_ownerKey_class: {
+          assetId: asset.id,
+          ownerKey: "principal_1",
+          class: "USER_AVAILABLE",
         },
-      });
-
-      const token = await app.prisma.token.create({
-        data: {
-          blockchainId: blockchain.id,
-          address: "0x7777777777777777777777777777777777777777",
-          symbol: "USDC",
-          name: "USD Coin",
-          decimals: 6,
-          minDeposit: "1000000",
-        },
-      });
-
-      const user = await app.prisma.user.create({
-        data: {
-          username: `test_idempotent_${Date.now()}`,
-          address: `0xtest_idempotent_${Date.now()}`,
-          accounts: {
-            create: { currency: "USDC", type: "MAIN", balance: 0 },
-          },
-        },
-      });
-
-      // Create a PENDING deposit
-      const deposit = await app.prisma.paymentTransaction.create({
-        data: {
-          userId: user.id,
-          type: "DEPOSIT",
-          blockchainId: blockchain.id,
-          tokenId: token.id,
-          txHash: "0xtest_idempotent_tx",
-          address: user.address,
-          blockNumber: "1000",
-          amountRaw: "100000000",
-          amountCredit: 10000,
-          status: "PENDING",
-        },
-      });
-
-      // Simulate first worker: status-guarded updateMany from PENDING to CONFIRMED
-      const firstUpdate = await app.prisma.paymentTransaction.updateMany({
-        where: { id: deposit.id, status: "PENDING" },
-        data: { status: "CONFIRMED", confirmedAt: new Date() },
-      });
-      expect(firstUpdate.count).toBe(1);
-
-      // Simulate second worker: try again, should update 0 rows (already CONFIRMED)
-      const secondUpdate = await app.prisma.paymentTransaction.updateMany({
-        where: { id: deposit.id, status: "PENDING" },
-        data: { status: "CONFIRMED", confirmedAt: new Date() },
-      });
-      expect(secondUpdate.count).toBe(0);
-
-      // Verify only one confirmation happened
-      const finalDeposit = await app.prisma.paymentTransaction.findUnique({
-        where: { id: deposit.id },
-      });
-      expect(finalDeposit!.status).toBe("CONFIRMED");
-
-      // Cleanup
-      await app.prisma.paymentTransaction.delete({ where: { id: deposit.id } });
-      await app.prisma.token.delete({ where: { id: token.id } });
-      await app.prisma.blockchain.delete({ where: { id: blockchain.id } });
-      await app.prisma.user.delete({ where: { id: user.id } });
+      },
     });
+    expect(balance?.balanceAtomic).toBe("1000");
 
-    it("should credit balance only once in idempotent transaction", async () => {
-      const blockchain = await app.prisma.blockchain.create({
-        data: {
-          name: "Test CreditOnce Chain",
-          chainId: 989,
-          rpcUrl: "http://localhost:8545",
-          explorerUrl: "https://explorer.io",
-          nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
-          confirmations: 1,
+    // Replay: same exact log identity returns the same claim with no re-verify
+    // and no second journal.
+    const second = await claim(service, asset.id);
+    expect(second.idempotent).toBe(true);
+    expect(second.id).toBe(first.id);
+    expect(verifier).toHaveBeenCalledTimes(1);
+
+    expect(await prisma.depositClaimRecord.count({ where: { assetId: asset.id } })).toBe(1);
+    expect(await prisma.journalTransaction.count({ where: { assetId: asset.id } })).toBe(1);
+
+    const afterReplay = await prisma.atomicAccount.findUnique({
+      where: {
+        assetId_ownerKey_class: {
+          assetId: asset.id,
+          ownerKey: "principal_1",
+          class: "USER_AVAILABLE",
         },
-      });
-
-      const token = await app.prisma.token.create({
-        data: {
-          blockchainId: blockchain.id,
-          address: "0x8888888888888888888888888888888888888888",
-          symbol: "USDC",
-          name: "USD Coin",
-          decimals: 6,
-          minDeposit: "1000000",
-        },
-      });
-
-      const user = await app.prisma.user.create({
-        data: {
-          username: `test_credit_once_${Date.now()}`,
-          address: `0xtest_credit_once_${Date.now()}`,
-          accounts: {
-            create: { currency: "USDC", type: "MAIN", balance: 0 },
-          },
-        },
-      });
-
-      // First credit
-      await app.prisma.$transaction(async (tx) => {
-        const account = await tx.account.findUniqueOrThrow({
-          where: { userId_currency_type: { userId: user.id, currency: "USDC", type: "MAIN" } },
-        });
-        await tx.account.update({
-          where: { id: account.id },
-          data: { balance: { increment: 10000 } },
-        });
-      });
-
-      let account = await app.prisma.account.findFirstOrThrow({
-        where: { userId: user.id, type: "MAIN" },
-      });
-      expect(account.balance).toBe(10000n);
-
-      // Attempt to credit again in a guarded transaction (simulating the guard)
-      const deposit = await app.prisma.paymentTransaction.create({
-        data: {
-          userId: user.id,
-          type: "DEPOSIT",
-          blockchainId: blockchain.id,
-          tokenId: token.id,
-          txHash: `0xguarded_credit_${Date.now()}`,
-          address: user.address,
-          blockNumber: "1000",
-          amountRaw: "100000000",
-          amountCredit: 10000,
-          status: "PENDING",
-        },
-      });
-
-      // Guarded update: only credit if status is PENDING and update to CONFIRMED atomically
-      const guardResult = await app.prisma.$transaction(async (tx) => {
-        const updated = await tx.paymentTransaction.updateMany({
-          where: { id: deposit.id, status: "PENDING" },
-          data: { status: "CONFIRMED", confirmedAt: new Date() },
-        });
-
-        if (updated.count === 0) {
-          return { credited: false };
-        }
-
-        const acct = await tx.account.findUniqueOrThrow({
-          where: { userId_currency_type: { userId: user.id, currency: "USDC", type: "MAIN" } },
-        });
-        await tx.account.update({
-          where: { id: acct.id },
-          data: { balance: { increment: 10000 } },
-        });
-
-        return { credited: true };
-      });
-
-      expect(guardResult.credited).toBe(true);
-
-      // Try again - should be blocked by guard
-      const secondAttempt = await app.prisma.$transaction(async (tx) => {
-        const updated = await tx.paymentTransaction.updateMany({
-          where: { id: deposit.id, status: "PENDING" },
-          data: { status: "CONFIRMED", confirmedAt: new Date() },
-        });
-
-        if (updated.count === 0) {
-          return { credited: false };
-        }
-
-        const acct = await tx.account.findUniqueOrThrow({
-          where: { userId_currency_type: { userId: user.id, currency: "USDC", type: "MAIN" } },
-        });
-        await tx.account.update({
-          where: { id: acct.id },
-          data: { balance: { increment: 10000 } },
-        });
-
-        return { credited: true };
-      });
-
-      expect(secondAttempt.credited).toBe(false);
-
-      // Verify balance was credited exactly once
-      account = await app.prisma.account.findFirstOrThrow({
-        where: { userId: user.id, type: "MAIN" },
-      });
-      expect(account.balance).toBe(20000n); // 10000 (first) + 10000 (guarded once) = 20000
-
-      // Cleanup
-      await app.prisma.paymentTransaction.delete({ where: { id: deposit.id } });
-      await app.prisma.account.deleteMany({ where: { userId: user.id } });
-      await app.prisma.user.delete({ where: { id: user.id } });
-      await app.prisma.token.delete({ where: { id: token.id } });
-      await app.prisma.blockchain.delete({ where: { id: blockchain.id } });
+      },
     });
+    expect(afterReplay?.balanceAtomic).toBe("1000");
+  });
+
+  it("rejects a duplicate claim identity that is not yet credited", async () => {
+    const asset = await createAsset();
+    // Simulate an in-flight OBSERVED claim row with the same log identity.
+    await prisma.depositClaimRecord.create({
+      data: {
+        assetId: asset.id,
+        principalId: "principal_1",
+        chainId: CHAIN_ID,
+        txHash: TX,
+        logIndex: 0,
+        amountAtomic: "1000",
+        status: "OBSERVED",
+      },
+    });
+    const verifier = verifyOk();
+    const service = new CanonicalDepositService(prisma, { verifier });
+
+    await expect(claim(service, asset.id)).rejects.toMatchObject({ code: "DUPLICATE_CLAIM" });
+    expect(verifier).not.toHaveBeenCalled();
+    expect(await prisma.journalTransaction.count({ where: { assetId: asset.id } })).toBe(0);
+  });
+
+  it("rejects an invalid amount returned by the verifier without crediting", async () => {
+    const asset = await createAsset();
+    const service = new CanonicalDepositService(prisma, { verifier: verifyOk("0xbad") });
+
+    await expect(claim(service, asset.id)).rejects.toMatchObject({
+      code: "VERIFICATION_INVALID",
+    });
+    expect(await prisma.depositClaimRecord.count({ where: { assetId: asset.id } })).toBe(0);
+  });
+
+  it("exposes DepositClaimRejected as an AppError subclass with a stable code", () => {
+    const error = new DepositClaimRejected("SOME_CODE", "message");
+    expect(error).toBeInstanceOf(Error);
+    expect(error.code).toBe("SOME_CODE");
+  });
+});
+
+describe("deposit security: canonical reorg preservation", () => {
+  it("preserves user liability and posts no duplicate obligation on a reorg", async () => {
+    const asset = await createAsset();
+    const service = new CanonicalDepositService(prisma, { verifier: verifyOk("1000") });
+    const credited = await claim(service, asset.id);
+    expect(credited.status).toBe("CREDITED");
+
+    const accountKey = {
+      assetId_ownerKey_class: {
+        assetId: asset.id,
+        ownerKey: "principal_1",
+        class: "USER_AVAILABLE" as const,
+      },
+    };
+    const balanceBefore = await prisma.atomicAccount.findUnique({ where: accountKey });
+    const journalsBefore = await prisma.journalTransaction.count({ where: { assetId: asset.id } });
+
+    const ledger = new AtomicLedger(prisma);
+    const intents = new FinancialIntentService(prisma, ledger);
+    const incidents = new FinancialIncidentService(prisma, ledger);
+
+    const reorgedBlock: NormalizedBlock = {
+      number: 100n,
+      hash: OTHER_BLOCK_HASH,
+      parentHash: `0x${"01".repeat(32)}`,
+    };
+    const base = makeRegistry(
+      canonical(makeReceipt([transferLog(0, 1000n, TREASURY, WALLET, asset.tokenAddress)]))
+    );
+    const registry: MonitorRegistry = {
+      ...base,
+      getSettlementBlockNumber: vi.fn(async () => 200n),
+      getBlock: vi.fn(async () => reorgedBlock),
+      freezeChain: vi.fn(async () => undefined),
+    };
+
+    const result = await runCanonicalDepositMonitorOnce({
+      prisma,
+      registry,
+      intents,
+      incidents,
+    } as unknown as CanonicalDepositMonitorDeps);
+
+    expect(result.reorged).toBeGreaterThanOrEqual(1);
+
+    const claimAfter = await prisma.depositClaimRecord.findUnique({ where: { id: credited.id } });
+    expect(claimAfter?.status).toBe("ORPHANED");
+
+    const incident = await prisma.financialIncident.findFirst({
+      where: { kind: "DEPOSIT_REORG", affectedId: credited.id },
+    });
+    expect(incident).not.toBeNull();
+    expect(incident?.evidence).toMatchObject({
+      amountAtomic: "1000",
+      principalId: "principal_1",
+      creditedJournalId: credited.creditedJournalId,
+    });
+    expect(String((incident?.evidence as { note?: string }).note)).toContain(
+      "User liability preserved"
+    );
+
+    const assetAfter = await prisma.asset.findUnique({ where: { id: asset.id } });
+    expect(assetAfter?.status).toBe("FROZEN");
+
+    // Liability preserved: same balance, no duplicate journal obligation.
+    const balanceAfter = await prisma.atomicAccount.findUnique({ where: accountKey });
+    expect(balanceAfter?.balanceAtomic).toBe(balanceBefore?.balanceAtomic);
+    expect(await prisma.journalTransaction.count({ where: { assetId: asset.id } })).toBe(
+      journalsBefore
+    );
+
+    // Re-running the monitor must not create a second reorg incident.
+    const second = await runCanonicalDepositMonitorOnce({
+      prisma,
+      registry,
+      intents,
+      incidents,
+    } as unknown as CanonicalDepositMonitorDeps);
+    expect(second.reorged).toBe(0);
+    expect(
+      await prisma.financialIncident.count({
+        where: { kind: "DEPOSIT_REORG", affectedId: credited.id },
+      })
+    ).toBe(1);
+  });
+
+  it("preserves the credited claim on quorum failure instead of concluding a reorg", async () => {
+    const asset = await createAsset();
+    const service = new CanonicalDepositService(prisma, { verifier: verifyOk("1000") });
+    const credited = await claim(service, asset.id);
+
+    const ledger = new AtomicLedger(prisma);
+    const intents = new FinancialIntentService(prisma, ledger);
+    const incidents = new FinancialIncidentService(prisma, ledger);
+
+    const base = makeRegistry(
+      canonical(makeReceipt([transferLog(0, 1000n, TREASURY, WALLET, asset.tokenAddress)]))
+    );
+    const registry: MonitorRegistry = {
+      ...base,
+      getSettlementBlockNumber: vi.fn(async () => {
+        throw new RpcQuorumError("no quorum", CHAIN_ID, {
+          chainId: CHAIN_ID,
+          method: "eth_blockNumber",
+          reason: "no_responses",
+          endpoints: [],
+        });
+      }),
+      freezeChain: vi.fn(async () => undefined),
+    };
+
+    const result = await runCanonicalDepositMonitorOnce({
+      prisma,
+      registry,
+      intents,
+      incidents,
+    } as unknown as CanonicalDepositMonitorDeps);
+
+    expect(result.preserved).toBeGreaterThanOrEqual(1);
+    const claimAfter = await prisma.depositClaimRecord.findUnique({ where: { id: credited.id } });
+    expect(claimAfter?.status).toBe("CREDITED");
+    expect(
+      await prisma.financialIncident.count({
+        where: { kind: "DEPOSIT_REORG", affectedId: credited.id },
+      })
+    ).toBe(0);
+    const assetAfter = await prisma.asset.findUnique({ where: { id: asset.id } });
+    expect(assetAfter?.status).toBe("ACTIVE");
   });
 });

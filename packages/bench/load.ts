@@ -1,4 +1,5 @@
 import WebSocket from "ws";
+import { randomUUID } from "node:crypto";
 import { Queue } from "bullmq";
 
 interface Result {
@@ -65,17 +66,55 @@ async function apiHealth(): Promise<Result> {
   });
 }
 
+interface LegalAction {
+  actionId: string;
+  family: string;
+  amount?: number;
+  minAmount?: number;
+  maxAmount?: number;
+}
+
+interface SeatObservation {
+  turnId: string;
+  version: number;
+  legalActions: LegalAction[];
+}
+
 async function gameActions(): Promise<Result | null> {
   if (!TOKEN || !TABLE_ID) return null;
-  const actions = ["CHECK", "CALL", "FOLD"] as const;
+  const preferred = ["CHECK", "CALL", "FOLD"] as const;
   let i = 0;
   return timed("game:actions", async () => {
+    // Resolve the legal action from the authoritative observation; the bench
+    // never fabricates a legal action or an actor identity.
+    const observationRes = await fetch(`${API_BASE}/tables/${TABLE_ID}/observation`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    if (observationRes.status >= 500) throw new Error(`HTTP ${observationRes.status}`);
+    if (!observationRes.ok) return;
+
+    const observation = (await observationRes.json()) as SeatObservation;
+    const legalActions = observation.legalActions ?? [];
+    const offset = i++;
+    const ordered = preferred.map((_, index) => preferred[(index + offset) % preferred.length]);
+    const legal =
+      ordered
+        .map((family) => legalActions.find((action) => action.family === family))
+        .find((action) => action !== undefined) ?? legalActions[0];
+    if (legal === undefined) return;
+
+    const bounded = legal.minAmount !== undefined || legal.maxAmount !== undefined;
+    const amount = bounded ? (legal.amount ?? legal.minAmount) : undefined;
+
     const res = await fetch(`${API_BASE}/tables/${TABLE_ID}/action`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
       body: JSON.stringify({
-        type: actions[i++ % actions.length],
-        idempotencyKey: `bench-${Date.now()}-${i}`,
+        requestId: randomUUID(),
+        turnId: observation.turnId,
+        expectedVersion: observation.version,
+        actionId: legal.actionId,
+        ...(amount === undefined ? {} : { amount }),
       }),
     });
     if (res.status >= 500) throw new Error(`HTTP ${res.status}`);

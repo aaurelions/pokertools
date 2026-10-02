@@ -1,267 +1,73 @@
-import { HDKey } from "@scure/bip32";
 import { createPrismaClient } from "../src/utils/prisma-client.js";
 
 const prisma = createPrismaClient();
 
 /**
- * Generate a test HD wallet xPub for development
- * WARNING: DO NOT use this in production. Generate a real xPub from a secure HD wallet.
+ * Canonical crypto configuration seed.
  *
- * For production, use hardware wallet or secure key management:
- * 1. Generate a BIP-39 mnemonic
- * 2. Derive the master key: m/44'/60'/0'/0
- * 3. Export the xPub (extended public key) only
- * 4. Store the xPub in the database
- * 5. Keep the private keys in cold storage
+ * The legacy AdminWallet/Blockchain/Token (derived-address custodial deposits)
+ * fixtures have been removed. Canonical deposits verify a direct-treasury
+ * ERC-20 transfer against an `Asset` row, so this seed writes `Asset` fixtures
+ * only.
+ *
+ * These are LOCAL DEVELOPMENT fixtures pointing at an Anvil node. They use a
+ * clearly marked placeholder treasury and are safe to re-run. Deployed
+ * environments must provision real `Asset` rows (treasury address, at least two
+ * independent RPC endpoints per chain) through the operator tooling.
  */
-function generateTestXPub(): string {
-  // This is a TEST xPub derived from a well-known test mnemonic
-  // "test test test test test test test test test test test junk"
-  // DO NOT use in production
-  const testXpub =
-    "xpub6BosfCnifzxcFwrSzQiqu2DBVTshkCXacvNsWGYJVVhhawA7d4R5WSWGFNbi8Aw6ZRc1brxMyWMzG3DSSSSoekkudhUd9yLb6qx39T9nMdj";
-  return testXpub;
+const DEV_CHAIN_ID = 31337;
+const DEV_TREASURY = "0x70997970c51812dc3a010c7d01b50e0d17dc79c8";
+const DEV_RPC_URLS = ["http://127.0.0.1:8545", "http://127.0.0.1:8546"];
+
+interface AssetFixture {
+  id: string;
+  tokenAddress: string;
+  symbol: string;
+  decimals: number;
+  minGasAtomic: string;
 }
 
+const DEV_ASSETS: AssetFixture[] = [
+  {
+    id: `eip155:${DEV_CHAIN_ID}/erc20:0x5fbdb2315678afecb367f032d93f642f64180aa3`,
+    tokenAddress: "0x5fbdb2315678afecb367f032d93f642f64180aa3",
+    symbol: "USDC",
+    decimals: 6,
+    minGasAtomic: "0",
+  },
+];
+
 async function main() {
-  console.log("🌱 Starting crypto configuration seed...");
+  console.log("🌱 Starting canonical crypto configuration seed...");
 
-  // ============================================================================
-  // 1. Create Admin Wallet (with test xPub)
-  // ============================================================================
-
-  const testXpub = generateTestXPub();
-
-  const adminWallet = await prisma.adminWallet.upsert({
-    where: { id: "dev_wallet_1" },
-    create: {
-      id: "dev_wallet_1",
-      label: "Development Wallet 2025",
-      xpub: testXpub,
-      derivationPath: "m/44'/60'/0'/0",
-      currentIndex: 0,
-      isActive: true,
-    },
-    update: {},
-  });
-
-  console.log(`✅ Admin Wallet configured: ${adminWallet.id}`);
-
-  // ============================================================================
-  // 2. Configure Blockchains
-  // ============================================================================
-
-  // Ethereum Mainnet (using public RPC for testing)
-  const ethereum = await prisma.blockchain.upsert({
-    where: { chainId: 1 },
-    create: {
-      name: "Ethereum",
-      chainId: 1,
-      rpcUrl: "https://eth.llamarpc.com",
-      explorerUrl: "https://etherscan.io",
-      nativeCurrency: {
-        name: "Ether",
-        symbol: "ETH",
-        decimals: 18,
+  for (const asset of DEV_ASSETS) {
+    const record = await prisma.asset.upsert({
+      where: { id: asset.id },
+      create: {
+        id: asset.id,
+        chainId: DEV_CHAIN_ID,
+        tokenAddress: asset.tokenAddress,
+        symbol: asset.symbol,
+        decimals: asset.decimals,
+        status: "ACTIVE",
+        confirmations: 1,
+        deepFinality: 3,
+        treasuryAddress: DEV_TREASURY,
+        rpcUrls: DEV_RPC_URLS,
+        minGasAtomic: asset.minGasAtomic,
       },
-      isEnabled: true,
-      confirmations: 12,
-    },
-    update: {},
-  });
+      update: {},
+    });
+    console.log(`✅ Asset configured: ${record.id}`);
+  }
 
-  console.log(`✅ Blockchain configured: ${ethereum.name}`);
-
-  // Polygon (POL) - Lower fees, good for production
-  const polygon = await prisma.blockchain.upsert({
-    where: { chainId: 137 },
-    create: {
-      name: "Polygon",
-      chainId: 137,
-      rpcUrl: "https://polygon-rpc.com",
-      explorerUrl: "https://polygonscan.com",
-      nativeCurrency: {
-        name: "Polygon",
-        symbol: "POL",
-        decimals: 18,
-      },
-      isEnabled: true,
-      confirmations: 12,
-    },
-    update: {},
-  });
-
-  console.log(`✅ Blockchain configured: ${polygon.name}`);
-
-  // Arbitrum - Layer 2, low fees
-  const arbitrum = await prisma.blockchain.upsert({
-    where: { chainId: 42161 },
-    create: {
-      name: "Arbitrum One",
-      chainId: 42161,
-      rpcUrl: "https://arb1.arbitrum.io/rpc",
-      explorerUrl: "https://arbiscan.io",
-      nativeCurrency: {
-        name: "Ether",
-        symbol: "ETH",
-        decimals: 18,
-      },
-      isEnabled: true,
-      confirmations: 10,
-    },
-    update: {},
-  });
-
-  console.log(`✅ Blockchain configured: ${arbitrum.name}`);
-
-  // Base - Coinbase L2, excellent for production
-  const base = await prisma.blockchain.upsert({
-    where: { chainId: 8453 },
-    create: {
-      name: "Base",
-      chainId: 8453,
-      rpcUrl: "https://mainnet.base.org",
-      explorerUrl: "https://basescan.org",
-      nativeCurrency: {
-        name: "Ether",
-        symbol: "ETH",
-        decimals: 18,
-      },
-      isEnabled: true,
-      confirmations: 10,
-    },
-    update: {},
-  });
-
-  console.log(`✅ Blockchain configured: ${base.name}`);
-
-  // ============================================================================
-  // 3. Configure Tokens
-  // ============================================================================
-
-  // USDC on Ethereum
-  const usdcEth = await prisma.token.upsert({
-    where: {
-      blockchainId_address: {
-        blockchainId: ethereum.id,
-        address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-      },
-    },
-    create: {
-      blockchainId: ethereum.id,
-      address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-      symbol: "USDC",
-      name: "USD Coin",
-      decimals: 6,
-      minDeposit: "10000000", // 10 USDC minimum
-      isEnabled: true,
-    },
-    update: {},
-  });
-
-  console.log(`✅ Token configured: ${usdcEth.symbol} on ${ethereum.name}`);
-
-  // USDC on Polygon
-  const usdcPolygon = await prisma.token.upsert({
-    where: {
-      blockchainId_address: {
-        blockchainId: polygon.id,
-        address: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
-      },
-    },
-    create: {
-      blockchainId: polygon.id,
-      address: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
-      symbol: "USDC",
-      name: "USD Coin",
-      decimals: 6,
-      minDeposit: "10000000", // 10 USDC minimum
-      isEnabled: true,
-    },
-    update: {},
-  });
-
-  console.log(`✅ Token configured: ${usdcPolygon.symbol} on ${polygon.name}`);
-
-  // USDC on Arbitrum
-  const usdcArbitrum = await prisma.token.upsert({
-    where: {
-      blockchainId_address: {
-        blockchainId: arbitrum.id,
-        address: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
-      },
-    },
-    create: {
-      blockchainId: arbitrum.id,
-      address: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
-      symbol: "USDC",
-      name: "USD Coin",
-      decimals: 6,
-      minDeposit: "10000000", // 10 USDC minimum
-      isEnabled: true,
-    },
-    update: {},
-  });
-
-  console.log(`✅ Token configured: ${usdcArbitrum.symbol} on ${arbitrum.name}`);
-
-  // USDC on Base
-  const usdcBase = await prisma.token.upsert({
-    where: {
-      blockchainId_address: {
-        blockchainId: base.id,
-        address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-      },
-    },
-    create: {
-      blockchainId: base.id,
-      address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-      symbol: "USDC",
-      name: "USD Coin",
-      decimals: 6,
-      minDeposit: "10000000", // 10 USDC minimum
-      isEnabled: true,
-    },
-    update: {},
-  });
-
-  console.log(`✅ Token configured: ${usdcBase.symbol} on ${base.name}`);
-
-  // USDT on Ethereum (optional, another popular stablecoin)
-  const usdtEth = await prisma.token.upsert({
-    where: {
-      blockchainId_address: {
-        blockchainId: ethereum.id,
-        address: "0xdAC17F958D2ee523a2206206994597C13D831ec7",
-      },
-    },
-    create: {
-      blockchainId: ethereum.id,
-      address: "0xdAC17F958D2ee523a2206206994597C13D831ec7",
-      symbol: "USDT",
-      name: "Tether USD",
-      decimals: 6,
-      minDeposit: "10000000", // 10 USDT minimum
-      isEnabled: true,
-    },
-    update: {},
-  });
-
-  console.log(`✅ Token configured: ${usdtEth.symbol} on ${ethereum.name}`);
-
-  // ============================================================================
-  // Summary
-  // ============================================================================
-
-  const blockchainCount = await prisma.blockchain.count();
-  const tokenCount = await prisma.token.count();
-
-  console.log("\n📊 Crypto Configuration Summary:");
-  console.log(`   - Blockchains: ${blockchainCount}`);
-  console.log(`   - Tokens: ${tokenCount}`);
-  console.log(`   - Admin Wallet: ${adminWallet.label}`);
-  console.log("\n⚠️  IMPORTANT: Replace test xPub with production xPub before deploying!");
-  console.log("🌱 Crypto seeding completed.");
+  const assetCount = await prisma.asset.count();
+  console.log("\n📊 Canonical Crypto Configuration Summary:");
+  console.log(`   - Assets: ${assetCount}`);
+  console.log(
+    "\n⚠️  These are local dev fixtures. Provision real treasury/RPC assets before deploying!"
+  );
+  console.log("🌱 Canonical crypto seeding completed.");
 }
 
 main()

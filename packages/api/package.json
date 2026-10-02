@@ -6,6 +6,16 @@
   "license": "MIT",
   "type": "module",
   "main": "dist/server.js",
+  "exports": {
+    "./finance-core": {
+      "types": "./dist/finance-core.d.ts",
+      "import": "./dist/finance-core.js"
+    },
+    "./database": {
+      "types": "./generated/prisma/index.d.ts",
+      "import": "./generated/prisma/index.js"
+    }
+  },
   "private": true,
   "scripts": {
     "build": "tsc",
@@ -27,6 +37,8 @@
     "test:stand-alone": "npm run infra:up && npm run test; npm run infra:down",
     "test:postgres:migrations": "node --test tests/acceptance/postgres-migrations.test.mjs",
     "test:loopback": "NODE_ENV=test POKERTOOLS_LOOPBACK_TEST=true vitest run --config vitest.config.ts",
+    "test:browser": "node tests/loopback/browser/run.mjs",
+    "test:canonical": "NODE_ENV=test vitest run --config tests/acceptance/canonical/vitest.acceptance.config.ts",
     "start": "node dist/server.js",
     "start:workers": "node dist/workers.js",
     "dev": "tsx watch src/server.ts",
@@ -57,7 +69,9 @@
     "npm": ">=10.0.0"
   },
   "devDependencies": {
-    "@pokertools/sdk": "1.0.20"
+    "@pokertools/sdk": "1.0.20",
+    "esbuild": "^0.28.2",
+    "playwright": "^1.63.0"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",

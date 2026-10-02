@@ -5,21 +5,21 @@
  * Workers run in the background to process async jobs.
  */
 
-import { Queue } from "bullmq";
+import { Queue, type ConnectionOptions } from "bullmq";
 import { Redis } from "ioredis";
 import pino from "pino";
 import { config } from "../config.js";
+import { createPrismaClient } from "../utils/prisma-client.js";
+import { createJobQueues } from "../plugins/queue.js";
+import { dispatchPendingOutbox, requeueFailedOutbox } from "../services/game-outbox.js";
+import { bootstrapCanonicalDepositMonitor } from "./canonical-deposit-monitor.js";
 import settleHandWorker from "./settle-hand.js";
 import archiveHandWorker from "./archive-hand.js";
 import nextHandWorker from "./next-hand.js";
 import persistSnapshotWorker from "./persist-snapshot.js";
 import timeoutWorker from "./timeout.js";
-import createDepositMonitorWorker from "./deposit-monitor.js";
 import createTournamentBlindsWorker from "./tournament-blinds.js";
 import reconciliationWorker from "./reconciliation.js";
-
-// Initialize deposit monitor worker (standalone mode)
-const depositMonitorWorker = await createDepositMonitorWorker();
 
 // Initialize tournament blinds worker (standalone mode)
 const tournamentBlindsWorker = await createTournamentBlindsWorker();
@@ -33,7 +33,6 @@ logger.info(
       "next-hand",
       "persist-snapshot",
       "player-timeout",
-      "deposit-monitor",
       "tournament-blinds",
       "reconciliation",
     ],
@@ -48,7 +47,6 @@ export const workers = [
   nextHandWorker,
   persistSnapshotWorker,
   timeoutWorker,
-  depositMonitorWorker,
   tournamentBlindsWorker,
   reconciliationWorker,
 ];
@@ -59,17 +57,75 @@ export const workers = [
 
 const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
 
+// ============================================================================
+// Durable game outbox recovery
+//
+// Side-effect intents were committed with their game mutation. Dispatch is
+// best-effort; a crash or Redis outage leaves PENDING/FAILED rows that this
+// sweep re-drives. Recovery reads PostgreSQL only and never requires Redis to
+// have been available at commit time.
+// ============================================================================
+
+const outboxPrisma = createPrismaClient();
+const outboxQueues = createJobQueues(redis as unknown as ConnectionOptions);
+const OUTBOX_SWEEP_INTERVAL_MS = Number(process.env.GAME_OUTBOX_SWEEP_INTERVAL_MS ?? 5000);
+
+async function recoverGameOutbox(): Promise<void> {
+  try {
+    await requeueFailedOutbox(outboxPrisma);
+    const result = await dispatchPendingOutbox(outboxPrisma, outboxQueues, redis);
+    if (result.dispatched > 0 || result.failed > 0) {
+      logger.info(result, "Recovered game outbox intents");
+    }
+  } catch (error) {
+    logger.error({ error }, "Game outbox recovery failed");
+  }
+}
+
+void recoverGameOutbox();
+const outboxSweep = setInterval(() => void recoverGameOutbox(), OUTBOX_SWEEP_INTERVAL_MS);
+
+// ============================================================================
+// Canonical direct-treasury deposit monitor
+//
+// Settlement-critical settlement reads require validated RPC quorum. A
+// transient RPC outage at boot must not crash the process, but the monitor must
+// not silently stay off either: bootstrap retries until the validated registry
+// starts. Deposit claims still fail closed through the per-claim verifier while
+// the monitor is unavailable.
+// ============================================================================
+
+const depositMonitorLogger = logger.child({ worker: "canonical-deposit-monitor" });
+let depositMonitorWorker: { close: () => Promise<void> } | null = null;
+
+async function startCanonicalDepositMonitor(): Promise<void> {
+  if (depositMonitorWorker) return;
+  try {
+    const monitor = await bootstrapCanonicalDepositMonitor({
+      prisma: outboxPrisma,
+      redis,
+      logger: depositMonitorLogger,
+    });
+    depositMonitorWorker = monitor.worker;
+    logger.info("Canonical deposit monitor started");
+  } catch (error) {
+    depositMonitorLogger.warn({ error }, "Canonical deposit monitor unavailable; will retry");
+    setTimeout(() => void startCanonicalDepositMonitor(), OUTBOX_SWEEP_INTERVAL_MS);
+  }
+}
+
+void startCanonicalDepositMonitor();
+
 (async () => {
   try {
     // BullMQ 6: repeatable jobs are Job Schedulers. Upsert is idempotent, so
     // restarting the workers re-creates or updates the same schedulers.
-    const depositQueue = new Queue("deposit-monitor", { connection: redis as any });
-    await depositQueue.upsertJobScheduler(
-      "deposit-monitor-singleton",
-      { every: config.DEPOSIT_MONITOR_INTERVAL_MS },
-      { name: "deposit-monitor", data: {} }
-    );
-    logger.info(`Deposit monitor scheduled: every ${config.DEPOSIT_MONITOR_INTERVAL_MS}ms`);
+    //
+    // The legacy custodial deposit-monitor bootstrap lived here. The canonical
+    // chain-backed deposit monitor (`canonical-deposit-monitor.ts`) is wired by
+    // the supervisor/chain agent, not bootstrapped from the generic worker
+    // entrypoint. Removed lines (pre-change): the `deposit-monitor` import,
+    // `depositMonitorWorker` init/worker registration, and this scheduler block.
 
     // Schedule tournament blinds as a repeatable job
     const blindsQueue = new Queue("tournament-blinds", { connection: redis as any });
@@ -94,6 +150,8 @@ const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
 
 process.on("SIGTERM", async () => {
   logger.info("Shutting down workers...");
+  clearInterval(outboxSweep);
+  await depositMonitorWorker?.close().catch(() => undefined);
   await Promise.all(workers.map((w) => w.close()));
   process.exit(0);
 });

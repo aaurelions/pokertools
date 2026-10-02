@@ -39,6 +39,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Docker E2E runs SQLite: generate a SQLite-provider Prisma client.
+        PRISMA_GENERATE_DATABASE_URL: "file:../.runtime/prisma-generate.db"
     image: ghcr.io/aaurelions/pokertools:e2e
     pull_policy: build
     restart: unless-stopped
@@ -57,7 +60,6 @@ services:
       REDIS_URL: "redis://redis:6379"
       JWT_SECRET: "e2e-jwt-secret-not-for-production"
       COOKIE_SECRET: "e2e-cookie-secret-not-for-production"
-      WALLET_ENCRYPTION_SECRET: "e2e-wallet-encryption-secret-for-tests-only"
       WALLET_XPRIV_ENCRYPTION_SECRET: ""
     volumes:
       - ${POKERTOOLS_E2E_RUNTIME:-./pokertools-e2e-runtime}:/app/packages/api/.runtime
@@ -108,7 +110,6 @@ services:
       REDIS_URL: "redis://redis:6379"
       JWT_SECRET: "e2e-jwt-secret-not-for-production"
       COOKIE_SECRET: "e2e-cookie-secret-not-for-production"
-      WALLET_ENCRYPTION_SECRET: "e2e-wallet-encryption-secret-for-tests-only"
       WALLET_XPRIV_ENCRYPTION_SECRET: ""
       LOG_LEVEL: info
     volumes:

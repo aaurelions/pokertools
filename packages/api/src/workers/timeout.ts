@@ -27,6 +27,13 @@ const worker = new Worker(
     if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
       throw new Error("Timeout job requires a non-negative expectedVersion");
     }
+    // Closed/missing tables are a no-op, never a retry storm.
+    const table = await prisma.table.findUnique({
+      where: { id: tableId },
+      select: { status: true },
+    });
+    if (!table || table.status === "CLOSED") return;
+
     await manager.processAction(tableId, { type: ActionType.TIMEOUT, playerId }, playerId, {
       expectedVersion,
     });
