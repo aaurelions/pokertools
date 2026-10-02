@@ -84,8 +84,13 @@ const NullableIsoDateTimeSchema = IsoDateTimeSchema.nullable();
 /** `POST /auth/service-credentials` (operator-only, ADMIN wallet). */
 export const CreateServiceCredentialRequestSchema = z
   .strictObject({
+    /**
+     * Issue a credential for an existing SERVICE principal instead of creating
+     * a new one. The principal is never replaced and rotation never changes it.
+     */
+    principalId: IdSchema.optional(),
     name: ServiceCredentialNameSchema,
-    scopes: z.array(ServiceScopeSchema).min(1).max(3),
+    scopes: z.array(ServiceScopeSchema).min(1).max(4),
     tableId: ServiceCredentialTableIdSchema.optional(),
     seat: z.number().int().min(0).max(9).optional(),
     expiresAt: IsoDateTimeSchema.optional(),

@@ -13,6 +13,7 @@
 
 export * from "./primitives";
 export * from "./principal";
+export * from "./service-principal";
 export * from "./masked-state";
 export * from "./table";
 export * from "./streams";

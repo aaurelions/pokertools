@@ -391,7 +391,11 @@ export type AgentTableScope = z.infer<typeof AgentTableScopeSchema>;
  * `POST /competitions/:id/agent-credentials` request. The principal must be a
  * SERVICE entrant of this competition; the issued credential is always bound to
  * the competition table (and optionally the entrant's authoritative seat).
- * Repeated calls rotate the credential for the same durable principal.
+ *
+ * Without `credentialId` the route mints a fresh credential (safe to call again
+ * after a restart; callers keep only the returned one-time token). With
+ * `credentialId` the existing credential is rotated in place for the same
+ * durable principal and the old secret stops working.
  */
 export const IssueAgentCredentialRequestSchema = z.strictObject({
   principalId: PrincipalIdSchema,
@@ -400,6 +404,8 @@ export const IssueAgentCredentialRequestSchema = z.strictObject({
   scopes: z.array(AgentTableScopeSchema).min(1).max(3).optional(),
   seat: z.number().int().min(0).max(9).optional(),
   expiresAt: z.string().datetime().optional(),
+  /** Rotate this credential in place instead of minting a new one. */
+  credentialId: IdSchema.optional(),
 });
 export type IssueAgentCredentialRequest = z.infer<typeof IssueAgentCredentialRequestSchema>;
 

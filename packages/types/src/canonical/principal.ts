@@ -50,8 +50,22 @@ export const PrincipalSchema = z
   });
 export type Principal = z.infer<typeof PrincipalSchema>;
 
-/** Table-scoped service capabilities. `table:act` implies `table:observe`. */
-export const ServiceScopeSchema = z.enum(["table:observe", "table:act", "table:chat"]);
+/**
+ * Scoped service capabilities.
+ *
+ * - Table scopes (`table:act` implies `table:observe`) authorize the canonical
+ *   table protocol only.
+ * - `competition:orchestrate` is a narrow provisioning grant: it may create and
+ *   provision competitions and issue table-scoped agent credentials for their
+ *   SERVICE entrants. It is exclusive with table scopes and can never carry
+ *   finance, custody or operator authority.
+ */
+export const ServiceScopeSchema = z.enum([
+  "table:observe",
+  "table:act",
+  "table:chat",
+  "competition:orchestrate",
+]);
 export type ServiceScope = z.infer<typeof ServiceScopeSchema>;
 
 /**

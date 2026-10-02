@@ -316,6 +316,12 @@ describe("competition contracts", () => {
       name: "agent-a",
     });
     expect(issue.scopes).toBeUndefined();
+    const rotated = IssueAgentCredentialRequestSchema.parse({
+      principalId: SERVICE_A,
+      name: "agent-a",
+      credentialId: "cred-1",
+    });
+    expect(rotated.credentialId).toBe("cred-1");
     expect(
       IssuedAgentCredentialSchema.parse({
         credentialId: "cred-1",

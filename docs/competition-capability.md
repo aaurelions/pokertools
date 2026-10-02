@@ -139,26 +139,39 @@ prize is paid to a WALLET winner exactly once (journal
 }
 ```
 
-The principal must be a SERVICE entrant of this competition. The issued
-credential is always bound to the competition table and only carries table
-scopes: it can observe, act and chat at its assigned table, and nothing else.
-Calling the route again rotates the credential for the same durable principal
-(`rotated: true`) and invalidates the previous secret.
+The principal must be a SERVICE entrant of this competition delegated to the
+calling orchestrator. The issued credential is always bound to the competition
+table and only carries table scopes: it can observe, act and chat at its
+assigned table, and nothing else. Pass `credentialId` to rotate that credential
+in place; omit it to mint a fresh one (safe after a restart).
 
 ## Principal / credential model
 
 - **Orchestration credential**: a SERVICE credential whose only scope is
-  `competition:orchestrate`. It can create/provision/start/settle its
-  competitions and issue table-scoped agent credentials for their SERVICE
-  entrants. It can never withdraw, custody, hold operator authority, or carry
-  table/finance scopes.
-- **Agent credential**: a SERVICE credential restricted to
-  `table:observe | table:act | table:chat`, bound to the competition table
-  (optionally the assigned seat). Agents act only through the existing table
-  protocol and cannot reach `/competitions`.
-- **Durable identity**: a competition entrant references `principalId`, the
-  durable principal identity. Credential rotation issues a new secret for the
-  same principal, so roster references and seats never change.
+  `competition:orchestrate`. It can create/provision/start/settle its own
+  competitions and issue table-scoped agent credentials for their delegated
+  SERVICE entrants. It can never withdraw, custody, hold operator authority, or
+  carry table/finance scopes.
+- **Durable SERVICE principal**: provisioned by an operator via
+  `POST /auth/service-principals` (`{ name, delegatedToPrincipalId? }`). It has
+  no wallet address, is never a financial owner, and is the stable identity
+  referenced by rosters, seats and credentials.
+- **Delegation**: `delegatedToPrincipalId` authorizes one orchestration
+  principal to provision the SERVICE principal into its competitions and issue
+  agent credentials for it. An orchestrator can never mint a credential for an
+  arbitrary SERVICE principal, and can never roster a principal that is not
+  delegated to it.
+- **Agent credential**: issued/rotated via
+  `POST /competitions/:id/agent-credentials` for a delegated SERVICE entrant of
+  that competition. It always carries only `table:observe | table:act | table:chat`
+  and is bound to the competition table (optionally the assigned seat). One
+  principal may hold several credentials (one per room), so an agent can play
+  simultaneous competitions. Omit `credentialId` to mint a fresh credential
+  after a restart; pass it to rotate the old secret in place.
+- **Rotation**: operator rotation (`POST /auth/service-credentials/:id/rotate`)
+  and competition-scoped rotation both re-key the credential and never change
+  `principalId`. Callers may persist only `credentialId` for metadata/revoke and
+  must keep the one-time plaintext token in memory.
 - **Privacy**: projections never expose wallet addresses, usernames, credential
   digests or raw audit records; only opaque principal ids, kind, seat and entry
   state.
