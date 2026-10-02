@@ -1,201 +1,70 @@
-# PokerTools Monorepo
+# PokerTools
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![CI](https://github.com/aaurelions/pokertools/actions/workflows/ci.yml/badge.svg)](https://github.com/aaurelions/pokertools/actions/workflows/ci.yml)
-[![Docs](https://github.com/aaurelions/pokertools/actions/workflows/docs.yml/badge.svg)](https://aaurelions.github.io/pokertools/)
+Texas Hold'em engine, room API, browser/Node SDK and isolated treasury custody
+worker. PostgreSQL owns durable gameplay and accounting; Redis provides
+disposable coordination, queues and delivery.
 
-**PokerTools** provides a deterministic Texas Hold'em engine, evaluator, room API, SDK and private custody worker.
+## Workspaces
 
-> **Not approved for production or real-money operation.** Architecture convergence is incomplete. API, room workers and custody refuse `NODE_ENV=production`; there is no override. `/health` is liveness only; `/ready` returns 503 with safe, explicit unverified-finance reasons. See [the execution report](ARCHITECTURE_CONVERGENCE_REPORT.md) and [the boundary decision](docs/ARCHITECTURE_DECISION.md). Development/test stacks must use disposable assets only.
+| Package                         | Responsibility                                                                                 |
+| ------------------------------- | ---------------------------------------------------------------------------------------------- |
+| [types](packages/types)         | Environment-independent domain types and strict public protocol schemas                        |
+| [evaluator](packages/evaluator) | Fast deterministic 5-, 6- and 7-card hand ranking                                              |
+| [engine](packages/engine)       | Poker rules, chip conservation, snapshots and masked views                                     |
+| [api](packages/api)             | Authentication, seat authority, durable game commits, journal and read-only chain verification |
+| [sdk](packages/sdk)             | REST/WS clients, SIWE helpers and optional React hooks at `/react`                             |
+| [custody](packages/custody)     | Private signing, serialized treasury nonces and withdrawal recovery                            |
+| [bench](packages/bench)         | Evaluator comparisons and public-protocol load/soak tools                                      |
+| [e2e](packages/e2e)             | Real-infrastructure gameplay and multi-chain financial acceptance                              |
 
-## 📚 Documentation
+## Development
 
-Full documentation is available at **[https://aaurelions.github.io/pokertools/](https://aaurelions.github.io/pokertools/)** — built with VitePress from [./docs](./docs). It covers every package with examples, API reference tables, architecture guides, and deployment instructions. Docs deploy automatically on changes to `docs/**`.
+Requires Node.js 24+, npm 10+ and Redis. Docker and Foundry are required for
+infrastructure acceptance and Solidity tests.
 
-## 🏗️ Architecture
-
-The repository is organized into workspaces managed by NPM.
-
-| Package                                           | Description                                                                                                         | Version  |
-| :------------------------------------------------ | :------------------------------------------------------------------------------------------------------------------ | :------- |
-| **[@pokertools/engine](./packages/engine)**       | The immutable core logic for Texas Hold'em state management.                                                        | `1.0.20` |
-| **[@pokertools/evaluator](./packages/evaluator)** | High-performance evaluation of 5-, 6-, and 7-card poker hands.                                                      | `1.0.20` |
-| **[@pokertools/api](./packages/api)**             | Scalable REST & WebSocket API built with Fastify, Redis, BullMQ, and Prisma (SQLite default, PostgreSQL supported). | `1.0.20` |
-| **[@pokertools/sdk](./packages/sdk)**             | TypeScript SDK with REST helpers, WebSocket state sync, auth utilities, and optional React 19 hooks.                | `1.0.20` |
-| **[@pokertools/custody](./packages/custody)**     | Private custody worker for sweeps, withdrawal processing and gas monitoring.                                        | `1.0.20` |
-| **[@pokertools/types](./packages/types)**         | Shared TypeScript domain types, API DTOs, WebSocket messages, Zod schemas, and action whitelists.                   | `1.0.20` |
-| **[@pokertools/bench](./packages/bench)**         | Performance benchmarking suite for evaluator, API, workers, sockets, and game actions.                              | `1.0.20` |
-| **[@pokertools/e2e](./packages/e2e)**             | Docker-based end-to-end integration tests exercising the full API, SDK, WebSocket, and blockchain stack.            | `1.0.20` |
-
-## ✨ Key Features
-
-- **Robust Game Engine**: Handles complex side pots, all-in scenarios, and exact rake calculations. Verified with property-based testing.
-- **High Performance**: Evaluator can process millions of hands per second.
-- **Scalable Infrastructure**: API designed for horizontal scaling with Redis Pub/Sub and atomic database transactions.
-- **Financial integration under convergence**: Current cents-oriented accounting and deposit/withdrawal workflows are not approved for settlement. Atomic multi-asset postings, quorum and exactly-once custody acceptance remain outstanding.
-- **Isolated custody boundary**: Private signing belongs to `@pokertools/custody`, never the public API. The former public private-wallet creation CLI and xpriv helpers were removed.
-- **Developer Experience**: Fully typed SDK, React hooks, comprehensive package READMEs, and workspace-level scripts for build/test/lint/format workflows.
-
-## 🚀 Getting Started
-
-### Prerequisites
-
-- **Node.js**: v24+
-- **NPM**: v10+
-- **Docker** (optional, for running the full stack locally via `docker compose up --build`)
-- **Foundry** (optional, for admin contract tests and Docker E2E blockchain tests via `npm run e2e:docker`)
-
-### Installation
-
-1.  **Clone the repository:**
-
-    ```bash
-    git clone https://github.com/aaurelions/pokertools.git
-    cd pokertools
-    ```
-
-2.  **Install dependencies:**
-
-    ```bash
-    npm install
-    ```
-
-3.  **Build all packages:**
-    ```bash
-    npm run build
-    ```
-
-### Docker Quick Start
-
-The fastest way to get started is with Docker Compose:
-
-```bash
-docker compose up --build
-```
-
-This starts the API on `http://localhost:3000` with a Redis service and a persistent SQLite database volume. For production PostgreSQL + Caddy TLS + worker + admin + backup deployment, see `docker-compose.prod.yml` and `deploy/README.md`. In production always replace the dev-only fallback `JWT_SECRET`, `COOKIE_SECRET`, and `WALLET_ENCRYPTION_SECRET` with strong values.
-
-To use the pre-built image from GitHub Container Registry:
-
-```bash
-docker pull ghcr.io/aaurelions/pokertools
-```
-
-GHCR images are published automatically on each [GitHub release](https://github.com/aaurelions/pokertools/releases), tagged as `latest`, `1`, `1.0`, `1.0.20`, and a full commit SHA for every release-triggered build. See [`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml) for details.
-
-### Development Workflow
-
-The monorepo provides root-level scripts to manage the lifecycle of all packages.
-
-- **Start API (Dev Mode):**
-  ```bash
-  npm run dev:api
-  ```
-- **Start Background Workers:**
-  ```bash
-  npm run dev:workers
-  ```
-- **Run All Tests:**
-  ```bash
-  npm test
-  ```
-- **Run Fast Package Tests:**
-
-  ```bash
-  npm run test:quick
-  ```
-
-- **Run Docker E2E Tests:**
-
-  ```bash
-  npm run e2e:docker
-  ```
-
-  Starts a local Anvil chain, deploys contracts, builds the API Docker image, and runs the full integration test suite (auth, deposits, game lifecycle, withdrawals). Requires Docker and Foundry.
-
-- **Run Benchmarks:**
-  ```bash
-  npm run bench
-  ```
-- **Typecheck Entire Repo:**
-  ```bash
-  npm run typecheck
-  ```
-- **Lint:**
-
-  ```bash
-  npm run lint
-  ```
-
-- **Format Code:**
-  ```bash
-  npm run format
-  ```
-
-Use `npm run validate` before larger pull requests to run format checks, linting, and the workspace test suite.
-
-## 🛠️ Configuration
-
-Most packages rely on environment variables. Copy the example files in each package to get started:
-
-```bash
+```sh
+git clone --recurse-submodules https://github.com/aaurelions/pokertools.git
+cd pokertools
+npm ci
+npm run build
 cp packages/api/.env.example packages/api/.env
-cp packages/custody/.env.example packages/custody/.env
+npm run dev:api
+# In another terminal:
+npm run dev:workers
 ```
 
-### Endpoints
+`npm test` prepares disposable SQLite for fast local API tests. SQLite is not a
+deployment database or proof of PostgreSQL constraints. Never target operator data.
 
-| Endpoint               | Description                                                                       |
-| :--------------------- | :-------------------------------------------------------------------------------- |
-| `GET  /health`         | Dependency health check for API, DB, Redis, and queues                            |
-| `GET  /metrics`        | Prometheus-compatible operational metrics (requires `METRICS_TOKEN` bearer token) |
-| `GET  /docs`           | Swagger UI (Fastify `@fastify/swagger-ui`)                                        |
-| `GET  /finance/chains` | List supported blockchains and tokens (unauthenticated)                           |
+```sh
+npm run typecheck
+npm run lint
+npm test
+npm run test:coverage
+npm run check:boundaries
+npm run test:postgres:migrations -w @pokertools/api
+npm run test:postgres:ledger -w @pokertools/api
+npm run test:canonical -w @pokertools/api
+npm run test:loopback -w @pokertools/api
+npm run test:browser -w @pokertools/api
+npm run e2e:finance
+npm run e2e:docker
+```
 
-The API also exposes authenticated SIWE auth routes, user/profile routes, table/gameplay routes, finance routes, player notes, and `/ws/play` for real-time table state. See [`packages/api/README.md`](./packages/api/README.md) for the current route and WebSocket message reference.
+See [testing](docs/guide/testing.md) for prerequisites and coverage gates.
+`npm run bench` runs evaluator comparisons; load tests require an isolated API
+and explicit credentials/table IDs.
 
-### Security-Sensitive Environment Variables
+## Operations
 
-| Variable                         | Purpose                                                         |
-| :------------------------------- | :-------------------------------------------------------------- |
-| `JWT_SECRET`                     | Signs JWT access tokens                                         |
-| `COOKIE_SECRET`                  | Signs httpOnly session cookies                                  |
-| `WALLET_ENCRYPTION_SECRET`       | Encrypts/decrypts HD wallet xpub material                       |
-| `WALLET_XPRIV_ENCRYPTION_SECRET` | Encrypts/decrypts HD wallet xpriv material (admin service only) |
+`docker compose up --build` runs a disposable development stack. Production uses
+[docker-compose.prod.yml](docker-compose.prod.yml) and the
+[deployment runbook](deploy/README.md), not development secrets or test assets.
+`/health` is liveness only. `/ready` evaluates current schema, ledger, quorum,
+custody, reconciliation and incident state; missing evidence fails closed.
+Historical test certificates never grant runtime admission.
 
-These are loaded at startup via `envalid` and must be set to strong, unique values in production. The Docker Compose file provides dev-only fallback defaults — never use those fallbacks outside of local development.
-
-Service packages have additional required environment variables, including database, Redis, RPC, Telegram, and wallet settings. See individual package READMEs for package-specific configuration details.
-
-## 📚 Package Documentation
-
-Each workspace README is maintained as the primary developer reference for that package:
-
-- [`packages/types`](./packages/types/README.md): shared exports, schemas, DTOs, and validation patterns.
-- [`packages/evaluator`](./packages/evaluator/README.md): hand ranking APIs, lookup-table architecture, and performance notes.
-- [`packages/engine`](./packages/engine/README.md): state model, action handling, security boundaries, hand history, rake, tournaments, and browser entrypoint.
-- [`packages/api`](./packages/api/README.md): Fastify app, auth, routes, WebSockets, workers, Prisma/BullMQ/Redis services, and operations.
-- [`packages/sdk`](./packages/sdk/README.md): REST client, socket client, auth helpers, React provider/hooks, and export reference.
-- [`packages/custody`](./packages/custody/README.md): private signing, custody workers and operator adapters.
-- [`packages/bench`](./packages/bench/README.md): evaluator comparisons plus API/worker/socket load benchmark scripts.
-- [`packages/e2e`](./packages/e2e/README.md): Docker-based integration test topology, prerequisites, secrets, and manual execution.
-
-## 🤝 Contributing
-
-We welcome contributions! Please see [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines on how to submit pull requests, report issues, and setup your development environment.
-
-## 🔒 Security
-
-Security is a top priority.
-
-- **Financials**: All transfers are atomic and recorded in a ledger.
-- **Game Integrity**: The engine is tested against millions of random scenarios.
-- **Vulnerabilities**: Please report security issues via [SECURITY.md](./SECURITY.md).
-
-## 🏆 Tournament Status
-
-Tournament engine mechanics and first-class API/SDK lobby workflows are supported: create/list tournaments, register players with buy-in/fee accounting, seat entrants with tournament starting stacks, start play across multiple balanced tables, reconcile completed hands for eliminations/table balancing/final-table merges, advance blind levels, track entries, and settle configured payout percentages from the prize pool. Scheduled blind timers, satellites, and late registration remain product extensions rather than current defaults.
-
-## 📄 License
-
-MIT © A.Aurelius
+Read [architecture](docs/guide/architecture.md),
+[configuration](docs/guide/configuration.md), [security](SECURITY.md) and
+[contributing](CONTRIBUTING.md). Documentation: <https://aaurelions.github.io/pokertools/>.
+License: [MIT](LICENSE).

@@ -5,7 +5,7 @@
  * Workers run in the background to process async jobs.
  */
 
-import { Queue, type ConnectionOptions } from "bullmq";
+import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 import pino from "pino";
 import { config } from "../config.js";
@@ -67,8 +67,8 @@ const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
 // ============================================================================
 
 const outboxPrisma = createPrismaClient();
-const outboxQueues = createJobQueues(redis as unknown as ConnectionOptions);
-const OUTBOX_SWEEP_INTERVAL_MS = Number(process.env.GAME_OUTBOX_SWEEP_INTERVAL_MS ?? 5000);
+const outboxQueues = createJobQueues(redis);
+const OUTBOX_SWEEP_INTERVAL_MS = config.GAME_OUTBOX_SWEEP_INTERVAL_MS;
 
 async function recoverGameOutbox(): Promise<void> {
   try {
@@ -105,6 +105,7 @@ async function startCanonicalDepositMonitor(): Promise<void> {
       prisma: outboxPrisma,
       redis,
       logger: depositMonitorLogger,
+      intervalMs: config.CANONICAL_DEPOSIT_MONITOR_INTERVAL_MS,
     });
     depositMonitorWorker = monitor.worker;
     logger.info("Canonical deposit monitor started");
@@ -120,15 +121,9 @@ void startCanonicalDepositMonitor();
   try {
     // BullMQ 6: repeatable jobs are Job Schedulers. Upsert is idempotent, so
     // restarting the workers re-creates or updates the same schedulers.
-    //
-    // The legacy custodial deposit-monitor bootstrap lived here. The canonical
-    // chain-backed deposit monitor (`canonical-deposit-monitor.ts`) is wired by
-    // the supervisor/chain agent, not bootstrapped from the generic worker
-    // entrypoint. Removed lines (pre-change): the `deposit-monitor` import,
-    // `depositMonitorWorker` init/worker registration, and this scheduler block.
 
     // Schedule tournament blinds as a repeatable job
-    const blindsQueue = new Queue("tournament-blinds", { connection: redis as any });
+    const blindsQueue = new Queue("tournament-blinds", { connection: redis });
     await blindsQueue.upsertJobScheduler(
       "tournament-blinds-singleton",
       { every: config.TOURNAMENT_BLIND_SCAN_INTERVAL_MS },
@@ -136,7 +131,7 @@ void startCanonicalDepositMonitor();
     );
     logger.info(`Tournament blinds scheduler: every ${config.TOURNAMENT_BLIND_SCAN_INTERVAL_MS}ms`);
 
-    const reconciliationQueue = new Queue("reconciliation", { connection: redis as any });
+    const reconciliationQueue = new Queue("reconciliation", { connection: redis });
     await reconciliationQueue.upsertJobScheduler(
       "reconciliation-singleton",
       { every: config.RECONCILIATION_INTERVAL_MS },

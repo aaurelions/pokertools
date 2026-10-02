@@ -10,10 +10,7 @@ import {
 import type { FinancialIncident, WithdrawalIntentRecord } from "../../../generated/prisma/index.js";
 import { AtomicLedger } from "../../services/atomic-ledger.js";
 import { FinancialIntentService } from "../../services/financial-intents.js";
-import {
-  FinancialIncidentService,
-  type IncidentReadinessCheck,
-} from "../../services/financial-incidents.js";
+import { FinancialIncidentService } from "../../services/financial-incidents.js";
 import { registerDepositRoutes, toDepositClaimWire } from "./canonical-deposits.js";
 import { AuthorizationError, NotFoundError } from "../../utils/errors.js";
 
@@ -236,15 +233,7 @@ export const financeRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: "OPERATOR_EVIDENCE_REQUIRED" });
       }
 
-      const readinessCheck =
-        (
-          fastify as unknown as {
-            financialIncidentReadinessCheck?: IncidentReadinessCheck;
-            financialReadinessCheck?: IncidentReadinessCheck;
-          }
-        ).financialIncidentReadinessCheck ??
-        (fastify as unknown as { financialReadinessCheck?: IncidentReadinessCheck })
-          .financialReadinessCheck;
+      const readinessCheck = fastify.financialIncidentReadinessCheck;
       // There is no default-success path. Without a real quorum/gas/reconciliation
       // check the route fails closed rather than unfreezing on ledger health alone.
       if (typeof readinessCheck !== "function") {

@@ -101,7 +101,7 @@ describe("Production readiness controls", () => {
     expect(check("redis")?.state).toBe("READY");
     expect(check("queue")?.state).toBe("READY");
     expect(check("migrations")?.state).toBeDefined();
-    // Convergence evidence is not yet verified, so readiness stays blocked.
+    // Missing live financial evidence keeps readiness blocked.
     expect(body.financial.state).toBe("BLOCKED");
     expect(body.financial.reasons.length).toBeGreaterThan(0);
 

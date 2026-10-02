@@ -1,21 +1,22 @@
-import { Worker, type ConnectionOptions } from "bullmq";
+import { Worker } from "bullmq";
 import { Redis } from "ioredis";
 import Redlock from "redlock";
 import { ActionType } from "@pokertools/types";
 import { config } from "../config.js";
+import { asRedlockClient } from "../utils/redis-compatibility.js";
 import { createPrismaClient } from "../utils/prisma-client.js";
 import { createJobQueues } from "../plugins/queue.js";
 import { GameManager } from "../services/game-manager.js";
 
 const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
-const redlock = new Redlock([redis as unknown as Redlock.CompatibleRedisClient], {
+const redlock = new Redlock([asRedlockClient(redis)], {
   driftFactor: config.REDLOCK_DRIFT_FACTOR,
   retryCount: config.REDLOCK_RETRY_COUNT,
   retryDelay: config.REDLOCK_RETRY_DELAY_MS,
   retryJitter: config.REDLOCK_RETRY_DELAY_MS / 2,
 });
 const prisma = createPrismaClient();
-const queues = createJobQueues(redis as unknown as ConnectionOptions);
+const queues = createJobQueues(redis);
 const manager = new GameManager(redis, redlock, queues, prisma);
 
 // Use the same persistence, settlement and scheduling path as player actions.
@@ -38,7 +39,7 @@ const worker = new Worker(
       expectedVersion,
     });
   },
-  { connection: redis as any }
+  { connection: redis }
 );
 
 worker.on("failed", (job, err) => {

@@ -215,7 +215,7 @@ describe("treasury reconciliation incident acceptance (real Prisma custody + API
         deepFinality: 3,
         status: "ACTIVE",
       };
-      (app as unknown as { financialReadinessCheck?: unknown }).financialReadinessCheck = async (
+      app.financialIncidentReadinessCheck = async (
         tx: never,
         incident: { assetId: string | null }
       ) => {

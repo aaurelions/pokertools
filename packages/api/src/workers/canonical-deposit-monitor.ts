@@ -9,8 +9,7 @@
  * A lost RPC / quorum failure is never treated as a reorg: the claim status is
  * preserved and retried on a later pass.
  *
- * This module is deliberately not auto-registered; the supervisor wires it into
- * the workers entry point. `bootstrapCanonicalDepositMonitor` performs the full
+ * The workers entry point calls `bootstrapCanonicalDepositMonitor` for full
  * startup (asset-derived registry, services, BullMQ worker, repeatable job).
  */
 
@@ -172,7 +171,7 @@ export function createCanonicalDepositMonitorWorker(
       logger.info({ ...result }, "Canonical deposit monitor pass completed");
       return result;
     },
-    { connection: redis as never }
+    { connection: redis }
   );
 
   worker.on("failed", (job, error) => {
@@ -230,7 +229,7 @@ export async function bootstrapCanonicalDepositMonitor(
     options.redis
   );
 
-  const queue = new Queue(CANONICAL_DEPOSIT_MONITOR_QUEUE, { connection: options.redis as never });
+  const queue = new Queue(CANONICAL_DEPOSIT_MONITOR_QUEUE, { connection: options.redis });
   await queue.upsertJobScheduler(
     `${CANONICAL_DEPOSIT_MONITOR_QUEUE}-singleton`,
     { every: options.intervalMs ?? CANONICAL_DEPOSIT_DEFAULT_INTERVAL_MS },

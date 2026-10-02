@@ -32,7 +32,7 @@ versioned, built and (where applicable) published to npm.
 
 <div class="pkg-card">
 <div class="pkg-name"><a href="/pokertools/packages/custody">@pokertools/custody</a></div>
-<p>Blockchain sweeps, withdrawals, gas monitoring, Telegram ops.</p>
+<p>Isolated withdrawal signer, receipt/reorg monitoring and treasury reconciliation.</p>
 </div>
 
 <div class="pkg-card">
@@ -49,38 +49,26 @@ versioned, built and (where applicable) published to npm.
 
 ## Dependency graph
 
-| Package     | Depends on                           |
-| :---------- | :----------------------------------- |
-| `types`     | —                                    |
-| `evaluator` | —                                    |
-| `engine`    | `types`, `evaluator`                 |
-| `sdk`       | `types`                              |
-| `api`       | `engine`, `types`                    |
-| `admin`     | `types` (+ Prisma client from `api`) |
-| `bench`     | `evaluator`                          |
-| `e2e`       | `sdk`                                |
+| Package     | Depends on           |
+| :---------- | :------------------- |
+| `types`     | —                    |
+| `evaluator` | —                    |
+| `engine`    | `types`, `evaluator` |
+| `sdk`       | `types`              |
+| `api`       | `engine`, `types`    |
+| `custody`   | `api`, `types`       |
+| `bench`     | `evaluator`          |
+| `e2e`       | `sdk`                |
 
 ## Versioning & publishing
 
-| Package                                       | Published to npm                 |
-| :-------------------------------------------- | :------------------------------- |
-| `@pokertools/types`                           | ✅                               |
-| `@pokertools/evaluator`                       | ✅                               |
-| `@pokertools/engine`                          | ✅                               |
-| `@pokertools/sdk`                             | ✅                               |
-| `@pokertools/api` · `admin` · `bench` · `e2e` | Private (docker/deployment only) |
+| Package                                         | Published to npm                 |
+| :---------------------------------------------- | :------------------------------- |
+| `@pokertools/types`                             | ✅                               |
+| `@pokertools/evaluator`                         | ✅                               |
+| `@pokertools/engine`                            | ✅                               |
+| `@pokertools/sdk`                               | ✅                               |
+| `@pokertools/api` · `custody` · `bench` · `e2e` | Private (docker/deployment only) |
 
 Publishing is automated by the [Publish workflow](https://github.com/aaurelions/pokertools/blob/main/.github/workflows/publish.yml)
 on GitHub releases, with npm provenance enabled.
-
-## Test matrix
-
-| Suite                             | Runner  | Count           |
-| :-------------------------------- | :------ | :-------------- |
-| Engine                            | Jest    | 381             |
-| Evaluator                         | Jest    | 94 (+1 skipped) |
-| Types                             | Jest    | 150             |
-| SDK/React                         | Vitest  | 179             |
-| API (incl. DB-backed regressions) | Vitest  | 236             |
-| Admin                             | Vitest  | 14              |
-| Solidity contracts                | Foundry | 5               |

@@ -73,12 +73,9 @@ describe("canonical finance config", () => {
 
   it("still blocks a public production process before any secret is read", async () => {
     vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("ENABLE_TEST_ROUTES", "false");
 
-    // Unverified evidence blocks outright; once evidence is verified, a
-    // non-PostgreSQL test DATABASE_URL must still be refused. Either way the
-    // process never starts with the test configuration.
-    await expect(import("../../src/config.js")).rejects.toThrow(
-      /ARCHITECTURE_CONVERGENCE_INCOMPLETE|PRODUCTION_REQUIRES_POSTGRESQL/
-    );
+    // A non-PostgreSQL test datasource cannot admit production startup.
+    await expect(import("../../src/config.js")).rejects.toThrow(/PRODUCTION_REQUIRES_POSTGRESQL/);
   });
 });

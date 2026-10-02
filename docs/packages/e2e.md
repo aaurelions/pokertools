@@ -1,59 +1,80 @@
 # @pokertools/e2e
 
-End-to-end scenarios that exercise the complete stack through Docker Compose and a local
-Anvil blockchain.
+End-to-end suites that exercise the full stack. The package holds two independent
+paths with separate Vitest configs:
 
-## Running
+- **Docker E2E** (`vitest.config.ts`, `tests/docker-e2e.test.ts`) — a single-chain
+  SQLite smoke run over the Docker Compose stack.
+- **Finance/custody acceptance** (`vitest.finance.config.ts`, `tests/finance/*`)
+  — two isolated Anvil chains, a disposable PostgreSQL + Redis pair, the real API
+  and the real custody `WithdrawalWorkflow` over durable Prisma ports.
+
+## Docker E2E
 
 ```bash
-# prerequisites: Docker Desktop (or daemon) with Compose v2
+# from the repo root (builds types, SDK and Foundry fixtures first)
 npm run e2e:docker
 ```
 
-This brings up (via `docker-compose.e2e.yml`):
+This brings up `docker-compose.e2e.yml` with the API, BullMQ workers, Redis,
+and a local Anvil chain, then runs `tests/docker-e2e.test.ts`. It covers health
+and docs routes, SIWE login, deposits claimed by exact log identity, a multiplayer
+table (buy-ins, actions, stand), a reserved EIP-712 withdrawal driven through the
+custody workflow, and WebSocket observation delivery.
 
-| Service    | Role                                          |
-| :--------- | :-------------------------------------------- |
-| API        | Full Fastify stack                            |
-| Workers    | BullMQ processing                             |
-| Redis      | State + queues                                |
-| PostgreSQL | Persistence                                   |
-| Anvil      | Local EVM chain for deposits/withdrawals      |
-| E2E runner | Executes the scenario suite against the stack |
+| Concern          | Detail                                                            |
+| :--------------- | :---------------------------------------------------------------- |
+| Database         | SQLite bind-mounted from `POKERTOOLS_E2E_RUNTIME`                 |
+| Chain            | Standalone Anvil on `127.0.0.1:8545`; no external RPC keys        |
+| Contract fixture | `MockUSDC` (direct-treasury deposits do not use a batch contract) |
+| Secrets          | Deterministic local-only values, never production                 |
 
-The runner exits non-zero on the first failed scenario; `docker compose -f docker-compose.e2e.yml logs` shows per-service output for debugging.
+## Finance / custody acceptance
 
-### Troubleshooting
+```bash
+# from the repo root
+npm run e2e:finance
+```
 
-| Problem                    | Fix                                                                                                        |
-| :------------------------- | :--------------------------------------------------------------------------------------------------------- |
-| Port conflicts             | The stack publishes API (8080), Redis (6379) and Postgres (5432); stop local copies or change the mapping. |
-| Anvil forked mainnet calls | Scenarios use a standalone Anvil with a pre-funded account; no external RPC keys are needed.               |
-| Slow first run             | Image pull + Prisma push + Foundry setup take a few minutes; subsequent runs reuse the build cache.        |
+The runner builds the Foundry fixtures and launches the suite; the suite's global
+setup starts two distinct Anvil chains (31337/31338) and fresh
+`postgres:18-alpine` + `redis:8-alpine` containers on ephemeral ports, then runs
+`tests/finance/*`. Balances under assertion come from real on-chain transfers and
+balanced journal postings.
 
-## Covered scenarios
+| File                                          | Covers                                                                                                                               |
+| :-------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------- |
+| `harness-smoke.test.ts`                       | Two-chain topology, 6/18-decimal assets, exact ERC-20 log identity, snapshot/revert, quorum proxies                                  |
+| `quorum-disagreement.acceptance.test.ts`      | ChainRegistry quorum: distinct endpoints, duplicate/chain-mismatch rejection, disagreement + freeze                                  |
+| `deposit-claim.acceptance.test.ts`            | Exact-log deposit verification: wrong chain/token/sender/recipient, depth, frozen asset                                              |
+| `deposit-ledger.acceptance.test.ts`           | Deposit credits the exact on-chain amount once and is idempotent                                                                     |
+| `api-routes.acceptance.test.ts`               | Real Fastify + SIWE: assets, balances, deposit claim, withdrawal intents, bad signature, 404s                                        |
+| `withdrawal-custody.acceptance.test.ts`       | Persist-before-broadcast, broadcast, quorum finality, restart from PostgreSQL, exact-byte recovery, gas starvation, reorg obligation |
+| `reconciliation-incidents.acceptance.test.ts` | Real shortfall incident + freeze, matched reconciliation, operator resolution, quorum fail-closed                                    |
 
-| Scenario             | Verifies                                                   |
-| :------------------- | :--------------------------------------------------------- |
-| Full lifecycle       | Buy-in → hand → settlement → withdrawal                    |
-| Deposit              | On-chain deposit indexed into user accounts                |
-| Withdrawal broadcast | Signed withdrawal mined on Anvil, confirmed by the monitor |
-| Tournament           | Entry, blind progression, payout escrow                    |
-| Reconnects           | Socket state resync after disconnect                       |
-| Multi-table          | Concurrent tables under the same Redis/DB                  |
+Helpers live in `tests/finance/helpers/`: `anvil-two-chain.ts`, `quorum-proxy.ts`,
+`fresh-infra.ts`, `custody-harness.ts`, `prisma-accounting.ts`, `eip712.ts`,
+`finance-fixtures.ts`, `finance-api-harness.ts`, `setup-env.ts`, `infra.ts`.
+`tests/finance/helpers/fresh-infra.ts` generates a private PostgreSQL Prisma
+client and applies the reviewed migrations from `packages/api/prisma/postgres`;
+`vitest.finance.config.ts` redirects the workspace `generated/prisma` import to it,
+so the shared SQLite client is never modified.
+
+The Foundry fixture `packages/custody/contracts/test/acceptance/MockAssetToken.sol`
+is test-only and never ships as custody code.
 
 ## Relation to unit/integration tests
 
-| Layer        | Where                        | What                                                 |
-| :----------- | :--------------------------- | :--------------------------------------------------- |
-| Engine rules | `packages/engine/tests`      | Reducer correctness, invariants, security            |
-| Evaluator    | `packages/evaluator/tests`   | Scores, frequencies, validation                      |
-| API + DB     | `packages/api/tests`         | Routes, workers, ledger integrity, scheduled actions |
-| Custody      | `packages/custody/tests`     | Wallets, sweepers, refunds                           |
-| Contracts    | `packages/custody/contracts` | Foundry unit tests against Anvil                     |
-| **Stack**    | **`packages/e2e`**           | **Everything wired together**                        |
+| Layer        | Where                        | What                                                  |
+| :----------- | :--------------------------- | :---------------------------------------------------- |
+| Engine rules | `packages/engine/tests`      | Reducer correctness, invariants, security             |
+| Evaluator    | `packages/evaluator/tests`   | Scores, frequencies, validation                       |
+| API + DB     | `packages/api/tests`         | Routes, workers, ledger integrity, canonical protocol |
+| Custody      | `packages/custody/tests`     | Withdrawal workflow, signing config, startup gate     |
+| Contracts    | `packages/custody/contracts` | Foundry unit tests against Anvil                      |
+| **Stack**    | **`packages/e2e`**           | **Everything wired together**                         |
 
 ::: warning
-Docker e2e and production PostgreSQL validation require separate infrastructure and are
-not covered by the local SQLite test suite — run them before a production deployment.
+Docker E2E and the finance acceptance suite require Docker, Foundry and separate
+infrastructure; they are not part of the default unit test run.
 :::

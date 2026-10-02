@@ -7,8 +7,8 @@
  *   3. Applies prisma/schema.sql (generated at build-time) if the DB is
  *      missing critical tables.
  *
- * For non-file datasources (e.g. PostgreSQL), it logs a message and exits
- * cleanly — external migration tooling is expected in that case.
+ * PostgreSQL uses migrate-postgres.mjs. SQLite bootstrap is only for disposable
+ * development/test databases, never production.
  *
  * Exits non-zero on any error.
  *
@@ -27,6 +27,8 @@ const __dirname = dirname(__filename);
 const packageDir = resolve(__dirname, "..");
 
 function main() {
+  if (process.env.NODE_ENV === "production")
+    throw new Error("SQLITE_BOOTSTRAP_NOT_ALLOWED_IN_PRODUCTION");
   const databaseUrl = process.env.DATABASE_URL;
 
   if (!databaseUrl) {
@@ -38,10 +40,7 @@ function main() {
   // Only handle SQLite file: URLs in this script.
   // -----------------------------------------------------------------------
   if (!databaseUrl.startsWith("file:")) {
-    console.log(
-      `DATABASE_URL is not a file: URL (${databaseUrl}) — skipping runtime schema sync. ` +
-        "External migration tooling (e.g. prisma migrate deploy) should be used for this datasource.",
-    );
+    console.log("Non-SQLite datasource: use scripts/migrate-postgres.mjs.");
     process.exit(0);
   }
 
@@ -88,15 +87,11 @@ function main() {
   // Check if schema already applied (look for a known table)
   // -----------------------------------------------------------------------
   const tableExists = db
-    .prepare(
-      "SELECT count(*) AS cnt FROM sqlite_master WHERE type = 'table' AND name = 'Asset'",
-    )
+    .prepare("SELECT count(*) AS cnt FROM sqlite_master WHERE type = 'table' AND name = 'Asset'")
     .get();
 
   if (tableExists.cnt > 0) {
-    console.log(
-      "Database already contains schema tables — skipping schema.sql application.",
-    );
+    console.log("Database already contains schema tables — skipping schema.sql application.");
     db.close();
     process.exit(0);
   }
@@ -116,7 +111,7 @@ function main() {
 
   // Execute as a single transaction so the schema is atomic
   try {
-    db.exec(schemaSql);
+    db.transaction(() => db.exec(schemaSql))();
     console.log("Schema applied successfully.");
   } catch (err) {
     console.error("Failed to apply schema.sql:", err.message);
@@ -128,9 +123,7 @@ function main() {
   // Verify
   // -----------------------------------------------------------------------
   const verify = db
-    .prepare(
-      "SELECT count(*) AS cnt FROM sqlite_master WHERE type = 'table' AND name = 'Asset'",
-    )
+    .prepare("SELECT count(*) AS cnt FROM sqlite_master WHERE type = 'table' AND name = 'Asset'")
     .get();
 
   if (verify.cnt === 0) {

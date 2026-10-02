@@ -261,19 +261,17 @@ services:
     # Signing material and custody tuning live ONLY in this separate env file.
     # The public API service never reads `.env.custody`. `env_file` supplies
     # `TREASURY_SIGNING_KEYS_JSON` (and optional custody cadence/quorum
-    # overrides); when the file is absent the custody entrypoint falls back to
-    # its code defaults and runs monitoring-only. The explicit `environment`
+    # overrides); production refuses absent signing configuration. The explicit `environment`
     # map below deliberately does NOT declare any signing or custody-tuning
     # key, so a value set in `.env.custody` is never blanked by an empty root
     # interpolation.
     env_file:
       - path: ./.env.custody
-        required: false
+        required: true
     environment:
       NODE_ENV: production
       LOG_LEVEL: ${LOG_LEVEL:-info}
       DATABASE_URL: "${DATABASE_URL:?err: DATABASE_URL must be set}"
-      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379}
     networks:
       - internal
     working_dir: /app/packages/custody

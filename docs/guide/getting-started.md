@@ -10,7 +10,7 @@ Welcome to the PokerTools monorepo — an enterprise-grade Texas Hold'em stack s
 | npm                         | `>= 10.0.0` | Workspaces + `allowScripts` support                                   |
 | Redis `>= 7`                | required    | Table state, BullMQ queues, locks (CI uses `redis:8-alpine`)          |
 | SQLite `>= 3` or PostgreSQL | required    | Prisma persistence (SQLite for local/test, PostgreSQL for production) |
-| Solidity toolchain          | optional    | Foundry (`forge`) only for the admin contract suite                   |
+| Solidity toolchain          | optional    | Foundry (`forge`) for custody contracts and blockchain acceptance     |
 | Python/build tools          | optional    | Only if native modules (`better-sqlite3`) need compiling              |
 
 ## Repository layout

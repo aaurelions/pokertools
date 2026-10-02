@@ -1,37 +1,19 @@
 import type { FastifyPluginAsync } from "fastify";
-import { z } from "zod";
+import { GrantChipsRequestSchema, GrantChipsResponseSchema } from "@pokertools/types";
 
 /**
  * Operator chip-grant route.
  *
- * PLAY_CHIPS accounts are funded ONLY by an explicit operator grant. This route
- * is intentionally NOT registered in app.ts yet: the canonical API schema/type
- * surface is still converging, and the supervisor owns route registration.
- *
- * After party principals can be targeted, registering this plugin (prefix
- * `/chips`) exposes `POST /chips/grant`.
+ * PLAY_CHIPS accounts are funded only by explicit operator grants. Registered
+ * under `/chips`; gameplay credentials cannot mint balances.
  */
-
-const GrantChipsSchema = z
-  .strictObject({
-    principalId: z.string().min(1),
-    // Integer chips as a non-negative safe integer. Decimal strings accepted
-    // for parity with other amount wire fields.
-    amount: z.union([
-      z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-      z.string().regex(/^[1-9][0-9]*$/),
-    ]),
-    reason: z.string().min(1).max(200),
-    idempotencyKey: z.string().min(1).max(200),
-  })
-  .strict();
 
 export const chipRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post(
     "/grant",
     { onRequest: [fastify.authenticate, fastify.requireOperator] },
     async (request, reply) => {
-      const parsed = GrantChipsSchema.safeParse(request.body);
+      const parsed = GrantChipsRequestSchema.safeParse(request.body);
       if (!parsed.success) {
         return reply.code(400).send({ error: "INVALID_GRANT", issues: parsed.error.issues });
       }
@@ -59,13 +41,13 @@ export const chipRoutes: FastifyPluginAsync = async (fastify) => {
         metadata: { amount: amount.toString(), reason, replayed: result.replayed },
       });
 
-      return {
+      return GrantChipsResponseSchema.parse({
         success: true,
         grantId: result.grantId,
         replayed: result.replayed,
         entryId: result.entry.entryId,
         balanceAfter: result.entry.balanceAfter.toString(),
-      };
+      });
     }
   );
 };

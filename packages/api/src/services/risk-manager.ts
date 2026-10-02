@@ -20,7 +20,7 @@ export class RiskManager {
     userId: string;
     endpoint: string;
     request: FastifyRequest;
-    amountCents?: number;
+    chipAmount?: number;
   }): Promise<{ score: number }> {
     const now = Date.now();
     const windowMs = config.RISK_SCORING_WINDOW_MS;
@@ -32,14 +32,14 @@ export class RiskManager {
       this.hit(ipKey, now, windowMs),
     ]);
 
-    const amount = input.amountCents ?? 0;
+    const chipAmount = input.chipAmount ?? 0;
     let score = 0;
     if (userCount > config.RISK_USER_COUNT_THRESHOLD) score += config.RISK_USER_COUNT_SCORE;
     if (ipCount > config.RISK_IP_COUNT_THRESHOLD) score += config.RISK_IP_COUNT_SCORE;
-    if (amount >= config.RISK_MEDIUM_AMOUNT_CENTS_THRESHOLD)
-      score += config.RISK_MEDIUM_AMOUNT_CENTS_SCORE;
-    if (amount >= config.RISK_HIGH_AMOUNT_CENTS_THRESHOLD)
-      score += config.RISK_HIGH_AMOUNT_CENTS_SCORE;
+    if (chipAmount >= config.RISK_MEDIUM_CHIP_AMOUNT_THRESHOLD)
+      score += config.RISK_MEDIUM_CHIP_AMOUNT_SCORE;
+    if (chipAmount >= config.RISK_HIGH_CHIP_AMOUNT_THRESHOLD)
+      score += config.RISK_HIGH_CHIP_AMOUNT_SCORE;
 
     const blocked =
       userCount > this.userLimit(input.endpoint) ||

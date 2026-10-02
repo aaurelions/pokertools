@@ -3,9 +3,35 @@ import {
   HealthResponseSchema,
   ReadinessResponseSchema,
   IncidentKindSchema,
+  GrantChipsRequestSchema,
+  GrantChipsResponseSchema,
 } from "../src";
 
 describe("operational and action boundaries", () => {
+  test("operator chip grants preserve exact integers and reject caller authority fields", () => {
+    const input = {
+      principalId: "seat-user",
+      amount: "9007199254740993",
+      reason: "funding",
+      idempotencyKey: "grant-1",
+    };
+    expect(GrantChipsRequestSchema.parse(input).amount).toBe(input.amount);
+    for (const amount of [0, -1, 0.5, Number.MAX_SAFE_INTEGER + 1, "01", "-1", "1.0"]) {
+      expect(GrantChipsRequestSchema.safeParse({ ...input, amount }).success).toBe(false);
+    }
+    expect(GrantChipsRequestSchema.safeParse({ ...input, operatorId: "attacker" }).success).toBe(
+      false
+    );
+    expect(
+      GrantChipsResponseSchema.parse({
+        success: true,
+        grantId: "grant-1",
+        replayed: false,
+        entryId: "entry-1",
+        balanceAfter: input.amount,
+      }).balanceAfter
+    ).toBe(input.amount);
+  });
   test("the incident protocol represents ambiguous broadcasts retained by custody", () => {
     expect(IncidentKindSchema.parse("AMBIGUOUS_BROADCAST")).toBe("AMBIGUOUS_BROADCAST");
   });

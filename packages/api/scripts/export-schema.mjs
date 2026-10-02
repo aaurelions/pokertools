@@ -4,7 +4,7 @@
  * Creates a throw-away SQLite database, pushes the Prisma schema into it,
  * then exports the DDL (tables + indexes) as idempotent SQL to
  * prisma/schema.sql.  That file is copied into the production image so the
- * runtime can bootstrap a fresh SQLite database without the Prisma CLI.
+ * development/test container can bootstrap disposable SQLite without the CLI.
  *
  * Prerequisites (available at build time):
  *   - prisma CLI (root devDependency)
@@ -59,7 +59,7 @@ const rows = db
      WHERE sql IS NOT NULL
        AND type IN ('table', 'index', 'trigger')
        AND name NOT LIKE 'sqlite_%'
-      ORDER BY CASE type WHEN 'table' THEN 1 WHEN 'index' THEN 2 WHEN 'trigger' THEN 3 END, name`,
+      ORDER BY CASE type WHEN 'table' THEN 1 WHEN 'index' THEN 2 WHEN 'trigger' THEN 3 END, name`
   )
   .all();
 
@@ -86,17 +86,14 @@ for (const { type, sql } of rows) {
     // CREATE TABLE "foo" ... -> CREATE TABLE IF NOT EXISTS "foo" ...
     // sqlite_master stores the raw SQL without IF NOT EXISTS, but we need
     // idempotent statements for runtime bootstrap.
-    statement = statement.replace(
-      /^CREATE TABLE "/,
-      'CREATE TABLE IF NOT EXISTS "',
-    );
+    statement = statement.replace(/^CREATE TABLE "/, 'CREATE TABLE IF NOT EXISTS "');
   } else if (type === "index" && !/IF NOT EXISTS/i.test(statement)) {
     // CREATE UNIQUE INDEX "foo" ... -> CREATE UNIQUE INDEX IF NOT EXISTS "foo" ...
     // We replace the entire "CREATE [UNIQUE ]INDEX " prefix with the
     // idempotent variant so the script is trivially re-runnable.
     statement = statement.replace(
       /^CREATE (UNIQUE )?INDEX /,
-      (_match, unique) => `CREATE ${unique ?? ""}INDEX IF NOT EXISTS `,
+      (_match, unique) => `CREATE ${unique ?? ""}INDEX IF NOT EXISTS `
     );
   }
 

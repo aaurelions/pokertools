@@ -91,12 +91,10 @@ export default defineConfig({
           items: [
             { text: "Getting Started", link: "/guide/getting-started" },
             { text: "Architecture", link: "/guide/architecture" },
+            { text: "Configuration", link: "/guide/configuration" },
+            { text: "Testing & Coverage", link: "/guide/testing" },
             { text: "Docs & Text Formatting", link: "/guide/formatting" },
           ],
-        },
-        {
-          text: "Engineering",
-          items: [{ text: "Engine Review (2026-09)", link: "/ENGINE_REVIEW" }],
         },
       ],
       "/packages/": [
@@ -127,13 +125,13 @@ export default defineConfig({
           ],
         },
       ],
-      // Fallback for pages outside the sections above (e.g. ENGINE_REVIEW).
+      // Fallback for pages outside the sections above.
       "/": [
         {
           text: "Site",
           items: [
             { text: "Home", link: "/" },
-            { text: "Engine Review (2026-09)", link: "/ENGINE_REVIEW" },
+            { text: "Architecture", link: "/guide/architecture" },
           ],
         },
       ],

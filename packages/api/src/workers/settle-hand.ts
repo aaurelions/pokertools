@@ -4,13 +4,14 @@ import Redlock from "redlock";
 import pino from "pino";
 import { config } from "../config.js";
 import { getHouseUserId } from "../utils/house-user.js";
+import { asRedlockClient } from "../utils/redis-compatibility.js";
 import { createPrismaClient } from "../utils/prisma-client.js";
 import { FinancialManager } from "../services/financial-manager.js";
 
 const prisma = createPrismaClient();
 const financialManager = new FinancialManager(prisma);
 const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
-const redlock = new Redlock([redis as unknown as Redlock.CompatibleRedisClient], {
+const redlock = new Redlock([asRedlockClient(redis)], {
   driftFactor: config.REDLOCK_DRIFT_FACTOR,
   retryCount: 0,
   retryDelay: config.REDLOCK_RETRY_DELAY_MS,
@@ -57,7 +58,7 @@ const worker = new Worker(
 
     logger.info({ handId, rakeTotal }, "Hand settled");
   },
-  { connection: redis as any }
+  { connection: redis }
 );
 
 worker.on("failed", (job, err) => {

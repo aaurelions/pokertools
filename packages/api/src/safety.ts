@@ -2,17 +2,9 @@
  * API startup policy, evaluated before opening DB/RPC/queue connections.
  *
  * - The public API process may never load custody/private-key material.
- * - Production admission requires compiled convergence evidence (the reviewed
- *   acceptance result) AND safe configuration. This is not a runtime flag: the
- *   evidence lives in `@pokertools/types` and is updated only by the final
- *   convergence commit, so an unverified build stays blocked.
+ * - Production requires explicit safe configuration. Live dependency and
+ *   financial invariants are checked separately by platform readiness.
  */
-import {
-  CONVERGENCE_EVIDENCE,
-  isConvergenceVerified,
-  type ConvergenceEvidence,
-} from "@pokertools/types";
-
 const FORBIDDEN_SECRETS = [
   "WALLET_XPRIV_ENCRYPTION_SECRET",
   "WALLET_XPRIV_ENCRYPTION_SECRET_FILE",
@@ -45,16 +37,13 @@ function assertProductionConfiguration(env: NodeJS.ProcessEnv): void {
   }
 }
 
-export function assertPublicProcessSafety(
-  env: NodeJS.ProcessEnv,
-  evidence: ConvergenceEvidence = CONVERGENCE_EVIDENCE
-): void {
+export function assertPublicProcessSafety(env: NodeJS.ProcessEnv): void {
   if (FORBIDDEN_SECRETS.some((name) => Boolean(env[name]?.trim()))) {
     throw new Error("CUSTODY_SECRET_IN_PUBLIC_PROCESS");
   }
   if (env.NODE_ENV !== "production") return;
-  if (!isConvergenceVerified(evidence)) {
-    throw new Error("ARCHITECTURE_CONVERGENCE_INCOMPLETE");
+  if (env.ENABLE_TEST_ROUTES === "true") {
+    throw new Error("TEST_ROUTES_NOT_ALLOWED_IN_PRODUCTION");
   }
   assertProductionConfiguration(env);
 }

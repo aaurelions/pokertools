@@ -162,11 +162,11 @@ describe("readiness-adapters", () => {
       timestamp: 42,
       checks: [
         {
-          name: "convergence",
+          name: "redis",
           state: "BLOCKED",
           mandatory: true,
           latencyMs: 1,
-          detail: "CONVERGENCE_INCOMPLETE",
+          detail: "REDIS_UNREACHABLE",
         },
       ],
       financial: {
@@ -184,11 +184,11 @@ describe("readiness-adapters", () => {
       timestamp: 43,
       checks: [
         {
-          name: "convergence",
+          name: "redis",
           state: "READY",
           mandatory: true,
           latencyMs: 1,
-          detail: "CONVERGENCE_ACCEPTED",
+          detail: "REDIS_OK",
         },
       ],
       financial: { state: "READY", reasons: [], checks: [] },
@@ -432,7 +432,7 @@ describe("readiness-adapters", () => {
     expect(await hasConfiguredCanonicalAsset(prisma)).toBe(true);
   });
 
-  it("enables payouts from configured assets and blocks on absent evidence, with the gate closed", async () => {
+  it("enables payouts from configured assets and blocks on absent custody evidence", async () => {
     await createAsset();
     const service = createPlatformReadiness(makeApp(), {
       publicNonFinancialMode: false,
@@ -441,12 +441,9 @@ describe("readiness-adapters", () => {
 
     const report = await service.evaluate();
     const custody = report.checks.find((check) => check.name === "custody");
-    const convergence = report.checks.find((check) => check.name === "convergence");
     expect(custody?.state).toBe("BLOCKED");
     expect(custody?.detail).toBe("CUSTODY_EVIDENCE_MISSING");
-    // Release evidence may be accepted; missing custody evidence must still
-    // keep the platform not-ready regardless of the convergence result.
-    expect(convergence?.detail).toMatch(/CONVERGENCE_(ACCEPTED|INCOMPLETE)/);
+    // Reachable RPC endpoints cannot substitute for a live signing worker.
     expect(report.ready).toBe(false);
     expect(buildReadinessResponse(report).status).toBe("not_ready");
   });
@@ -466,7 +463,9 @@ describe("readiness-adapters", () => {
 
   it("caches the evaluate promise for the configured TTL", async () => {
     let calls = 0;
+    let now = Date.now();
     const service = createPlatformReadiness(makeApp(), {
+      now: () => now,
       cacheTtlMs: 50,
       rpcQuorumRequired: true,
       chainQuorum: {
@@ -482,7 +481,7 @@ describe("readiness-adapters", () => {
     expect(second).toBe(first);
     expect(calls).toBe(1);
 
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    now += 60;
     const third = await service.evaluate();
     expect(third).not.toBe(first);
     expect(calls).toBe(2);

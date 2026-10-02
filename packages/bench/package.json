@@ -34,6 +34,7 @@
   },
   "dependencies": {
     "@pokertools/evaluator": "1.0.20",
+    "@pokertools/types": "1.0.20",
     "benchmark": "^2.1.4",
     "bullmq": "^6.3.11",
     "phe": "^0.6.0",

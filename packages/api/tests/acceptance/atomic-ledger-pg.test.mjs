@@ -24,9 +24,7 @@ import pg from "pg";
 
 const exec = promisify(execFile);
 const name = `pokertools-atomic-ledger-${randomUUID()}`;
-const migrateScript = fileURLToPath(
-  new URL("../../scripts/migrate-postgres.mjs", import.meta.url)
-);
+const migrateScript = fileURLToPath(new URL("../../scripts/migrate-postgres.mjs", import.meta.url));
 
 const ASSET_ID = "eip155:31337/erc20:0x1111111111111111111111111111111111111111";
 const TOKEN = "0x1111111111111111111111111111111111111111";
@@ -53,13 +51,20 @@ async function migrate() {
 }
 
 before(async () => {
-  if (!(await dockerAvailable())) return;
+  assert(await dockerAvailable(), "Docker is required for PostgreSQL ledger acceptance");
   await exec(
     "docker",
     [
-      "run", "--rm", "-d", "--name", name,
-      "-e", "POSTGRES_PASSWORD=local-atomic-ledger-test-only",
-      "-p", "127.0.0.1::5432", "postgres:18-alpine",
+      "run",
+      "--rm",
+      "-d",
+      "--name",
+      name,
+      "-e",
+      "POSTGRES_PASSWORD=local-atomic-ledger-test-only",
+      "-p",
+      "127.0.0.1::5432",
+      "postgres:18-alpine",
     ],
     { timeout: 600000 }
   );
@@ -117,8 +122,7 @@ async function createSealedJournal(client) {
   await client.query("COMMIT");
 }
 
-test("rejects new balanced postings injected into a committed sealed journal", async (t) => {
-  if (!pool) return t.skip("Docker unavailable");
+test("rejects new balanced postings injected into a committed sealed journal", async () => {
   const client = await pool.connect();
   try {
     await createSealedJournal(client);
@@ -134,8 +138,7 @@ test("rejects new balanced postings injected into a committed sealed journal", a
   }
 });
 
-test("rejects UPDATE and DELETE of journal history", async (t) => {
-  if (!pool) return t.skip("Docker unavailable");
+test("rejects UPDATE and DELETE of journal history", async () => {
   const client = await pool.connect();
   try {
     await createSealedJournal(client);
@@ -160,8 +163,7 @@ test("rejects UPDATE and DELETE of journal history", async (t) => {
   }
 });
 
-test("rejects committing an unsealed journal", async (t) => {
-  if (!pool) return t.skip("Docker unavailable");
+test("rejects committing an unsealed journal", async () => {
   const client = await pool.connect();
   try {
     await client.query(setupSql());
@@ -183,8 +185,7 @@ test("rejects committing an unsealed journal", async (t) => {
   }
 });
 
-test("rejects committing a sealed but unbalanced journal", async (t) => {
-  if (!pool) return t.skip("Docker unavailable");
+test("rejects committing a sealed but unbalanced journal", async () => {
   const client = await pool.connect();
   try {
     await client.query(setupSql());

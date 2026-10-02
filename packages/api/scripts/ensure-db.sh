@@ -84,10 +84,17 @@ else
   echo "✅ PostgreSQL datasource configured"
 fi
 
-# Always run prisma db push to ensure schema is in sync
-# This is safe because --accept-data-loss only affects data, not schema
-echo "🔄 Syncing database schema..."
-echo "   Using DATABASE_URL: $DATABASE_URL"
+# PostgreSQL always uses the reviewed migration manifest. Only disposable local
+# SQLite databases may be synchronized directly from the relational model.
+if [ "$DB_KIND" = "postgres" ]; then
+  node scripts/migrate-postgres.mjs
+  exit 0
+fi
+if [ "${NODE_ENV:-}" = "production" ]; then
+  echo "Production requires PostgreSQL; SQLite is a disposable development/test adapter."
+  exit 1
+fi
+echo "🔄 Syncing disposable SQLite schema..."
 if [ "$DB_KIND" = "sqlite" ]; then
   echo "   Database file: $DB_FILE"
 else
@@ -100,19 +107,8 @@ if [ ! -d "generated/prisma" ]; then
   npx prisma generate
 fi
 
-# Production deploys are latest-schema only and must never accept data loss.
-# The application supports SQLite for local/test environments only; production
-# must use PostgreSQL and an explicit fresh-schema sync without destructive flags.
 set +e
-if [ "${NODE_ENV:-}" = "production" ]; then
-  if [ "$DB_KIND" != "postgres" ]; then
-    echo "❌ Production requires a PostgreSQL DATABASE_URL. SQLite is only supported for local/test."
-    exit 1
-  fi
-  PUSH_OUTPUT=$(npx prisma db push 2>&1)
-else
-  PUSH_OUTPUT=$(npx prisma db push --accept-data-loss 2>&1)
-fi
+PUSH_OUTPUT=$(npx prisma db push --accept-data-loss 2>&1)
 PUSH_EXIT_CODE=$?
 set -e
 

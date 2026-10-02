@@ -90,7 +90,7 @@ function clampChatLimit(limit: number | undefined): number {
 
 /**
  * Any canonical response that fails the shared strict contract is a server-side
- * convergence failure: fail closed with 503 rather than leaking a malformed or
+ * projection failure: fail closed with 503 rather than leaking a malformed or
  * unmasked projection (or claiming success).
  */
 function invalidServerResponse(cause: unknown): Error {
@@ -170,7 +170,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
         config: true,
         status: true,
       },
-      take: 50,
+      take: config.TABLE_LISTING_PAGE_SIZE,
       orderBy: { updatedAt: "desc" },
     });
 
@@ -262,7 +262,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
         userId,
         endpoint: "buy-in",
         request,
-        amountCents: amountNum,
+        chipAmount: amountNum,
       });
 
       const actorId = userId;
@@ -702,7 +702,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
         userId,
         endpoint: "add-chips",
         request,
-        amountCents: amountNum,
+        chipAmount: amountNum,
       });
 
       const actorId = userId;

@@ -254,7 +254,7 @@ const reconciliationWorker = new Worker(
     logger.info("Reconciliation worker started");
     await runReconciliationOnce(prisma, logger);
   },
-  { connection: redis as any }
+  { connection: redis }
 );
 
 reconciliationWorker.on("failed", (job, err) => {

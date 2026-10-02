@@ -53,6 +53,14 @@ export const config = cleanEnv(process.env, {
   TABLE_LOCK_TTL_MS_TEST: num({ default: 15_000 }),
   ACTION_TIMEOUT_SECONDS: num({ default: 30 }),
   RECONCILIATION_INTERVAL_MS: num({ default: 5 * 60 * 1000 }),
+  GAME_OUTBOX_SWEEP_INTERVAL_MS: num({
+    default: 5000,
+    desc: "Durable outbox recovery cadence (ms)",
+  }),
+  CANONICAL_DEPOSIT_MONITOR_INTERVAL_MS: num({
+    default: 30_000,
+    desc: "Deposit finality/reorg scan cadence (ms)",
+  }),
   RISK_SCORE_THRESHOLD: num({ default: 70 }),
   RISK_WITHDRAW_USER_LIMIT: num({ default: 5 }),
   RISK_BUY_IN_USER_LIMIT: num({ default: 12 }),
@@ -82,21 +90,21 @@ export const config = cleanEnv(process.env, {
     default: 25,
     desc: "Score added when IP action count exceeds RISK_IP_COUNT_THRESHOLD",
   }),
-  RISK_MEDIUM_AMOUNT_CENTS_THRESHOLD: num({
+  RISK_MEDIUM_CHIP_AMOUNT_THRESHOLD: num({
     default: 100_000,
-    desc: "Amount-cents threshold that triggers a medium-risk score increment",
+    desc: "Chip amount threshold that triggers a medium-risk score increment",
   }),
-  RISK_MEDIUM_AMOUNT_CENTS_SCORE: num({
+  RISK_MEDIUM_CHIP_AMOUNT_SCORE: num({
     default: 20,
-    desc: "Score added when amount exceeds RISK_MEDIUM_AMOUNT_CENTS_THRESHOLD",
+    desc: "Score added above the medium chip amount threshold",
   }),
-  RISK_HIGH_AMOUNT_CENTS_THRESHOLD: num({
+  RISK_HIGH_CHIP_AMOUNT_THRESHOLD: num({
     default: 500_000,
-    desc: "Amount-cents threshold that triggers a high-risk score increment",
+    desc: "Chip amount threshold that triggers a high-risk score increment",
   }),
-  RISK_HIGH_AMOUNT_CENTS_SCORE: num({
+  RISK_HIGH_CHIP_AMOUNT_SCORE: num({
     default: 30,
-    desc: "Score added when amount exceeds RISK_HIGH_AMOUNT_CENTS_THRESHOLD",
+    desc: "Score added above the high chip amount threshold",
   }),
 
   // CORS origin - specific in production, broad in dev/test
@@ -154,7 +162,6 @@ export const config = cleanEnv(process.env, {
     desc: "Base backoff for transient retries (multiplied by attempt number)",
   }),
   TABLE_LISTING_PAGE_SIZE: num({ default: 50, desc: "Default page size for table listing" }),
-  IDEMPOTENCY_TTL_SECONDS: num({ default: 3600, desc: "TTL for idempotency records in seconds" }),
   TOURNAMENT_LOCK_TTL_MS: num({ default: 30000, desc: "Redlock TTL for tournament operations" }),
   TOURNAMENT_LISTING_PAGE_SIZE: num({
     default: 100,

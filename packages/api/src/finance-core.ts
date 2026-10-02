@@ -1,10 +1,8 @@
 /**
  * API finance-core export.
  *
- * Source barrel for the canonical atomic finance primitive surface consumed by
- * the custody workflow and the workers. The supervisor wires this into the
- * package `exports` map (`@pokertools/api/finance-core`) and injects the
- * accounting port; this module only re-exports the owned implementations.
+ * Key-free accounting and chain-reading surface consumed by custody and room
+ * workers through `@pokertools/api/finance-core`. Signing stays in custody.
  *
  * The API never holds signing keys. This barrel exposes public, DB-only
  * accounting primitives — no RPC URLs, no private keys, no signer factory.

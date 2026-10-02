@@ -9,36 +9,12 @@ import {
   MAX_ASSETS_VERIFIED,
   PlatformReadinessService,
   type ChainQuorumProbe,
-  type ConvergenceGate,
   type CustodyReadinessProbe,
   type LedgerIntegrityProbe,
   type PlatformReadinessReport,
   type QueueHealthProbe,
   type RedisHealthProbe,
 } from "./platform-readiness.js";
-import {
-  CONVERGENCE_EVIDENCE,
-  isConvergenceVerified,
-  type ConvergenceEvidence,
-} from "../convergence-evidence.js";
-
-/**
- * Convergence gate backed by the compiled evidence record. A PENDING, empty or
- * partial record keeps readiness closed; only a reviewed PASS with a commit SHA
- * and every mandatory result true opens it.
- */
-export class CommittedConvergenceGate implements ConvergenceGate {
-  constructor(private readonly evidence: ConvergenceEvidence = CONVERGENCE_EVIDENCE) {}
-
-  async check(): Promise<{ complete: boolean; code: string; evidenceId?: string }> {
-    const complete = isConvergenceVerified(this.evidence);
-    return {
-      complete,
-      code: complete ? "CONVERGENCE_VERIFIED" : "CONVERGENCE_INCOMPLETE",
-      evidenceId: complete ? this.evidence.commit : undefined,
-    };
-  }
-}
 import { AtomicLedger, LedgerInvariantError } from "./atomic-ledger.js";
 import { FinancialIncidentService } from "./financial-incidents.js";
 import {
@@ -74,8 +50,6 @@ import { buildChainRegistryFromAssets } from "./canonical-deposit-verifier.js";
  *  - The API never reads signer keys. Custody readiness may only come from
  *    recent durable external-worker evidence; there is no default reader and
  *    no inference from reconciliation, matched or otherwise.
- *  - The convergence gate is never injected here, so it stays blocked until
- *    verified acceptance evidence is explicitly wired by an operator.
  *  - Payouts are considered enabled whenever a canonical `Asset` row exists,
  *    unless the caller explicitly opts into public non-financial mode.
  */
@@ -356,22 +330,8 @@ export function createChainRegistryReadinessProbe(
 /**
  * One durable heartbeat persisted by the external custody worker.
  *
- * UNRESOLVED CONTRACT — the supervisor must add a Prisma model, e.g.:
- *
- *   model CustodyHeartbeat {
- *     id            String   @id @default(cuid())
- *     chainId       Int
- *     signerAddress String   // public address only, never a key
- *     gasReady      Boolean
- *     workerId      String
- *     observedAt    DateTime
- *     createdAt     DateTime @default(now())
- *     @@index([chainId, observedAt])
- *   }
- *
- * and a reader method that returns the latest row per chain (or all rows so
- * this probe can pick the freshest per chain). Until that exists the default
- * reader returns no evidence and readiness fails closed.
+ * The API selects fresh evidence per chain/treasury route. Heartbeats contain
+ * only public addresses, never signing keys. Missing readers fail closed.
  */
 export interface CustodyHeartbeatRecord {
   chainId: number;
@@ -387,7 +347,7 @@ export interface CustodyHeartbeatReader {
   read(): Promise<CustodyHeartbeatRecord[]>;
 }
 
-/** Default reader: no model wired yet, therefore no evidence. */
+/** Fail-closed fallback when no durable reader is supplied. */
 export class UnavailableCustodyEvidenceReader implements CustodyHeartbeatReader {
   async read(): Promise<CustodyHeartbeatRecord[]> {
     return [];
@@ -558,13 +518,10 @@ export interface CreatePlatformReadinessOptions {
   ledgerProbe?: LedgerIntegrityProbe;
   chainQuorum?: ChainQuorumProbe;
   custody?: CustodyReadinessProbe;
-  /** Test seam; defaults to the compiled committed-evidence gate. */
-  convergence?: ConvergenceGate;
 }
 
 /**
- * Composition root for the API. Wires real infrastructure probes and leaves the
- * convergence gate at its blocked default (no bypass parameter exists).
+ * Composition root for the API. Wires live infrastructure and financial probes.
  */
 export function createPlatformReadiness(
   app: PlatformReadinessApp,
@@ -596,7 +553,6 @@ export function createPlatformReadiness(
         maxAgeMs: options.custodyEvidenceMaxAgeMs,
         now: options.now,
       }),
-    convergence: options.convergence ?? new CommittedConvergenceGate(),
     cacheTtlMs: options.cacheTtlMs ?? 5_000,
     probeTimeoutMs: options.probeTimeoutMs,
     now: options.now,

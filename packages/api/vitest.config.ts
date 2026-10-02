@@ -21,8 +21,30 @@ export default defineConfig({
     setupFiles: ["./tests/setup.ts"],
     coverage: {
       provider: "v8",
-      reporter: ["text", "json", "html"],
-      exclude: ["node_modules/", "dist/", "generated/", "tests/", "**/*.test.ts", "**/*.config.ts"],
+      reporter: ["text", "json-summary", "html"],
+      reportOnFailure: true,
+      include: ["src/**/*.ts"],
+      exclude: [
+        "node_modules/",
+        "dist/",
+        "generated/",
+        "coverage/",
+        "tests/",
+        "**/*.test.ts",
+        "**/*.config.ts",
+      ],
+      thresholds: {
+        statements: 75,
+        branches: 65,
+        functions: 77,
+        lines: 77,
+        "src/services/atomic-ledger.ts": {
+          statements: 84,
+          branches: 77,
+          functions: 86,
+          lines: 85,
+        },
+      },
     },
     // Run tests sequentially to avoid Redis/DB/Redlock conflicts
     pool: "forks",

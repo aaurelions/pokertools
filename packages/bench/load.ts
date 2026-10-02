@@ -1,6 +1,7 @@
 import WebSocket from "ws";
 import { randomUUID } from "node:crypto";
 import { Queue } from "bullmq";
+import { SeatObservationSchema } from "@pokertools/types";
 
 interface Result {
   name: string;
@@ -66,20 +67,6 @@ async function apiHealth(): Promise<Result> {
   });
 }
 
-interface LegalAction {
-  actionId: string;
-  family: string;
-  amount?: number;
-  minAmount?: number;
-  maxAmount?: number;
-}
-
-interface SeatObservation {
-  turnId: string;
-  version: number;
-  legalActions: LegalAction[];
-}
-
 async function gameActions(): Promise<Result | null> {
   if (!TOKEN || !TABLE_ID) return null;
   const preferred = ["CHECK", "CALL", "FOLD"] as const;
@@ -93,7 +80,7 @@ async function gameActions(): Promise<Result | null> {
     if (observationRes.status >= 500) throw new Error(`HTTP ${observationRes.status}`);
     if (!observationRes.ok) return;
 
-    const observation = (await observationRes.json()) as SeatObservation;
+    const observation = SeatObservationSchema.parse(await observationRes.json());
     const legalActions = observation.legalActions ?? [];
     const offset = i++;
     const ordered = preferred.map((_, index) => preferred[(index + offset) % preferred.length]);

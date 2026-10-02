@@ -262,10 +262,19 @@ export type GameModeWire = z.infer<typeof GameModeSchema>;
 export const TableStatusSchema = z.enum(["WAITING", "ACTIVE", "PAUSED", "CLOSED"]);
 export type TableStatusWire = z.infer<typeof TableStatusSchema>;
 
+/** Persisted room configuration includes creation metadata, unlike an engine view. */
+export const TableListingConfigSchema = PublicTableConfigSchema.extend({
+  name: z.string().min(1).optional(),
+  mode: z.enum(["CASH", "TOURNAMENT"]).optional(),
+  minBuyIn: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+  maxBuyIn: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+  startingStack: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+});
+
 export const TableListItemSchema = z.strictObject({
   id: z.string().min(1),
   name: z.string().min(1),
-  config: PublicTableConfigSchema,
+  config: TableListingConfigSchema,
   status: TableStatusSchema,
 });
 export type TableListItemWire = z.infer<typeof TableListItemSchema>;

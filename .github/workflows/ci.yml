@@ -29,6 +29,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          submodules: recursive
 
       - name: Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v7
@@ -60,22 +62,26 @@ jobs:
       - name: Build All Packages
         run: npm run build
 
+      - name: Check Architecture Boundaries
+        run: npm run check:boundaries
+
       - name: Validate Schema & Migrations
         run: |
           cd packages/api
           node scripts/validate-migrations.mjs
 
-      - name: Run Tests
+      - name: Run Tests (coverage gates)
         env:
           NODE_ENV: "test"
           REDIS_URL: "redis://localhost:6379"
           JWT_SECRET: "test-jwt-secret-key-for-ci-minimum-32-chars"
           COOKIE_SECRET: "test-cookie-secret-key-for-ci"
-          MASTER_MNEMONIC: "test test test test test test test test test test test junk"
-          TELEGRAM_BOT_TOKEN: "test-token"
-          TELEGRAM_ADMIN_CHAT_ID: "123456789"
-          WALLET_XPRIV_ENCRYPTION_SECRET: "test-wallet-xpriv-secret-key-for-ci"
-        run: npm test
+        run: npm run test:coverage
+
+      - name: Postgres Acceptance (disposable containers)
+        run: |
+          npm run test:postgres:migrations -w @pokertools/api
+          npm run test:postgres:ledger -w @pokertools/api
 
       - name: Run Benchmarks
         if: matrix.node-version == '24.x'
@@ -87,6 +93,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          submodules: recursive
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4

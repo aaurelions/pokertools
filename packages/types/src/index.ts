@@ -14,12 +14,10 @@ export * from "./error-codes";
 // Canonical runtime/wire contracts
 export * from "./canonical";
 
-// Compiled convergence evidence (release admission gate)
-export * from "./convergence";
-
 // API DTOs
 export * from "./api/common";
 export * from "./api/auth";
 export * from "./api/tables";
 export * from "./api/tournaments";
 export * from "./api/operations";
+export * from "./api/chips";

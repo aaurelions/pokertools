@@ -2,14 +2,13 @@
 /**
  * Reproducible runner for the built-SDK browser acceptance test.
  *
- * This intentionally avoids editing any shared manifest: it drives the API
- * package's own vitest harness (setup env, Redis flush, HOUSE seed) filtered to
+ * Drives the API package's vitest harness (setup env, Redis flush, HOUSE seed) filtered to
  * the browser acceptance file. Run from anywhere:
  *
  *   node packages/api/tests/loopback/browser/run.mjs
  *
- * Dependency note: Playwright (Node) is resolved at runtime from the project or
- * an `npx` cache. Ask the supervisor before adding it to a manifest.
+ * Playwright and esbuild are declared devDependencies. Install Chromium with
+ * `npx playwright install chromium` before acceptance.
  */
 
 import { spawnSync } from "node:child_process";

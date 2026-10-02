@@ -5,6 +5,7 @@ import type { JobQueues } from "../plugins/queue.js";
 import { PokerEngine, type Action, type GameState, type PublicState } from "@pokertools/engine";
 import {
   CanonicalActionRequestSchema,
+  CanonicalActionResultSchema,
   toPublicWireState,
   type CanonicalActionRequest,
   type CanonicalActionResult,
@@ -770,7 +771,7 @@ export class GameManager {
         if (existing.status === "COMPLETED" && existing.response) {
           return {
             kind: "replay",
-            result: existing.response as unknown as CanonicalActionResult,
+            result: CanonicalActionResultSchema.parse(existing.response),
           };
         }
         throw new GameAuthorityError(
@@ -1153,7 +1154,7 @@ export class GameManager {
       );
     }
     if (existing.status === "COMPLETED" && existing.response) {
-      return existing.response as unknown as CanonicalActionResult;
+      return CanonicalActionResultSchema.parse(existing.response);
     }
     throw new GameAuthorityError(
       "REQUEST_ID_CONFLICT",

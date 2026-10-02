@@ -28,7 +28,7 @@ import {
 export interface DepositRouteOptions {
   /**
    * Pre-built service. When supplied, its own verifier is authoritative and no
-   * additional verifier is created. Preferred by supervisors that wire the
+   * additional verifier is created. Preferred by composition roots that wire the
    * verifier explicitly.
    */
   deposits?: CanonicalDepositService;
@@ -38,12 +38,6 @@ export interface DepositRouteOptions {
    * route never mutates the process-wide fallback verifier.
    */
   verifier?: DepositClaimVerifier;
-}
-
-interface RequestPrincipal {
-  id: string;
-  kind?: string;
-  walletAddress?: string | null;
 }
 
 /**
@@ -87,8 +81,8 @@ export function toDepositClaimWire(claim: {
   });
 }
 
-function walletPrincipal(request: FastifyRequest): RequestPrincipal | null {
-  const principal = (request as unknown as { principal?: RequestPrincipal }).principal;
+function walletPrincipal(request: FastifyRequest) {
+  const principal = request.principal;
   if (!principal || principal.kind !== "WALLET" || !principal.walletAddress) return null;
   return principal;
 }
@@ -109,7 +103,7 @@ function handleError(request: FastifyRequest, reply: FastifyReply, error: unknow
 }
 
 /**
- * Build the asset-backed chain verifier used when the supervisor did not inject
+ * Build the asset-backed chain verifier used when the caller did not inject
  * one. Registry construction is lazy, so this is cheap to call at startup.
  */
 export function createDefaultDepositVerifier(fastify: FastifyInstance): DepositClaimVerifier {
@@ -117,7 +111,7 @@ export function createDefaultDepositVerifier(fastify: FastifyInstance): DepositC
 }
 
 /**
- * Resolve the service this route should use. A supervisor-supplied service wins;
+ * Resolve the service this route should use. An explicitly supplied service wins;
  * otherwise the verifier is injected through the `CanonicalDepositService`
  * constructor instead of a mutable process global.
  */

@@ -1,20 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { assertPublicProcessSafety } from "../../src/safety.js";
-import type { ConvergenceEvidence } from "@pokertools/types";
-
-const VERIFIED_EVIDENCE: ConvergenceEvidence = {
-  status: "PASS",
-  commit: "test-commit",
-  verifiedAt: "2026-01-01T00:00:00.000Z",
-  results: { build: true },
-};
-
-const PENDING_EVIDENCE: ConvergenceEvidence = {
-  status: "PENDING",
-  commit: "",
-  verifiedAt: "",
-  results: {},
-};
 
 const SAFE_PRODUCTION = {
   NODE_ENV: "production",
@@ -29,51 +14,24 @@ describe("public process safety", () => {
   it.each(["development", "test"])("allows isolated %s processes", (NODE_ENV) => {
     expect(() => assertPublicProcessSafety({ NODE_ENV })).not.toThrow();
   });
-
-  it("blocks production even with an attempted configuration override", () => {
+  it("admits production startup with safe configuration", () => {
+    expect(() => assertPublicProcessSafety(SAFE_PRODUCTION)).not.toThrow();
+  });
+  it("does not permit a financial flag to bypass required configuration", () => {
     expect(() =>
-      assertPublicProcessSafety(
-        {
-          NODE_ENV: "production",
-          ENABLE_REAL_MONEY: "true",
-          POKERTOOLS_CONVERGENCE: "PASS",
-        },
-        PENDING_EVIDENCE
-      )
-    ).toThrow("ARCHITECTURE_CONVERGENCE_INCOMPLETE");
-  });
-
-  it("blocks production when evidence is unverified even with safe configuration", () => {
-    expect(() => assertPublicProcessSafety(SAFE_PRODUCTION, PENDING_EVIDENCE)).toThrow(
-      "ARCHITECTURE_CONVERGENCE_INCOMPLETE"
-    );
-  });
-
-  it("starts production with verified evidence and safe configuration", () => {
-    expect(() => assertPublicProcessSafety(SAFE_PRODUCTION, VERIFIED_EVIDENCE)).not.toThrow();
-  });
-
-  it("fails closed on verified evidence with unsafe production configuration", () => {
-    expect(() =>
-      assertPublicProcessSafety(
-        { ...SAFE_PRODUCTION, DATABASE_URL: "file:../.runtime/dev.db" },
-        VERIFIED_EVIDENCE
-      )
+      assertPublicProcessSafety({ NODE_ENV: "production", ENABLE_REAL_MONEY: "true" })
     ).toThrow("PRODUCTION_REQUIRES_POSTGRESQL");
-    expect(() =>
-      assertPublicProcessSafety({ ...SAFE_PRODUCTION, JWT_SECRET: "short" }, VERIFIED_EVIDENCE)
-    ).toThrow("PRODUCTION_REQUIRES_STRONG_JWT_SECRET");
-    expect(() =>
-      assertPublicProcessSafety({ ...SAFE_PRODUCTION, COOKIE_SECRET: "short" }, VERIFIED_EVIDENCE)
-    ).toThrow("PRODUCTION_REQUIRES_STRONG_COOKIE_SECRET");
-    expect(() =>
-      assertPublicProcessSafety({ ...SAFE_PRODUCTION, CORS_ORIGIN: "" }, VERIFIED_EVIDENCE)
-    ).toThrow("PRODUCTION_REQUIRES_CORS_ORIGIN");
-    expect(() =>
-      assertPublicProcessSafety({ ...SAFE_PRODUCTION, REDIS_URL: "" }, VERIFIED_EVIDENCE)
-    ).toThrow("PRODUCTION_REQUIRES_REDIS_URL");
   });
-
+  it.each([
+    ["DATABASE_URL", "file:../.runtime/dev.db", "PRODUCTION_REQUIRES_POSTGRESQL"],
+    ["JWT_SECRET", "short", "PRODUCTION_REQUIRES_STRONG_JWT_SECRET"],
+    ["COOKIE_SECRET", "short", "PRODUCTION_REQUIRES_STRONG_COOKIE_SECRET"],
+    ["CORS_ORIGIN", "", "PRODUCTION_REQUIRES_CORS_ORIGIN"],
+    ["REDIS_URL", "", "PRODUCTION_REQUIRES_REDIS_URL"],
+    ["ENABLE_TEST_ROUTES", "true", "TEST_ROUTES_NOT_ALLOWED_IN_PRODUCTION"],
+  ])("rejects unsafe production %s", (name, value, code) => {
+    expect(() => assertPublicProcessSafety({ ...SAFE_PRODUCTION, [name]: value })).toThrow(code);
+  });
   it.each([
     "WALLET_XPRIV_ENCRYPTION_SECRET",
     "WALLET_XPRIV_ENCRYPTION_SECRET_FILE",

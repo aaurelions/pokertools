@@ -97,7 +97,14 @@ describe("PokerClient", () => {
 
   describe("tables", () => {
     it("getTables returns table list", async () => {
-      const tables = [{ id: "t1", name: "Table 1", config: {}, status: "ACTIVE" }];
+      const tables = [
+        {
+          id: "t1",
+          name: "Table 1",
+          config: { name: "Table 1", mode: "CASH", smallBlind: 5, bigBlind: 10, minBuyIn: 100 },
+          status: "ACTIVE",
+        },
+      ];
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({ tables }),
@@ -105,6 +112,24 @@ describe("PokerClient", () => {
 
       const result = await client.getTables();
       expect(result).toEqual(tables);
+    });
+
+    it("rejects table lists that do not match the public schema", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            tables: [
+              {
+                id: "t1",
+                name: "Table",
+                config: { smallBlind: 5, bigBlind: 10, privateKey: "unexpected" },
+                status: "ACTIVE",
+              },
+            ],
+          }),
+      });
+      await expect(client.getTables()).rejects.toThrow();
     });
 
     it("createTable returns tableId", async () => {

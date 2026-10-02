@@ -54,8 +54,8 @@ cp .env.example .env.production
 
 # Custody signing configuration (read ONLY by the custody service)
 cp deploy/.env.custody.example .env.custody
-#   Set TREASURY_SIGNING_KEYS_JSON to your per-chain treasury keys, or leave
-#   empty to run the worker in monitoring-only mode.
+#   Set TREASURY_SIGNING_KEYS_JSON to your per-chain treasury keys.
+#   Production refuses empty keys; monitoring-only is development/test only.
 chmod 600 .env.custody
 ```
 
@@ -76,7 +76,7 @@ npm run deploy:prod
 ```bash
 npm run deploy:prod:ps
 npm run deploy:prod:logs
-curl -k https://localhost/health
+curl --fail https://your-domain.example.com/ready
 ```
 
 ## Services
@@ -154,7 +154,7 @@ docker compose --env-file .env.production -f docker-compose.prod.yml exec backup
 Expected output on success:
 
 ```
-RESTORE TEST PASSED — all 32 core tables verified.
+RESTORE TEST PASSED — all required core tables verified.
 ```
 
 ### Run restore test on a schedule

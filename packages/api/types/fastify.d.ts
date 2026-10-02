@@ -53,7 +53,6 @@ declare module "fastify" {
      * unfreeze — there is no default-success path.
      */
     financialIncidentReadinessCheck?: IncidentReadinessCheck;
-    financialReadinessCheck?: IncidentReadinessCheck;
     authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
     requireOperator: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
     authorizeTable: (

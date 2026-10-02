@@ -4,8 +4,7 @@
 > actions, and EIP-712 withdrawal intents. The base entry works in the browser
 > and in Node.js without React; React hooks are optional at
 > `@pokertools/sdk/react`. `health()` validates the canonical liveness schema
-> but does not assert financial readiness. See the root convergence report for
-> current status.
+> but does not assert financial readiness. See the [architecture guide](../../docs/guide/architecture.md).
 
 [![npm version](https://img.shields.io/npm/v/@pokertools/sdk)](https://www.npmjs.com/package/@pokertools/sdk)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)

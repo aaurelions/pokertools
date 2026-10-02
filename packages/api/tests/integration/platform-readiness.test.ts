@@ -16,7 +16,7 @@ import {
  * Readiness is fail-closed. These tests exercise the real Prisma/migration
  * implementation against an isolated copy of the SQLite test database, and use
  * small in-memory probes only for the external operations (RPC quorum,
- * custody signer/gas, convergence acceptance) that live outside the API.
+ * custody signer/gas) that live outside the API.
  */
 
 const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -55,7 +55,6 @@ const healthyChain = { verifyQuorum: async () => ({ ok: true, code: "RPC_QUORUM_
 const healthyCustody: CustodyReadinessProbe = {
   checkReadiness: async () => ({ ready: true, gasReady: true, code: "CUSTODY_READY" }),
 };
-const openConvergence = { check: async () => ({ complete: true, code: "CONVERGENCE_ACCEPTED" }) };
 
 function makeService(overrides: Partial<PlatformReadinessOptions> = {}): PlatformReadinessService {
   return new PlatformReadinessService({
@@ -64,7 +63,6 @@ function makeService(overrides: Partial<PlatformReadinessOptions> = {}): Platfor
     queue: healthyQueue,
     chainQuorum: healthyChain,
     custody: healthyCustody,
-    convergence: openConvergence,
     nodeEnv: "test",
     databaseUrl: "file:readiness-test.db",
     migrations: new ManifestMigrationIntegrityProbe(prisma, {
@@ -163,24 +161,23 @@ describe("PlatformReadinessService", () => {
 
     expect(report.ready).toBe(true);
     expect(report.state).toBe("READY");
-    expect(report.checks).toHaveLength(15);
+    expect(report.checks).toHaveLength(14);
     expect(check(report, "database").state).toBe("READY");
     expect(check(report, "migrations").state).toBe("READY");
     expect(check(report, "ledger").state).toBe("READY");
-    expect(check(report, "convergence").state).toBe("READY");
     // Canonical financial sub-payload is READY with no blocking reasons.
     expect(report.financial.state).toBe("READY");
     expect(report.financial.reasons).toEqual([]);
   });
 
-  it("keeps the convergence gate closed by default even when everything else is healthy", async () => {
+  it("fails closed when a live dependency probe is missing", async () => {
     await applyMigration(BASE_FILE, BASE_HASH);
 
-    const report = await makeService({ convergence: undefined }).evaluate();
+    const report = await makeService({ redis: undefined }).evaluate();
 
     expect(report.ready).toBe(false);
     expect(report.state).toBe("BLOCKED");
-    expect(check(report, "convergence").detail).toBe("CONVERGENCE_INCOMPLETE");
+    expect(check(report, "redis").detail).toBe("PROBE_UNCONFIGURED");
   });
 
   it("fails closed on an unknown migration row", async () => {
@@ -403,7 +400,7 @@ describe("PlatformReadinessService", () => {
 
     expect(report.ready).toBe(false);
     expect(check(report, "freeze").state).toBe("NOT_READY");
-    expect(report.checks).toHaveLength(15);
+    expect(report.checks).toHaveLength(14);
   });
 
   it("bounds probe time and fails closed", async () => {

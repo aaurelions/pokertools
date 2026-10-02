@@ -42,16 +42,14 @@ const browserUnavailableReason = !playwright
     : null;
 
 if (browserUnavailableReason) {
-  console.warn(
+  throw new Error(
     `[browser-sdk-acceptance] BLOCKED: ${browserUnavailableReason} ` +
-      "Provide the dependency decision to the supervisor before installing. " +
+      "Install the declared dependencies and Chromium before acceptance. " +
       "Set POKERTOOLS_PLAYWRIGHT_MODULE=<path-to-playwright-package> to override."
   );
 }
 
-const describeBrowser = browserUnavailableReason ? describe.skip : describe;
-
-describeBrowser("built SDK in a real browser (loopback API)", () => {
+describe("built SDK in a real browser (loopback API)", () => {
   it("runs wallet auth, REST/WS gameplay, masking, live updates, reconnect resync and probes canonical observation/action", async () => {
     const app = await buildApp();
     const baseUrl = await app.listen({ host: "127.0.0.1", port: 0 });
@@ -169,7 +167,7 @@ describeBrowser("built SDK in a real browser (loopback API)", () => {
         expect(steps.wsJoin.previousStatesEmpty).toBe(true);
 
         if (steps.blocked) {
-          console.warn(
+          throw new Error(
             `[browser-sdk-acceptance] gameplay action path BLOCKED at ${steps.blocked.at}: ` +
               `${steps.blocked.detail}`
           );
@@ -199,7 +197,7 @@ describeBrowser("built SDK in a real browser (loopback API)", () => {
         // Canonical turn/observation/action contract (feature-probed).
         const canonical = steps.canonical;
         if (canonical.status === "BLOCKED") {
-          console.warn(
+          throw new Error(
             `[browser-sdk-acceptance] canonical observation/action BLOCKED: ` +
               `${canonical.reason} (httpStatus=${canonical.httpStatus ?? "n/a"})`
           );

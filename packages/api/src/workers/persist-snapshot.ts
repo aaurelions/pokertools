@@ -47,7 +47,7 @@ const worker = new Worker(
       console.log(`💾 Reconciled snapshot for table ${tableId} to version ${incomingVersion}`);
     }
   },
-  { connection: redis as any }
+  { connection: redis }
 );
 
 worker.on("failed", (job, err) => {

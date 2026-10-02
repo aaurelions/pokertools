@@ -193,6 +193,33 @@ describe("PostgreSQL-authoritative game CAS", () => {
     expect(rows[0].status).toBe("COMPLETED");
   });
 
+  it("refuses malformed persisted responses without reapplying the action", async () => {
+    const principals = ["sa-corrupt-a", "sa-corrupt-b"];
+    const { manager } = buildManager();
+    const tableId = await seedTable(manager, principals, "invalid-response");
+    const actor = await actingSeat(manager, tableId, principals);
+    const request: CanonicalActionRequest = {
+      requestId: "corrupt-response",
+      turnId: actor.turnId,
+      expectedVersion: actor.version,
+      actionId: actor.actionId,
+    };
+    await manager.submitCanonicalAction(tableId, actor.principalId, request);
+    // SQLite allows corruption injection; PostgreSQL audit constraints forbid
+    // editing committed requests. Validate on read as well as on write.
+    await prisma.gameActionRequest.update({
+      where: { tableId_requestId: { tableId, requestId: request.requestId } },
+      data: { response: { receipt: { tableId }, observation: {} } },
+    });
+    const before = await prisma.table.findUniqueOrThrow({ where: { id: tableId } });
+    await expect(
+      manager.submitCanonicalAction(tableId, actor.principalId, request)
+    ).rejects.toThrow();
+    const after = await prisma.table.findUniqueOrThrow({ where: { id: tableId } });
+    expect(after.stateVersion).toBe(before.stateVersion);
+    expect(after.eventSeq).toBe(before.eventSeq);
+  });
+
   it("treats a Redis failure after commit as a committed action and recovers the outbox", async () => {
     const principals = ["sa-redis-a", "sa-redis-b"];
     const downRedis = makeRedis({

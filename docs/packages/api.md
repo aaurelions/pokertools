@@ -1,6 +1,6 @@
 # @pokertools/api
 
-Scalable REST & WebSocket API built with Fastify, Redis, BullMQ and Prisma — SQLite by
+REST & WebSocket API built with Fastify, Redis, BullMQ and Prisma — SQLite by
 default for local development, PostgreSQL for production.
 
 ## Running locally
@@ -8,146 +8,154 @@ default for local development, PostgreSQL for production.
 ```bash
 # from the repo root
 npm install
-npm run dev:api        # Fastify server on :8080 (watch mode)
+npm run dev:api        # Fastify server (watch mode)
 npm run dev:workers    # BullMQ workers in watch mode
-npm run db:migrate     # Prisma migrations (SQLite by default)
+npm run db:migrate     # Prisma migrations
 npm run db:seed        # optional seed data
 ```
 
-Redis must be reachable at `REDIS_URL` (the API can auto-start a local Redis with
-`npm run infra:up`).
+The server binds `HOST`/`PORT` (default `0.0.0.0:3000`). Redis must be reachable
+at `REDIS_URL`; `npm run infra:up -w @pokertools/api` starts a local Redis.
 
 ## Architecture at a glance
 
-| Layer       | Technology                         | Responsibility                                                |
-| :---------- | :--------------------------------- | :------------------------------------------------------------ |
-| HTTP        | Fastify 5                          | REST endpoints, SIWE auth, rate limiting, OpenAPI (`/docs`)   |
-| Realtime    | `@fastify/websocket`               | State updates pushed to `pubsub:table:{tableId}`              |
-| Table state | Redis (JSON snapshot + `_version`) | Hot state with optimistic versioning                          |
-| Locks       | Redlock                            | Serialize actions per table                                   |
-| Persistence | Prisma 7                           | Accounts, ledger, payments, tournaments, tables, hand history |
-| Jobs        | BullMQ 6                           | Settlement, archiving, auto-dealing, timeouts, blinds         |
-| Validation  | Zod 4                              | Request/response schemas (shared with `@pokertools/types`)    |
+| Layer       | Technology                      | Responsibility                                              |
+| :---------- | :------------------------------ | :---------------------------------------------------------- |
+| HTTP        | Fastify 5                       | REST endpoints, SIWE auth, rate limiting, OpenAPI (`/docs`) |
+| Realtime    | `@fastify/websocket`            | Masked `OBSERVATION` frames to subscribed sockets           |
+| Table state | Redis (JSON snapshot + version) | Hot state with optimistic versioning                        |
+| Locks       | Redlock                         | Serialize actions per table                                 |
+| Persistence | Prisma 7                        | Accounts, atomic ledger, deposits, withdrawals, incidents   |
+| Jobs        | BullMQ 6                        | Settlement, archiving, auto-dealing, timeouts, blinds       |
+| Validation  | Zod 4                           | Request/response schemas (shared with `@pokertools/types`)  |
 
 ## REST endpoints
 
-| Area        | Method & path                          | Purpose                      |
-| :---------- | :------------------------------------- | :--------------------------- |
-| Auth        | `POST /auth/nonce`                     | SIWE nonce                   |
-| Auth        | `POST /auth/login`                     | SIWE session login           |
-| Auth        | `POST /auth/logout`                    | End session                  |
-| User        | `GET /user/me`                         | Profile                      |
-| Tables      | `GET /tables`                          | List visible tables          |
-| Tables      | `POST /tables`                         | Create a table               |
-| Tables      | `GET /tables/:id/state?since=`         | Masked state (delta-aware)   |
-| Tables      | `POST /tables/:id/action`              | Submit a client action       |
-| Tables      | `POST /tables/:id/buy-in`              | Cash buy-in                  |
-| Tables      | `POST /tables/:id/add-chips`           | Top up                       |
-| Tables      | `POST /tables/:id/stand`               | Leave table                  |
-| Tournaments | `GET /tournaments`                     | List                         |
-| Tournaments | `POST /tournaments`                    | Create                       |
-| Tournaments | `POST /tournaments/:id/register`       | Enter                        |
-| Tournaments | `POST /tournaments/:id/start`          | Kick off                     |
-| Tournaments | `POST /tournaments/:id/reconcile`      | Escrow/prize reconciliation  |
-| Tournaments | `POST /tournaments/:id/advance-blinds` | Manual level advance         |
-| Finance     | `GET /finance/chains`                  | Supported chains/tokens      |
-| Finance     | `POST /finance/deposit/start`          | Deposit session + address    |
-| Finance     | `GET /finance/deposit/address`         | Reuse deposit address        |
-| Finance     | `GET /finance/deposits`                | Deposit history              |
-| Finance     | `POST /finance/withdraw`               | Signed withdrawal request    |
-| Finance     | `GET /finance/withdrawals`             | Withdrawal history           |
-| Notes       | `GET/POST/PUT/DELETE /notes`           | Player notes (max 500 chars) |
-| Docs        | `GET /docs`                            | Swagger UI (OpenAPI)         |
+| Area        | Method & path                                 | Purpose                                     |
+| :---------- | :-------------------------------------------- | :------------------------------------------ |
+| Auth        | `POST /auth/nonce`                            | SIWE nonce                                  |
+| Auth        | `POST /auth/login`                            | SIWE session login                          |
+| Auth        | `GET /auth/me`                                | Current principal                           |
+| Auth        | `POST /auth/logout`                           | End session                                 |
+| Auth        | `POST /auth/service-credentials`              | Mint a scoped SERVICE credential (operator) |
+| Auth        | `GET /auth/service-credentials`               | List SERVICE credentials (operator)         |
+| Auth        | `POST /auth/service-credentials/:id/revoke`   | Revoke a SERVICE credential (operator)      |
+| User        | `GET /user/me`                                | Profile                                     |
+| User        | `GET /user/history`                           | Hand history                                |
+| Tables      | `GET /tables`                                 | List visible tables                         |
+| Tables      | `POST /tables`                                | Create a table                              |
+| Tables      | `GET /tables/:id?since=`                      | Masked state (delta-aware)                  |
+| Tables      | `POST /tables/:id/buy-in`                     | Cash buy-in                                 |
+| Tables      | `GET /tables/:id/observation`                 | Per-seat observation + legal actions        |
+| Tables      | `POST /tables/:id/action`                     | Submit a canonical action                   |
+| Tables      | `GET`/`POST /tables/:id/chat`                 | Table chat                                  |
+| Tables      | `GET /tables/:id/replay`                      | Hand replay                                 |
+| Tables      | `POST /tables/:id/add-chips`                  | Top up                                      |
+| Tables      | `POST /tables/:id/stand`                      | Leave table                                 |
+| Tournaments | `GET /tournaments`                            | List                                        |
+| Tournaments | `POST /tournaments`                           | Create                                      |
+| Tournaments | `GET /tournaments/:id`                        | Detail                                      |
+| Tournaments | `POST /tournaments/:id/register`              | Enter                                       |
+| Tournaments | `POST /tournaments/:id/start`                 | Kick off                                    |
+| Tournaments | `POST /tournaments/:id/advance-blinds`        | Manual level advance                        |
+| Tournaments | `POST /tournaments/:id/reconcile`             | Escrow/prize reconciliation                 |
+| Tournaments | `POST /tournaments/:id/settle`                | Settle payouts                              |
+| Finance     | `GET /finance/assets`                         | Public asset registry                       |
+| Finance     | `GET /finance/balances`                       | Canonical per-asset balances                |
+| Finance     | `POST /finance/withdrawals/intents`           | EIP-712 withdrawal submission               |
+| Finance     | `GET /finance/withdrawals`                    | Withdrawal history                          |
+| Finance     | `GET /finance/withdrawals/:id`                | Withdrawal detail                           |
+| Finance     | `POST /finance/deposits/claim`                | Claim an exact on-chain deposit log         |
+| Finance     | `GET /finance/deposits/:id`                   | Deposit claim detail                        |
+| Finance     | `GET /finance/incidents`                      | List financial incidents (operator)         |
+| Finance     | `POST /finance/incidents/:id/resolve`         | Resolve an incident (operator)              |
+| Finance     | `POST /finance/assets/:assetId/freeze`        | Freeze an asset route (operator)            |
+| Chips       | `POST /chips/grant`                           | Operator chip grant                         |
+| Notes       | `POST /notes`                                 | Save/update a player note                   |
+| Notes       | `GET /notes` · `GET /notes/:targetId`         | Read notes                                  |
+| Notes       | `DELETE /notes/:targetId`                     | Delete a note                               |
+| Ops         | `GET /health` · `GET /ready` · `GET /metrics` | Liveness, readiness, metrics                |
+| Docs        | `GET /docs`                                   | Swagger UI (OpenAPI)                        |
 
 ::: tip Idempotency
-Mutating endpoints accept an `Idempotency-Key` header (or body key). Combined with the
-SDK's retry policy, this makes replaying requests safe.
+Retry only operations with stable domain identity: gameplay uses `requestId`
+plus turn/version/action identity, and finance uses deposit log or withdrawal
+intent identity. An arbitrary header does not make every mutation retryable.
 :::
 
 ## Workers & queues
 
-| Queue               | Worker                           | Effect                                                                                      |
-| :------------------ | :------------------------------- | :------------------------------------------------------------------------------------------ |
-| `settle-hand`       | prisma ledger settlement         | Applies awards − investments per player; **rejects unbalanced batches** (deltas + rake ≠ 0) |
-| `archive-hand`      | prisma `handHistory.upsert`      | Persists `HandHistory` — stable `jobId` and upsert tolerate retries                         |
-| `next-hand`         | engine DEAL via `GameManager`    | Auto-deals the next hand with a version check under the table lock                          |
-| `persist-snapshot`  | redis → prisma                   | Database fallback for table state                                                           |
-| `player-timeout`    | engine TIMEOUT via `GameManager` | Folds/checks timed-out players; stale versions are rejected                                 |
-| `tournament-blinds` | blind scheduler                  | Advances blind levels for running tournaments                                               |
+| Queue               | Worker                           | Effect                                                               |
+| :------------------ | :------------------------------- | :------------------------------------------------------------------- |
+| `settle-hand`       | prisma ledger settlement         | Applies awards − investments per player; rejects unbalanced batches  |
+| `archive-hand`      | prisma `handHistory.upsert`      | Persists `HandHistory` — stable `jobId` + upsert tolerate retries    |
+| `next-hand`         | engine DEAL via `GameManager`    | Auto-deals the next hand under the table lock                        |
+| `persist-snapshot`  | redis → prisma                   | Database fallback for table state                                    |
+| `player-timeout`    | engine TIMEOUT via `GameManager` | Folds/checks timed-out players; stale versions are rejected          |
+| `tournament-blinds` | blind scheduler                  | Advances blind levels for running tournaments (repeatable scheduler) |
+| `reconciliation`    | ledger reconciliation            | Periodic financial reconciliation (repeatable scheduler)             |
+
+Two more maintenance loops run in the worker process: the game-outbox sweep
+re-drives pending/failed side-effect intents from PostgreSQL, and the canonical
+deposit monitor observes direct-treasury deposits. Both retry on transient
+failures and fail closed.
 
 Scheduled actions (timeout, auto-deal, blinds) run through the **same**
 `GameManager.processAction` path as player actions: table lock → version check →
-engine transition → persist → schedule effects → broadcast. Lock contention fails the job
-so BullMQ retries it.
+engine transition → persist → schedule effects → broadcast.
 
 ## Environment variables
 
-| Variable                         | Default                  | Purpose                         |
-| :------------------------------- | :----------------------- | :------------------------------ |
-| `PORT`                           | `8080`                   | HTTP port                       |
-| `NODE_ENV`                       | `development`            | `test` enables test routes      |
-| `REDIS_URL`                      | `redis://localhost:6379` | Redis for state, queues, locks  |
-| `DATABASE_URL`                   | `file:./prisma/dev.db`   | SQLite path or `postgresql://…` |
-| `JWT_SECRET` / `COOKIE_SECRET`   | —                        | Session signing                 |
-| `ALLOWED_SIWE_CHAIN_IDS`         | `1,31337`                | Accepted SIWE chains            |
-| `DEFAULT_CURRENCY`               | `USDC`                   | Ledger currency                 |
-| `MAX_WITHDRAWAL_AMOUNT_CENTS`    | `1000000`                | Withdrawal ceiling              |
-| `TABLE_REDIS_TTL_SECONDS`        | `86400`                  | Hot-state expiry                |
-| `TABLE_LOCK_TTL_MS`              | `10000`                  | Redlock TTL                     |
-| `ACTION_TIMEOUT_SECONDS`         | `30`                     | Player action timer             |
-| `RATE_LIMIT_MAX`                 | `100`                    | General rate limit              |
-| `AUTH_NONCE_RATE_LIMIT_MAX`      | `5`                      | Nonce endpoint limit            |
-| `AUTH_LOGIN_RATE_LIMIT_MAX`      | `10`                     | Login endpoint limit            |
-| `DEPOSIT_MONITOR_INTERVAL_MS`    | `15000`                  | Deposit scan cadence            |
-| `TOURNAMENT_BLIND_INTERVAL_MS`   | `900000`                 | Level duration                  |
-| `WALLET_XPRIV_ENCRYPTION_SECRET` | —                        | HD wallet seed encryption       |
+| Variable                       | Default                  | Purpose                         |
+| :----------------------------- | :----------------------- | :------------------------------ |
+| `PORT` / `HOST`                | `3000` / `0.0.0.0`       | HTTP bind                       |
+| `NODE_ENV`                     | `development`            | `test` + `ENABLE_TEST_ROUTES`   |
+| `REDIS_URL`                    | `redis://localhost:6379` | Redis for state, queues, locks  |
+| `DATABASE_URL`                 | — (required)             | SQLite path or `postgresql://…` |
+| `JWT_SECRET` / `COOKIE_SECRET` | — (required)             | Session signing                 |
+| `ALLOWED_SIWE_CHAIN_IDS`       | `1,31337`                | Accepted SIWE chains            |
+| `ENABLE_TEST_ROUTES`           | `false`                  | Opt in to test-only routes      |
+| `METRICS_TOKEN`                | `""`                     | Required for `/metrics` in prod |
+| `SESSION_TTL_SECONDS`          | `604800`                 | Session lifetime                |
+| `TABLE_REDIS_TTL_SECONDS`      | `86400`                  | Hot-state expiry                |
+| `TABLE_LOCK_TTL_MS`            | `10000`                  | Redlock TTL                     |
+| `ACTION_TIMEOUT_SECONDS`       | `30`                     | Player action timer             |
+| `TOURNAMENT_BLIND_INTERVAL_MS` | `900000`                 | Level duration                  |
+| `RECONCILIATION_INTERVAL_MS`   | `300000`                 | Reconciliation cadence          |
+| `RATE_LIMIT_MAX`               | `100`                    | General rate limit              |
+
+`CORS_ORIGIN`, `LOG_LEVEL` and the `RISK_*` scoring parameters are also
+configurable; see `src/config.ts` for the full validated set.
 
 ## WebSockets
 
-Clients connect to `/ws` with a `token` query parameter or header, then subscribe to
-tables. The server publishes:
+Clients connect to `/ws/play`. The session token is read from the `token` cookie
+or the `sec-websocket-protocol: jwt.<token>` header. On every observation send the
+credential is revalidated, so a revoked session or SERVICE credential stops
+delivery immediately.
 
-```json
-{
-  "type": "STATE_UPDATE",
-  "tableId": "table_abc",
-  "version": 42,
-  "timestamp": 1760000000000
-}
-```
+Client messages (defined in `@pokertools/types`):
 
-The SDK reacts to `STATE_UPDATE` by refreshing the masked state for that version — private
-cards never travel over the socket.
+| Message | Payload                   | Server response                     |
+| :------ | :------------------------ | :---------------------------------- |
+| `JOIN`  | `{ tableId, requestId? }` | full masked `OBSERVATION` (+ `ACK`) |
+| `PING`  | `{ requestId }`           | `PONG`                              |
+| `LEAVE` | `{ tableId, requestId? }` | `ACK`                               |
 
-### Subscribing without the SDK
-
-Wire protocol (defined in `@pokertools/types`): the client sends `JOIN` and receives a
-full **SNAPSHOT**, then receives lightweight **STATE_UPDATE** notifications; `PING`/`PONG`
-and `LEAVE` round out the client side.
-
-```bash
-# wscat
-wscat -c "wss://api.example.com/ws?token=$SESSION_TOKEN" \
-  -x '{"type":"JOIN","tableId":"table_abc","requestId":"r1"}'
-```
+The `OBSERVATION` frame is the same authoritative, per-viewer masked boundary the
+HTTP `GET /tables/:id/observation` route returns; private hole cards never travel
+to another seat. Actions are submitted over HTTP `POST /tables/:id/action` with
+`{ requestId, turnId, expectedVersion, actionId, amount? }`.
 
 ```ts
-// Node.js 22+ — native WebSocket client
-const ws = new WebSocket(`wss://api.example.com/ws?token=${token}`);
-const tableId = "table_abc";
-
-ws.onopen = () => ws.send(JSON.stringify({ type: "JOIN", tableId, requestId: "r1" }));
+// Node.js 22+ — native WebSocket, native protocol
+const ws = new WebSocket("wss://api.example.com/ws/play", ["jwt." + token]);
+ws.onopen = () => ws.send(JSON.stringify({ type: "JOIN", tableId: "table_abc", requestId: "r1" }));
 ws.onmessage = (event) => {
   const frame = JSON.parse(event.data as string);
-  if (frame.type === "SNAPSHOT") {
-    console.log("joined", frame.tableId, "at version", frame.version);
-  } else if (frame.type === "STATE_UPDATE") {
-    // Fetch the masked state for frame.version via GET /tables/:id/state
-  } else if (frame.type === "ERROR") {
-    console.error(frame.code, frame.message);
-  }
+  if (frame.type === "OBSERVATION") console.log("observation", frame.observation);
+  else if (frame.type === "ERROR") console.error(frame.code, frame.message);
 };
-
 setInterval(
   () => ws.send(JSON.stringify({ type: "PING", requestId: crypto.randomUUID() })),
   15_000
@@ -158,50 +166,53 @@ setInterval(
 
 ```bash
 # 1. Get a SIWE nonce
-curl -s http://localhost:8080/auth/nonce | jq
+curl -s http://localhost:3000/auth/nonce | jq
 
 # 2. Login (message + signature from the SDK's createSiweMessage / wallet)
-curl -s -X POST http://localhost:8080/auth/login \
+curl -s -X POST http://localhost:3000/auth/login \
   -H "Content-Type: application/json" \
   -d '{"message":"...siwe message...","signature":"0x..."}' \
   | jq -r '.token' > /tmp/token
 
-# 3. Act on a table (mutation — send an idempotency key so retries are safe)
-curl -s -X POST http://localhost:8080/tables/table_abc/action \
+# 3. Observe a table, then act (mutation — send an idempotency key so retries are safe)
+curl -s -X POST http://localhost:3000/tables/table_abc/action \
   -H "Authorization: Bearer $(cat /tmp/token)" \
   -H "Idempotency-Key: $(uuidgen)" \
   -H "Content-Type: application/json" \
-  -d '{"type":"RAISE","amount":60,"playerId":"your-user-id"}' \
-  | jq '.street, .actionTo'
+  -d '{"requestId":"r1","turnId":"t1","expectedVersion":1,"actionId":"CALL"}' \
+  | jq '.receipt, .observation'
 ```
 
 ## Testing the API
 
 ```bash
-npm run test -w @pokertools/api    # prisma db push + Redis auto-start + vitest
+npm run test -w @pokertools/api    # ensure-db + Redis auto-start + vitest
 ```
 
-The suite covers routes, ledger integrity, worker jobs, locking/version guards,
-scheduled-action regressions and broadcast refunds — all against a disposable SQLite
-database and a loopback Redis instance. CI adds Foundry and a Postgres-compatible Redis
-service on Ubuntu.
+The suite runs against a disposable SQLite database and a loopback Redis
+instance, covering routes, ledger integrity, worker jobs, locking/version guards
+and scheduled actions. The canonical gameplay/recovery acceptance harness runs
+against real PostgreSQL + Redis with `npm run test:canonical -w @pokertools/api`.
 
 ## Source layout
 
-| Path                   | Contains                                                                    |
-| :--------------------- | :-------------------------------------------------------------------------- |
-| `src/routes/*`         | Fastify route plugins (auth, tables, tournaments, finance, notes, user, ws) |
-| `src/services/*`       | GameManager, tournament manager, notes manager, blockchain service          |
-| `src/workers/*`        | BullMQ workers (settle, archive, next-hand, timeout, persist, blinds)       |
-| `src/plugins/*`        | Fastify plugins (queues, redis, auth, rate limits, swagger)                 |
-| `prisma/schema.prisma` | Database schema                                                             |
-| `tests/`               | Vitest integration + unit suites                                            |
+| Path                   | Contains                                                                               |
+| :--------------------- | :------------------------------------------------------------------------------------- |
+| `src/routes/*`         | Fastify route plugins (auth, tables, tournaments, user, ws, finance, notes, chips)     |
+| `src/services/*`       | GameManager, ledger, financial intents/incidents, chain registry                       |
+| `src/workers/*`        | BullMQ workers (settle, archive, next-hand, timeout, persist, blinds, deposit monitor) |
+| `src/plugins/*`        | Fastify plugins (queues, redis, auth, rate limits, swagger)                            |
+| `prisma/schema.prisma` | Database schema                                                                        |
+| `tests/`               | Vitest integration + unit suites and acceptance harnesses                              |
 
 ## Database
 
-- **SQLite** — default for local dev and the test suite (`.runtime/test.db`)
-- **PostgreSQL** — production; required by `docker-compose.prod.yml`
+- **SQLite** — default for local dev and the unit suite
+- **PostgreSQL** — production; also used by the acceptance harnesses
 
 Prisma schema lives in `packages/api/prisma/schema.prisma`. Key models: `User`,
-`Account` (`MAIN`, `IN_PLAY`, `PENDING_WITHDRAWAL`, `HOUSE_RESERVE`), `LedgerEntry`,
-`PaymentTransaction`, `Table`, `Tournament`, `HandHistory`, `PlayerNote`.
+`Asset`, `AtomicAccount`, `JournalTransaction`/`JournalPosting`,
+`DepositClaimRecord`, `WithdrawalIntentRecord`, `FinancialIncident`, `Table`,
+`Tournament`, `HandHistory`, `PlayerNote`. Atomic account classes: `USER_AVAILABLE`,
+`IN_PLAY_RESERVE`, `TOURNAMENT_RESERVE`, `PENDING_WITHDRAWAL`, `TREASURY_RESERVE`,
+`OPERATOR`, `INCIDENT_OBLIGATION`.

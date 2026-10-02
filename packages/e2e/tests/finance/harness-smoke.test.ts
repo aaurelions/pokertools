@@ -189,7 +189,7 @@ describe("finance acceptance harness (real infrastructure)", () => {
       verifyingContract,
     });
 
-    // Exact field list/order required by the supervisor spec.
+    // EIP-712 field order is part of the signed protocol.
     expect(WITHDRAWAL_INTENT_EIP712_FIELDS.map((f) => `${f.name}:${f.type}`)).toEqual([
       "intentId:string",
       "principalId:string",

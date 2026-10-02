@@ -16,17 +16,17 @@ Be respectful and constructive in all interactions. We're all here to build grea
 - npm 10.x or higher
 - Git
 - Docker (for Redis-backed local services and Docker E2E tests)
-- Foundry (for admin contract tests and E2E blockchain flows)
+- Foundry (for custody contract tests and E2E blockchain flows)
 
 ### Setup Development Environment
 
 ```bash
 # Clone the repository
-git clone https://github.com/aaurelions/pokertools.git
+git clone --recurse-submodules https://github.com/aaurelions/pokertools.git
 cd pokertools
 
 # Install dependencies
-npm install
+npm ci
 
 # Build all packages
 npm run build
@@ -35,7 +35,7 @@ npm run build
 npm test
 ```
 
-For API/admin work, copy the relevant example environment files before starting services:
+For API/custody work, copy the relevant example environment files before starting services:
 
 ```bash
 cp packages/api/.env.example packages/api/.env
@@ -130,7 +130,7 @@ npm test -w @pokertools/evaluator
 npm test -- --watch
 
 # Run specific test file
-npm test -- pokerRulesSpec.test.ts
+npm test -w @pokertools/engine -- tests/integration/poker-rules-spec.test.ts
 ```
 
 Some service tests require local infrastructure. Use package-specific scripts when needed:
@@ -139,7 +139,7 @@ Some service tests require local infrastructure. Use package-specific scripts wh
 # API tests with Redis lifecycle managed by package scripts
 npm run test:stand-alone -w @pokertools/api
 
-# Admin lifecycle test prerequisites include Foundry contracts and API DB preparation
+# Custody workflow tests use API DB preparation; contracts require Foundry
 npm test -w @pokertools/custody
 
 # Docker-based full-stack E2E suite
@@ -185,9 +185,14 @@ describe('Feature Name', () => {
 
 ### Test Coverage
 
-- Aim for >90% code coverage
+- Preserve package-level coverage gates; see [testing](docs/guide/testing.md)
 - Test edge cases and error conditions
 - Include property-based tests for complex logic
+
+Shared wire contracts belong in `@pokertools/types`; private ports remain with
+their domain. Preserve [dependency directions](docs/guide/architecture.md).
+Run focused tests for local edits, then infrastructure acceptance for changes
+to persistence, finance, custody or public protocols. Coverage is not acceptance.
 
 ## Code Style
 
@@ -267,6 +272,21 @@ Do not add placeholders, TODO-only sections, undocumented claims, generated benc
 - [ ] Follows code style guidelines
 
 ## Releasing
+
+### Dependency policy
+
+Use stable mutually compatible versions, not prerelease dist-tags or forced
+peer overrides. TypeScript 6 is retained because the supported tsup/ts-node
+compiler API and typescript-eslint peer range do not support native TS7.
+Prisma 7 and Redlock 4 are the stable lines; their newer dist-tags are RC/beta.
+Stable VitePress 1 requires markdown-it-mathjax3 4. Recheck these constraints
+before upgrading, rather than changing versions solely to clear `outdated`.
+
+The Prisma CLI dependency graph has known high advisories. Do not suppress
+them or treat a lockfile audit as runtime proof: Docker prunes CLI/config
+packages, and `node scripts/test-runtime-dependencies.mjs <image>` verifies
+their absence and the generated PostgreSQL client in the actual artifact.
+Keep build tooling and documentation development servers private.
 
 Releases are handled by maintainers:
 

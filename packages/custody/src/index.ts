@@ -4,10 +4,7 @@ import { createPrismaClient } from "./utils/prisma-client.js";
 import { buildCustodyRuntime } from "./runtime.js";
 
 /**
- * Canonical custody entrypoint.
- *
- * Starts the canonical withdrawal worker only. The legacy Telegram operator
- * bot and its unsafe payout paths have been removed from the custody package.
+ * Private withdrawal-worker entrypoint. No public HTTP or gameplay authority.
  */
 const logger = pino({
   level: config.LOG_LEVEL,
@@ -18,13 +15,10 @@ const logger = pino({
 });
 
 function main(): void {
-  logger.info("Starting canonical custody worker...");
+  logger.info("Starting custody worker...");
 
   const prisma = createPrismaClient({
-    log:
-      config.NODE_ENV === "development"
-        ? [{ emit: "stdout", level: "error" }]
-        : [{ emit: "stdout", level: "error" }],
+    log: [{ emit: "stdout", level: "error" }],
   });
 
   void buildCustodyRuntime({
@@ -54,7 +48,7 @@ function main(): void {
     .catch((error) => {
       logger.error(
         { error: error instanceof Error ? error.message : String(error) },
-        "Failed to start canonical custody worker"
+        "Failed to start custody worker"
       );
       process.exit(1);
     });

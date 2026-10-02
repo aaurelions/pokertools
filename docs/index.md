@@ -39,8 +39,8 @@ features:
     details: Fastify REST + WebSocket, Redis-backed table state, BullMQ workers and Prisma persistence (SQLite or PostgreSQL).
     link: /packages/api
   - icon: 🛡️
-    title: Blockchain Admin
-    details: HD wallets, ERC-2612 permit sweeps, withdrawal broadcasting, gas monitoring and Telegram approvals.
+    title: Isolated Custody Worker
+    details: Per-chain treasury signing, multi-RPC quorum, persist-before-broadcast and treasury reconciliation — keys never reach the API.
     link: /packages/custody
 ---
 
@@ -49,13 +49,13 @@ features:
 Everything a real-money poker platform needs, in one versioned monorepo — from the
 ==pure game logic== to the blockchain settlement layer:
 
-| Capability              | Highlights                                                                                                            |
-| :---------------------- | :-------------------------------------------------------------------------------------------------------------------- |
-| **Rules correctness**   | TDA-43/47 raise rules, side pots, odd-chip distribution, rake caps, tournament blind structures, time banks           |
-| **Security**            | Masked public views (no hole cards, deck _or_ undo history), SIWE auth, claim-once refunds, `onlyOwner` permit sweeps |
-| **Financial integrity** | Double-entry ledger, balanced settlement batches, tournament escrow, idempotent workers                               |
-| **Performance**         | Integer lookup-table evaluator: **~17M hands/sec**, zero-allocation hot path                                          |
-| **Deployment**          | Docker Compose, GitHub Actions, GitHub Pages docs, npm provenance publishing                                          |
+| Capability              | Highlights                                                                                                                             |
+| :---------------------- | :------------------------------------------------------------------------------------------------------------------------------------- |
+| **Rules correctness**   | TDA-43/47 raise rules, side pots, odd-chip distribution, rake caps, tournament blind structures, time banks                            |
+| **Security**            | Masked public views (no hole cards or deck), SIWE auth, EIP-712 withdrawal intents, multi-RPC quorum, no-automatic-replacement signing |
+| **Financial integrity** | Double-entry ledger, balanced settlement batches, tournament escrow, idempotent workers                                                |
+| **Performance**         | Integer lookup-table evaluator: **~17M hands/sec**, zero-allocation hot path                                                           |
+| **Deployment**          | Docker Compose, GitHub Actions, GitHub Pages docs, npm provenance publishing                                                           |
 
 ## Quick start
 
@@ -66,7 +66,7 @@ git clone https://github.com/aaurelions/pokertools.git
 cd pokertools
 npm install
 npm run build
-npm test                        # 1 059 tests + 5 contract tests
+npm test                        # full monorepo suite
 ```
 
 ```ts [Score a hand]
@@ -117,7 +117,7 @@ Every example above is expanded with tables and API references on its package pa
 | [@pokertools/engine](/packages/engine)       | Immutable Texas Hold'em state machine             | ✅ npm    |
 | [@pokertools/sdk](/packages/sdk)             | HTTP + WebSocket client and React 19 hooks        | ✅ npm    |
 | [@pokertools/api](/packages/api)             | Fastify REST/WS API, Redis state, BullMQ, Prisma  | 🐳 Docker |
-| [@pokertools/custody](/packages/custody)     | Private custody worker                            | 🐳 Docker |
+| [@pokertools/custody](/packages/custody)     | Isolated withdrawal signer and reconciliation     | 🐳 Docker |
 | [@pokertools/bench](/packages/bench)         | Evaluator/API/worker/socket benchmarks            | local     |
 | [@pokertools/e2e](/packages/e2e)             | Docker + Anvil end-to-end scenarios               | local     |
 
@@ -127,15 +127,14 @@ Every example above is expanded with tables and API references on its package pa
 | :---------------------------------------- | :------------------------------------------------------------ |
 | [Getting Started](/guide/getting-started) | Requirements, install, scripts, first steps per package       |
 | [Architecture](/guide/architecture)       | Component map, hand lifecycle, concurrency model, security    |
+| [Testing & Coverage](/guide/testing)      | Runners, coverage gates, acceptance prerequisites, CI wiring  |
 | [Deployment](/deployment)                 | Docker production, GitHub Actions, backups, release checklist |
-| [Engine Review](/ENGINE_REVIEW)           | 2026 correctness review with regression coverage              |
 
 ## Project stats
 
 | Metric               | Value                        |
 | :------------------- | :--------------------------- |
 | Workspaces           | 8 npm packages               |
-| Tests                | 1 059 passing (+ 5 Solidity) |
 | Evaluator throughput | ~17M hands/sec               |
 | Language             | TypeScript 6.0, Solidity 0.8 |
 | License              | MIT                          |

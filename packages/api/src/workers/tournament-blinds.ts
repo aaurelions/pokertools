@@ -3,6 +3,7 @@ import { Redis } from "ioredis";
 import Redlock from "redlock";
 import { config } from "../config.js";
 import { GameManager } from "../services/game-manager.js";
+import { asRedlockClient } from "../utils/redis-compatibility.js";
 import { createPrismaClient } from "../utils/prisma-client.js";
 import { PrismaClient } from "../../generated/prisma/index.js";
 import type { Action } from "@pokertools/engine";
@@ -54,14 +55,14 @@ export async function scanAndAdvanceTournamentBlinds(
 
   if (runningTournaments.length === 0) return { advanced, skipped };
 
-  const redlock = new Redlock([redis as unknown as Redlock.CompatibleRedisClient], {
+  const redlock = new Redlock([asRedlockClient(redis)], {
     driftFactor: 0.01,
     retryCount: 1,
     retryDelay: 50,
   });
 
   const jobQueues = Object.fromEntries(
-    gameQueueNames.map((name) => [name, new Queue(name, { connection: redis as any })])
+    gameQueueNames.map((name) => [name, new Queue(name, { connection: redis })])
   ) as JobQueues;
 
   const gameManager = new GameManager(redis, redlock, jobQueues, prisma);
@@ -177,7 +178,7 @@ export function createTournamentBlindsWorker(
       await scanAndAdvanceTournamentBlinds(prisma, redis, logger);
     },
     {
-      connection: redis as any,
+      connection: redis,
       limiter: {
         max: 1,
         duration: 1000,

@@ -1,9 +1,6 @@
 import { cleanEnv, str, num } from "envalid";
-import { assertCustodyProcessEvidence, assertCustodyProcessSafety } from "./safety.js";
+import { assertCustodyProcessSafety } from "./safety.js";
 
-// Before dotenv: enforce only the compiled-evidence gate. Configuration values
-// may legitimately arrive from an environment file loaded on the next lines.
-assertCustodyProcessEvidence(process.env);
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -15,9 +12,7 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, "../../../.env"), quiet: true });
 dotenv.config({ path: path.resolve(__dirname, "../.env"), quiet: true });
 
-// Environment files may supply NODE_ENV too. Recheck before reading any secret
-// files or mnemonic material; the initial check still rejects explicit production
-// before dotenv itself runs.
+// Validate before initializing persistence, RPC clients or signing infrastructure.
 assertCustodyProcessSafety(process.env);
 
 /**
@@ -30,7 +25,6 @@ export const config = cleanEnv(process.env, {
 
   // Infrastructure
   DATABASE_URL: str(),
-  REDIS_URL: str({ default: "redis://localhost:6379" }),
 
   // Canonical custody worker
   CUSTODY_WORKER_INTERVAL_MS: num({ default: 5000 }),

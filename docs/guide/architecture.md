@@ -1,54 +1,120 @@
 # Architecture
 
-## Component map
+## Ownership
 
-| Component               | Role and execution path                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| :---------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@pokertools/types`     | Domain state, actions, players, pots, configuration, API DTOs, WebSocket messages, Zod schemas, client action whitelist. Defines the contracts between all other packages.                                                                                                                                                                                                                                                                                                                                                                                |
-| `@pokertools/evaluator` | Encodes each card as `rank × 4 + suit`. A suit hash detects flushes; otherwise a quinary rank-frequency hash indexes precomputed tables. Smaller scores are stronger hands. The fast integer API assumes valid, distinct card codes.                                                                                                                                                                                                                                                                                                                      |
-| `@pokertools/engine`    | `PokerEngine` wraps `gameReducer`. Actions are validated, dispatched to handlers, followed by pot collection, street progression, showdown and integrity checks. Blinds, heads-up order, short raises, uncalled returns, side pots, odd chips and rake are separate rules. State snapshots convert `Map`s into JSON-compatible objects; public views mask private cards.                                                                                                                                                                                  |
-| `@pokertools/sdk`       | Typed HTTP client, authenticated WebSocket transport, request correlation, state/version caches, reconnection, and React providers/hooks. HTTP and WebSocket authentication stay consistent when tokens change.                                                                                                                                                                                                                                                                                                                                           |
-| `@pokertools/api`       | Fastify authenticates SIWE sessions, validates client actions and permissions, exposes tables/tournaments/finance/notes and serves WebSocket subscriptions. `GameManager` restores the engine from Redis with a database fallback, locks a table, applies an action, uses a Redis version check, persists the snapshot, schedules effects and broadcasts a version update. Prisma holds accounts, ledger entries, payments, tournaments and history. BullMQ processes settlement, archives, dealing, timeouts, deposits, blind timers and reconciliation. |
-| `@pokertools/custody`   | Private signing, HD wallet access, nonce coordination, sweeps, receipt monitoring, recovery scans and gas monitoring. Telegram is an operator adapter.                                                                                                                                                                                                                                                                                                                                                                                                    |
+`types` owns environment-independent domain models and shared public schemas;
+wire types are inferred from runtime schemas. Private persistence, worker and
+signer ports remain with their domains. `evaluator` ranks hands; `engine` owns
+deterministic poker rules and never imports database, network or custody code.
+`sdk` consumes public contracts, not API internals; React is a separate export.
 
-## Normal hand lifecycle
+The API owns principals, seats, durable gameplay and accounting. Custody is a
+private executable with no room or HTTP authority. It consumes exported,
+key-free `@pokertools/api/finance-core` accounting/chain-reading adapters and
+`@pokertools/api/database`. This dependency is one-way: the API cannot import
+signing code. E2E fault-injection seams are not application APIs.
+`npm run check:boundaries` enforces these source/manifest directions.
 
-1. **Buy-in / entry** — the API transfers a cash buy-in from `MAIN` to `IN_PLAY` and seats the player. Tournament entry funds tournament escrow and gives the entrant tournament chips.
-2. **DEAL** — creates the deck, resets per-hand state, collects antes as dead money, posts live blinds into a separate pot and selects the first actor.
-3. **Betting** — reduces stacks and records investments. At the end of a round, uncalled chips are returned, investments form side pots and the next street is dealt.
-4. **Showdown** — a final fold awards the uncontested pot; otherwise the evaluator determines each pot's winners, applies the hand rake cap and distributes odd chips by position.
-5. **Settlement** — cash settlement records each player's total award minus their total investment; player changes plus rake must sum to zero. Tournament payouts use tournament accounting instead.
-6. **Effects** — the API archives the hand, schedules the next hand and sends masked state to clients. Scheduled actions use the same orchestration path as player actions.
+## Game action flow
 
-## Raise rules (TDA 43 / 47)
+1. SDK authenticates a WALLET session or scoped SERVICE credential.
+2. API authorizes principal, resource and persisted seat before processing.
+3. Caller submits `{requestId, turnId, expectedVersion, actionId, amount?}` from
+   a server observation. Callers cannot select an actor or manufacture legality.
+4. Engine validates/reduces the authoritative snapshot. PostgreSQL CAS commits
+   snapshot/version, action identity, ordered immutable events, stored response
+   and transactional outbox together.
+5. Outbox mirrors committed state to Redis and delivers queue/socket effects.
+   Delivery is retryable; Redis failure cannot undo or falsely reject a commit.
 
-| Scenario          | Rule                                                                                                                                       |
-| :---------------- | :----------------------------------------------------------------------------------------------------------------------------------------- |
-| Normal raise      | The next minimum raise-to total is `amount + full raise increment`.                                                                        |
-| Incomplete all-in | The all-in does not reopen betting for players who have already acted _unless_ the short raise is a full raise relative to them.           |
-| Minimum increment | A raise must be at least the size of the previous full raise; a short opening bet never lowers the increment below the big blind.          |
-| Reopening         | Reopening is evaluated per player who has already acted (including prior callers); multiple short all-ins can cumulatively reopen betting. |
-| CALL alias        | `BET` matching the current wager is normalized to `CALL` by the reducer.                                                                   |
-| Preflop minimum   | The first raise must be to at least `big blind × 2` (wager + big blind).                                                                   |
+Duplicate requests return their stored result only when principal and complete
+payload match. Authorization precedes replay. Timeout and player actions compete
+against the same durable version. Tournament movements preserve seat authority
+and ordered transitions. Redis locks aid coordination, never replace DB authority.
 
-## Concurrency & persistence
+Public observations/replay contain masked views only: never another seat's
+unrevealed cards, deck, undo history or raw snapshots/actions. Private audit
+state is a distinct access boundary. Engine chips are safe integers, not currency.
 
-```text
-Client ──► Fastify ──► GameManager ──► Redlock (table lock)
-                │            │
-                │            ├──► Redis   table:{tableId}  (JSON snapshot + _version)
-                │            ├──► Prisma  tables, accounts, ledger, history
-                │            └──► BullMQ  settle-hand, archive-hand, next-hand, ...
-                └──► WebSocket publish  pubsub:table:{tableId}
-```
+## Principals
 
-- Table state is a JSON snapshot in Redis with an optimistic `_version` guard; scheduled actions (timeout, auto-deal) verify the version **while holding the table lock**.
-- Lock contention makes a job fail so BullMQ retries, instead of silently dropping the operation.
-- Redis commits, database persistence and queue effects are separate transactions; stable job IDs and idempotent workers make effects repeatable.
+WALLET principals use SIWE and revocable database-backed sessions. SERVICE
+credentials are opaque random bearers stored by digest, scoped by resource and
+expiry. Both use the same gameplay protocol. SERVICE gameplay authority grants
+neither withdrawals nor operator privileges; fake wallets are unnecessary.
+HTTP and WebSocket revalidate authorization, including revocation.
 
-## Security model
+## Accounting
 
-- Public engine views strip private cards, the deck **and** undo-history snapshots.
-- Client actions are whitelisted (`ActionType` allow-list) and validated both in the engine and the API.
-- `BatchSweeper.batchSweep` is `onlyOwner` — permits cannot redirect funds to an attacker.
-- Settlement batches must balance to zero (player deltas + rake); refunds claim-once inside a transaction and reverse recorded reserve entries exactly.
+Asset identity binds chain and token. Atomic amounts are arbitrary-precision
+integers encoded as canonical decimal strings, never JavaScript `number`.
+Chips and assets are separate units. Cash tables use explicit economic policy
+snapshots; there is no implicit cents or default exchange rate.
+
+Every journal transaction belongs to one asset and is balanced, sealed and
+immutable. Account projections are rebuildable. User liability classes are
+nonnegative; `TREASURY_RESERVE` is the signed external-asset counterparty,
+excluded from internal liabilities during reconciliation.
+
+| Operation for amount `a` | Postings                                                      |
+| ------------------------ | ------------------------------------------------------------- |
+| Deposit                  | `USER_AVAILABLE +a`, `TREASURY_RESERVE -a`                    |
+| Withdrawal reserve       | `USER_AVAILABLE -a`, `PENDING_WITHDRAWAL +a`                  |
+| Confirmed payout         | `PENDING_WITHDRAWAL -a`, `TREASURY_RESERVE +a`                |
+| Completed payout reorg   | `INCIDENT_OBLIGATION +a`, `TREASURY_RESERVE -a`, exactly once |
+
+A deposit reorg preserves credited liability and records the shortfall, never
+a second liability. Pre-completion withdrawal reorgs retain pending obligations.
+Incidents cannot edit/delete journals. Reconciliation compares observed token
+custody with net internal liabilities/equity and fails closed on mismatch.
+
+## Deposits and custody
+
+Direct ERC-20 claims identify chain/transaction/log through a configured asset.
+The verifier binds wallet sender, treasury recipient, token and amount from
+independently agreed chain evidence, not caller-supplied values.
+
+Withdrawals use EIP-712 domain `PokerTools Withdrawal`, version `1`, chain ID
+and treasury verifying contract. The message binds intentId, principalId,
+assetId, destination, amountAtomic, nonce, deadline (Unix seconds) and chainId.
+Intent/reserve commit atomically; route metadata is snapshotted.
+
+Custody serializes nonce ownership per `(chainId, treasuryAddress)`. Signed
+bytes/hash/nonce/call persist **before broadcast**. Ambiguous failure recovers
+by observation or retry of exact bytes/hash. **No automatic replacement**, new
+debit/nonce or blind refund. Receipts, canonical blocks, gas, custody and finality
+use validated endpoint quorum. Disagreement records durable evidence and blocks
+new risk. Freeze/gas starvation never stop monitoring or erase obligations.
+
+Incident resolution rechecks all blocking incidents, journal invariants, quorum,
+reconciliation and gas under a concurrency-safe route transition.
+
+## Storage, migrations and readiness
+
+PostgreSQL is the only deployment database. The SHA-256 manifest in
+`packages/api/prisma/postgres` is the sole migration authority: generated
+relational baseline, financial constraints, then append-only audit constraints.
+Runners serialize with an advisory lock, commit SQL/tracking atomically and
+reject drift, unknown history or missing hashes. Repeat application is a no-op.
+Future migrations are immutable and append-only. See
+[migration policy](../../packages/api/prisma/postgres/README.md).
+
+SQLite is only a disposable local-test adapter generated from the same model;
+it has no migration history and does not prove PostgreSQL financial/audit
+constraints. Redis is non-authoritative and rebuildable.
+
+`/health` is liveness. `/ready` uses bounded live probes and a short report cache:
+schema hashes, durable cursors/outbox, provenance, journal/projections, assets,
+incidents, quorum, fresh reconciliation, custody heartbeats and native gas.
+Missing/unreadable evidence blocks admission. Probe details are safe codes, not
+URLs, secrets or driver messages. Financial incident resolution uses its own
+live check, not a cached platform permission. Test results are release evidence only.
+
+## Retention
+
+Financial journals, incidents and audit events are durable evidence with no
+automatic deletion policy. Session/nonce/idempotency expiry limits authorization
+and retry windows, not financial retention. Outbox delivery does not authorize
+deleting game audit trails. Retention changes require reviewed policy and backups.
+
+See [security](../../SECURITY.md) and [deployment](../../deploy/README.md).

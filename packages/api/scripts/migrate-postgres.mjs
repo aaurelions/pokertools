@@ -38,7 +38,11 @@ async function main() {
   }
   // Verify every file before connecting or modifying any database state.
   const migrations = loadMigrations();
-  const pool = new pg.Pool({ connectionString: databaseUrl, max: 1, connectionTimeoutMillis: 10000 });
+  const pool = new pg.Pool({
+    connectionString: databaseUrl,
+    max: 1,
+    connectionTimeoutMillis: 10000,
+  });
   let client;
   try {
     client = await pool.connect();
@@ -52,7 +56,7 @@ async function main() {
       "appliedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
 
-    // A pre-convergence tracking table without hashes fails here. Never infer
+    // A tracking table without hashes fails here. Never infer
     // integrity by stamping today's file hash onto historical unverified SQL.
     const { rows } = await client.query('SELECT "name", "sha256" FROM "_migrations"');
     const applied = new Map(rows.map((row) => [row.name, row.sha256]));
@@ -63,7 +67,8 @@ async function main() {
     for (const migration of migrations) {
       if (applied.has(migration.name)) {
         if (pendingSeen) throw new Error("MIGRATION_ORDER_DRIFT");
-        if (applied.get(migration.name) !== migration.sha256) throw new Error("MIGRATION_APPLIED_DRIFT");
+        if (applied.get(migration.name) !== migration.sha256)
+          throw new Error("MIGRATION_APPLIED_DRIFT");
       } else {
         pendingSeen = true;
       }
@@ -74,7 +79,10 @@ async function main() {
       await client.query("BEGIN");
       try {
         await client.query(migration.sql);
-        await client.query('INSERT INTO "_migrations" ("name", "sha256") VALUES ($1, $2)', [migration.name, migration.sha256]);
+        await client.query('INSERT INTO "_migrations" ("name", "sha256") VALUES ($1, $2)', [
+          migration.name,
+          migration.sha256,
+        ]);
         await client.query("COMMIT");
         console.log(`Applied ${migration.name}`);
       } catch (error) {
@@ -91,9 +99,11 @@ async function main() {
 
 main().catch((error) => {
   // pg errors may contain connection credentials or arbitrary SQL values.
-  const reason = error instanceof Error && /^MIGRATION_[A-Z_]+$|^POSTGRES_DATABASE_URL_REQUIRED$/.test(error.message)
-    ? error.message
-    : "MIGRATION_DEPENDENCY_FAILURE";
+  const reason =
+    error instanceof Error &&
+    /^MIGRATION_[A-Z_]+$|^POSTGRES_DATABASE_URL_REQUIRED$/.test(error.message)
+      ? error.message
+      : "MIGRATION_DEPENDENCY_FAILURE";
   console.error(reason);
   process.exitCode = 1;
 });

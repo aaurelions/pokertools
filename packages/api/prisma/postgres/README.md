@@ -1,53 +1,42 @@
 # PostgreSQL migrations
 
-`prisma/schema.prisma` is the single canonical schema source. The SQLite runtime
-artifact (`prisma/schema.sql`) and the PostgreSQL baseline below are both
-generated from it — never hand-written.
+This directory is the **only deployment migration authority**. Apply it with:
 
-## Layout
-
-| File                           | Purpose                                                                                                                                                                                                                                                                    |
-| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `001_initial_schema.sql`       | Offline baseline generated from `prisma/schema.prisma` with the `postgresql` provider. Contains every `CREATE TYPE`, `CREATE TABLE`, index and foreign key Prisma declares (native PostgreSQL enums, composite same-asset FKs, unique `(id, assetId)` targets).            |
-| `002_financial_invariants.sql` | Invariants Prisma cannot express: canonical decimal-string CHECKs, asset/custody domain checks, sealed-journal/append-only triggers, the deferred balanced-journal constraint trigger, the AtomicAccount nonnegative trigger, and economic/reconciliation/incident checks. |
-| `003_audit_invariants.sql`     | Append-only audit invariants for `GameEvent`, `TournamentEvent` and `GameActionRequest`.                                                                                                                                                                                   |
-| `migrations.json`              | Ordered manifest with the SHA-256 of each file.                                                                                                                                                                                                                            |
-
-## Regenerating the baseline
-
-```bash
-cd packages/api
-# 1. Portable SQLite artifact
-node scripts/export-schema.mjs
-# 2. Offline PostgreSQL baseline
-mkdir -p /tmp/pg-baseline
-sed 's/provider = "sqlite"/provider = "postgresql"/' prisma/schema.prisma \
-  > /tmp/pg-baseline/schema.prisma
-DATABASE_URL="postgresql://prisma:generate@localhost:5432/prisma_generate" \
-  npx prisma migrate diff --from-empty --to-schema /tmp/pg-baseline/schema.prisma --script \
-  > prisma/postgres/001_initial_schema.sql
-# 3. Recompute migrations.json sha256 for 001 (and commit with the schema change)
+```sh
+DATABASE_URL=postgresql://... npm run db:migrate -w @pokertools/api
 ```
 
-## Immutability / append-only policy
+| File                           | Responsibility                                                                                            |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| `001_initial_schema.sql`       | Generated relational baseline: native enums, tables, indexes and foreign keys from `prisma/schema.prisma` |
+| `002_financial_invariants.sql` | Decimal/domain checks, sealed immutable journal, deferred balancing and nonnegative liability constraints |
+| `003_audit_invariants.sql`     | Append-only game/tournament events and completed action requests                                          |
+| `migrations.json`              | Ordered SHA-256 manifest                                                                                  |
 
-This baseline is a single pre-production reset. From the next major release
-onward **everything at and after `001_initial_schema.sql` is immutable and
-append-only**:
+Fresh PostgreSQL installs apply all three files; repeating the command is a
+no-op. Runners serialize with a PostgreSQL advisory lock, and each migration
+commits together with its tracking row. File/applied hash drift, unknown history,
+history gaps and unhashed tracking tables fail closed. Never stamp hashes onto
+unverified data or use `prisma db push` as a production fallback.
 
-- Never edit a released migration file. `scripts/migrate-postgres.mjs` verifies
-  each file against the `sha256` in `migrations.json` and fails closed on drift
-  (`MIGRATION_FILE_DRIFT`) or on a changed applied checksum
-  (`MIGRATION_APPLIED_DRIFT`).
-- Schema changes require a **new** higher-numbered migration file plus a new
-  manifest entry. Do not rewrite history.
-- `migrations.json` is ordered; gaps or unknown applied names fail closed
-  (`MIGRATION_ORDER_DRIFT`, `MIGRATION_UNKNOWN`).
-- The manifest is applied under a PostgreSQL advisory lock, so concurrent
-  migrators are serialized.
+## Schema changes
 
-Apply migrations with:
+This baseline is immutable. Future changes update the relational model, add a
+higher-numbered SQL migration and append its SHA-256 manifest entry. Never edit
+an applied migration or regenerate `001` over a released baseline. Prisma's
+offline `migrate diff` may produce relational DDL for a **new** migration; review
+it alongside hand-written constraints not representable in Prisma. Test a fresh
+install, repeated application, integrity checks and upgrade from this baseline.
 
-```bash
-DATABASE_URL=postgresql://... npm run db:migrate:postgres -w @pokertools/api
+`prisma/schema.prisma` generates provider-specific clients through
+`prisma.config.ts`. SQLite `schema.sql` is a reproducible disposable local-test
+bootstrap generated by `scripts/export-schema.mjs`, not a parallel migration
+history or supported deployment database. Unit tests do not prove PostgreSQL
+triggers; run the real infrastructure suites:
+
+```sh
+npm run test:postgres:migrations -w @pokertools/api
+npm run test:postgres:ledger -w @pokertools/api
+npm run test:canonical -w @pokertools/api
+npm run e2e:finance
 ```

@@ -45,6 +45,7 @@ import type {
 } from "@pokertools/types";
 import {
   HealthResponseSchema,
+  GetTablesResponseSchema,
   SeatObservationSchema,
   CanonicalActionRequestSchema,
   CanonicalActionResultSchema,
@@ -230,8 +231,8 @@ export class PokerClient {
    * Get list of active tables
    */
   async getTables(): Promise<TableListItem[]> {
-    const response = await this.request<{ tables: TableListItem[] }>("GET", "/tables");
-    return response.tables;
+    const response = await this.request<unknown>("GET", "/tables");
+    return GetTablesResponseSchema.parse(response).tables;
   }
 
   /**

@@ -13,9 +13,9 @@
 #   NODE_ENV       – set to "production" by the Dockerfile
 #   PORT, HOST, REDIS_URL, JWT_SECRET, COOKIE_SECRET
 #
-# Compiled convergence evidence and the full production configuration gate are
+# Public-process secret isolation and the production configuration gate are
 # enforced by the API process itself (`assertPublicProcessSafety`), so an
-# unverified or unsafe build still refuses to serve.
+# unsafe configuration refuses startup before migration as well as serving.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -64,9 +64,7 @@ if [ "${NODE_ENV:-production}" = "production" ]; then
 
   # ---------------------------------------------------------------------------
   # Production database gate — reject file: SQLite URLs.
-  # Production MUST use PostgreSQL.  The Prisma schema provider stays
-  # "sqlite" so local tests are unaffected, but at runtime a PostgreSQL
-  # DATABASE_URL coupled with the @prisma/adapter-pg driver is required.
+  # Production MUST use PostgreSQL with the @prisma/adapter-pg driver.
   # ---------------------------------------------------------------------------
   DB_URL="${DATABASE_URL:-}"
   if [ -z "$DB_URL" ] || [[ "$DB_URL" == file:* ]]; then
@@ -95,6 +93,8 @@ fi
 # Determine database kind and run appropriate initialisation
 # ---------------------------------------------------------------------------
 cd /app/packages/api
+
+node --input-type=module -e 'import { assertPublicProcessSafety } from "./dist/safety.js"; assertPublicProcessSafety(process.env);'
 
 if [[ "$DATABASE_URL" == postgresql://* || "$DATABASE_URL" == postgres://* ]]; then
   # ----- PostgreSQL production path -----------------------------------------

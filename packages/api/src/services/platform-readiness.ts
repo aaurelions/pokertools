@@ -11,7 +11,7 @@ import {
 } from "@pokertools/types";
 
 /**
- * Platform readiness (convergence gate).
+ * Live platform readiness.
  *
  * `/health` is liveness. This service answers a different, fail-closed
  * question: is it safe to admit real financial traffic? It never turns a
@@ -29,16 +29,12 @@ import {
  * - **Real persistence checks.** Migration integrity, ledger invariants,
  *   durable table/outbox cursors, assets, incidents, reconciliation and
  *   provenance are queried from the real database. Only network/external
- *   operations (RPC quorum, custody/signer, convergence acceptance) are
+ *   operations (RPC quorum, custody/signer) are
  *   injected behind small interfaces and wired by `readiness-adapters.ts`
  *   (see `services/chain-registry.ts`, `services/atomic-ledger.ts` and the
  *   custody package).
- * - **Convergence gate stays closed.** The default convergence provider
- *   reports acceptance as incomplete, so readiness is false until complete
- *   acceptance evidence is wired in. This does not stop monitoring.
- *
  * The returned report carries a canonical `FinancialReadiness` sub-payload
- * (`@pokertools/types`). The supervising agent adapts the outer envelope to
+ * (`@pokertools/types`). The HTTP adapter maps the outer envelope to
  * the transport schema; the internal check list is deliberately richer than
  * the canonical reason enum.
  */
@@ -101,11 +97,6 @@ export interface CustodyReadinessProbe {
   checkReadiness(): Promise<{ ready: boolean; gasReady: boolean; code: string; gasCode?: string }>;
 }
 
-/** Durable complete-acceptance evidence gate. Defaults to closed. */
-export interface ConvergenceGate {
-  check(): Promise<{ complete: boolean; code: string; evidenceId?: string }>;
-}
-
 /** Operational freeze state. Freeze blocks new risk, not monitoring. */
 export interface FreezeStateProvider {
   getState(): Promise<{ frozen: boolean; code: string }>;
@@ -126,7 +117,6 @@ export interface PlatformReadinessOptions {
   ledger?: LedgerIntegrityProbe;
   chainQuorum?: ChainQuorumProbe;
   custody?: CustodyReadinessProbe;
-  convergence?: ConvergenceGate;
   freeze?: FreezeStateProvider;
   now?: () => number;
   /** Defaults to `process.env.NODE_ENV`. */
@@ -172,17 +162,6 @@ export interface PlatformReadinessReport {
   checks: PlatformReadinessCheck[];
   /** Canonical financial sub-payload validated against @pokertools/types. */
   financial: FinancialReadiness;
-}
-
-// ============================================================================
-// Convergence gate (closed by default)
-// ============================================================================
-
-/** Readiness stays blocked until complete acceptance evidence is wired in. */
-export class UnverifiedConvergenceGate implements ConvergenceGate {
-  async check(): Promise<{ complete: boolean; code: string }> {
-    return { complete: false, code: "CONVERGENCE_INCOMPLETE" };
-  }
 }
 
 // ============================================================================
@@ -438,7 +417,6 @@ const CHECK_ORDER = [
   "reconciliation",
   "custody",
   "nativeGas",
-  "convergence",
   "freeze",
 ];
 
@@ -474,7 +452,6 @@ export class PlatformReadinessService {
   private readonly ledger?: LedgerIntegrityProbe;
   private readonly chainQuorum?: ChainQuorumProbe;
   private readonly custody?: CustodyReadinessProbe;
-  private readonly convergence: ConvergenceGate;
   private readonly freeze?: FreezeStateProvider;
   private readonly now: () => number;
   private readonly nodeEnv: string;
@@ -511,7 +488,6 @@ export class PlatformReadinessService {
     this.ledger = options.ledger;
     this.chainQuorum = options.chainQuorum;
     this.custody = options.custody;
-    this.convergence = options.convergence ?? new UnverifiedConvergenceGate();
     this.freeze = options.freeze;
     this.now = options.now ?? (() => Date.now());
     this.nodeEnv = options.nodeEnv ?? process.env.NODE_ENV ?? "development";
@@ -584,7 +560,6 @@ export class PlatformReadinessService {
       this.runCheck("reconciliation", true, () => this.checkReconciliation(payoutsEnabled)),
       this.runCheck("custody", payoutsEnabled, () => this.checkCustody(payoutsEnabled)),
       this.runCheck("nativeGas", payoutsEnabled, () => this.checkNativeGas(payoutsEnabled)),
-      this.runCheck("convergence", true, () => this.checkConvergence()),
       this.runCheck("freeze", true, () => this.checkFreeze()),
     ]);
 
@@ -916,13 +891,6 @@ export class PlatformReadinessService {
     return result.gasReady
       ? { state: "READY", code: "NATIVE_GAS_OK" }
       : { state: "NOT_READY", code: result.gasCode ?? "NATIVE_GAS_LOW" };
-  }
-
-  private async checkConvergence(): Promise<ProbeOutcome> {
-    const result = await this.convergence.check();
-    return result.complete
-      ? { state: "READY", code: "CONVERGENCE_ACCEPTED" }
-      : { state: "BLOCKED", code: result.code };
   }
 
   private async checkFreeze(): Promise<ProbeOutcome> {

@@ -33,7 +33,7 @@ const worker = new Worker(
 
     console.log(`✅ Archived hand ${handId} for table ${tableId}`);
   },
-  { connection: redis as any }
+  { connection: redis }
 );
 
 worker.on("failed", (job, err) => {
