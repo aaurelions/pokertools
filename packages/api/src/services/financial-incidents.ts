@@ -231,10 +231,21 @@ export class FinancialIncidentService {
             throw new ConflictError("Incident is already resolved");
           }
 
-          // Take the durable per-asset lock first so the readiness rechecks and
-          // the route ACTIVE commit cannot race a concurrent ledger writer.
+          // Take the durable asset lock(s) first, in sorted order, so the
+          // readiness rechecks and the route ACTIVE commit cannot race a
+          // concurrent ledger writer. Chain-scoped incidents lock every asset
+          // on the chain (identical order to the freeze and ledger paths).
           if (incident.assetId) {
             await this.ledger.lockAsset(tx, incident.assetId);
+          } else if (incident.chainId !== null) {
+            const chainAssets = await tx.asset.findMany({
+              where: { chainId: incident.chainId },
+              select: { id: true },
+              orderBy: { id: "asc" },
+            });
+            for (const chainAsset of chainAssets) {
+              await this.ledger.lockAsset(tx, chainAsset.id);
+            }
           }
 
           // Fail closed while any other blocking incident is still open.
