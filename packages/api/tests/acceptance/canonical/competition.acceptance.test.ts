@@ -330,12 +330,10 @@ describe("competition acceptance (PostgreSQL + Redis)", () => {
     });
     await booted.app.prisma.user.deleteMany({ where: { id: { in: servicePrincipalIds } } });
     // Ledger postings are append-only in PostgreSQL and are disposed with the
-    // private acceptance database. Removing the readiness evidence rows keeps
-    // readiness fail-closed for any later file in this suite.
-    await booted.app.prisma.custodyHeartbeat.deleteMany({
-      where: { workerId: "competition-acceptance-worker" },
-    });
-    await booted.app.prisma.treasuryReconciliation.deleteMany({ where: { assetId: ASSET_ID } });
+    // private acceptance database. Readiness evidence (custody heartbeat +
+    // reconciliation) is retained: the shared suite's ledger/asset probes
+    // evaluate every ACTIVE asset, so removing one asset's evidence would make
+    // financial readiness fail closed for later files.
     await booted.close();
   });
 

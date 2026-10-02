@@ -210,10 +210,9 @@ describe("competition paid admission freeze race (PostgreSQL + Redis)", () => {
       where: { userId: { in: servicePrincipalIds } },
     });
     await booted.app.prisma.user.deleteMany({ where: { id: { in: servicePrincipalIds } } });
-    await booted.app.prisma.custodyHeartbeat.deleteMany({
-      where: { workerId: "competition-freeze-worker" },
-    });
-    await booted.app.prisma.treasuryReconciliation.deleteMany({ where: { assetId: ASSET_ID } });
+    // Readiness evidence is retained: the shared suite's ledger/asset probes
+    // evaluate every ACTIVE asset, so removing this asset's reconciliation or
+    // heartbeat would make later files' financial readiness fail closed.
     await booted.close();
   });
 

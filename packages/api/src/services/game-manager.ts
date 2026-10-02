@@ -191,9 +191,6 @@ export class GameManager {
         400
       );
     }
-    // Competition-managed tables are only actionable while RUNNING and fully
-    // seated; settled/cancelled/partial states fail closed before any mutation.
-    await this.assertCompetitionActionable(tableId);
     const data = parsed.data;
     const requestHash = canonicalActionHash({
       tableId,
@@ -806,9 +803,6 @@ export class GameManager {
     if (!record || !record.snapshot) {
       throw new GameAuthorityError("TABLE_NOT_FOUND", "Table not found", 404);
     }
-    if (record.status === "CLOSED") {
-      throw new GameAuthorityError("TABLE_CLOSED", "Table is closed", 409);
-    }
 
     // Idempotency: dedicated keyed record (canonical path only). Actor + complete
     // payload must match before any original result is returned.
@@ -855,6 +849,16 @@ export class GameManager {
         requestHash: input.requestHash,
       });
       actionRequestId = created.id;
+    }
+
+    // New mutations only (an accepted canonical request already replayed its
+    // durable receipt above, even after settlement/close): the competition
+    // lifecycle gate runs before the closed-table check, then the CAS gate.
+    // Authorization/revocation/resource boundaries were enforced by the route
+    // before this service call, so a revoked credential never reaches replay.
+    if (input.canonical) await this.assertCompetitionActionable(input.tableId);
+    if (record.status === "CLOSED") {
+      throw new GameAuthorityError("TABLE_CLOSED", "Table is closed", 409);
     }
 
     // CAS/version gate.
