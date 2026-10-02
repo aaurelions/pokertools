@@ -134,6 +134,16 @@ competition table is rejected until the competition is fully seated and
 { "idempotencyKey": "settle-1" }
 ```
 
+Every competition projection (create response and `GET /competitions/:id`)
+carries the platform-derived `settlementReady` boolean. It is `true` only when
+the authoritative backing director state shows the game is complete: the
+tournament is `FINISHED`, or exactly one entrant is `ACTIVE` with chips while
+every other entry is a settled elimination (`ELIMINATED`/`PAID`) at a
+completed-hand boundary. It is `false` while a hand is in flight or an
+elimination has not been reconciled, so orchestrators can wait on a durable
+flag instead of local stack heuristics or exception polling. It is derived
+read-only from platform state and exposes no engine internals.
+
 Fails closed unless exactly one entrant still has chips. Placements and status
 come from the authoritative tournament settlement. For `ASSET`, the reserved
 prize is paid to a WALLET winner exactly once (journal

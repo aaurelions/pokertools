@@ -204,6 +204,16 @@ export const CompetitionSchema = z.strictObject({
   /** Null for `NONFINANCIAL`; the validated explicit economics for `ASSET`. */
   terms: CompetitionTermsSchema.nullable(),
   prizeStatus: CompetitionPrizeStatusSchema,
+  /**
+   * Platform-derived read flag: true when the authoritative backing tournament
+   * director state shows the game is complete — FINISHED, or exactly one
+   * ACTIVE entrant with chips while every other entry is a settled
+   * elimination, at a completed-hand boundary (never during an in-flight hand
+   * or an unsettled all-in). It is derived from platform state and never
+   * exposes engine internals; consumers use it instead of local stack
+   * heuristics before calling settle.
+   */
+  settlementReady: z.boolean(),
   createdAt: z.string().datetime(),
   startedAt: z.string().datetime().nullable(),
   finishedAt: z.string().datetime().nullable(),

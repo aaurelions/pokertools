@@ -70,7 +70,11 @@ interface CompetitionRow {
 }
 
 /** Canonical, privacy-preserving wire projection. */
-export function toWireCompetition(competition: CompetitionRow, tableId: string): Competition {
+export function toWireCompetition(
+  competition: CompetitionRow,
+  tableId: string,
+  settlementReady: boolean
+): Competition {
   const entrants: CompetitionEntrant[] = competition.entrants.map((entrant) => ({
     principalId: entrant.principalId,
     kind: entrant.kind,
@@ -121,6 +125,7 @@ export function toWireCompetition(competition: CompetitionRow, tableId: string):
     entrants,
     terms,
     prizeStatus: competition.prizeStatus,
+    settlementReady,
     createdAt: competition.createdAt.toISOString(),
     startedAt: competition.startedAt ? competition.startedAt.toISOString() : null,
     finishedAt: competition.finishedAt ? competition.finishedAt.toISOString() : null,
@@ -205,6 +210,58 @@ async function loadCompetition(
   });
 }
 
+/**
+ * Derive the public `settlementReady` flag from the authoritative backing
+ * tournament director state. Never mutates and never exposes engine internals:
+ * - FINISHED competitions are always settlement-ready;
+ * - a RUNNING competition is ready only when exactly one entry is ACTIVE with
+ *   chips while every other entry is a settled elimination (ELIMINATED/PAID),
+ *   and every backing table sits at a completed-hand boundary. An in-flight
+ *   hand or an unsettled all-in is never reported ready.
+ */
+async function deriveSettlementReady(
+  fastify: FastifyInstance,
+  competition: { status: CompetitionRow["status"]; tournamentId: string }
+): Promise<boolean> {
+  if (competition.status === "FINISHED") return true;
+  if (competition.status !== "RUNNING") return false;
+
+  const entries = await fastify.prisma.tournamentEntry.findMany({
+    where: { tournamentId: competition.tournamentId },
+    select: { userId: true, status: true },
+  });
+  const active = entries.filter((entry) => entry.status === "ACTIVE");
+  if (active.length !== 1) return false;
+  if (entries.some((entry) => entry.status === "REGISTERED")) return false;
+
+  const tables = await fastify.prisma.table.findMany({
+    where: { tournamentId: competition.tournamentId },
+    select: { id: true },
+  });
+  if (tables.length === 0) return false;
+
+  let winnerStack = 0;
+  let sawWinner = false;
+  for (const table of tables) {
+    let state;
+    try {
+      state = await fastify.gameManager.getState(table.id);
+    } catch {
+      return false;
+    }
+    const settledBoundary =
+      (state.handNumber === 0 && state.actionTo == null) ||
+      Boolean(state.winners && state.winners.length > 0 && state.actionTo == null);
+    if (!settledBoundary) return false;
+    const player = state.players.find((candidate) => candidate?.id === active[0].userId);
+    if (player) {
+      winnerStack += player.stack;
+      sawWinner = true;
+    }
+  }
+  return sawWinner && winnerStack > 0;
+}
+
 export interface CreateCompetitionResult {
   competition: Competition;
   replayed: boolean;
@@ -251,7 +308,11 @@ export async function createCompetition(
       );
     }
     return {
-      competition: toWireCompetition(existing, existing.tournament.tableId),
+      competition: toWireCompetition(
+        existing,
+        existing.tournament.tableId,
+        await deriveSettlementReady(fastify, existing)
+      ),
       replayed: true,
     };
   }
@@ -478,7 +539,11 @@ export async function createCompetition(
       });
       if (raced && raced.requestHash === requestHash) {
         return {
-          competition: toWireCompetition(raced, raced.tournament.tableId),
+          competition: toWireCompetition(
+            raced,
+            raced.tournament.tableId,
+            await deriveSettlementReady(fastify, raced)
+          ),
           replayed: true,
         };
       }
@@ -520,7 +585,14 @@ export async function createCompetition(
     metadata: { mode: request.mode, entrants: request.entrants.length },
   });
 
-  return { competition: toWireCompetition(row, row.tournament.tableId), replayed: false };
+  return {
+    competition: toWireCompetition(
+      row,
+      row.tournament.tableId,
+      await deriveSettlementReady(fastify, row)
+    ),
+    replayed: false,
+  };
 }
 
 export async function getCompetition(fastify: FastifyInstance, id: string): Promise<Competition> {
@@ -528,7 +600,11 @@ export async function getCompetition(fastify: FastifyInstance, id: string): Prom
   if (!competition) {
     throw new AppError("Competition not found", 404, "COMPETITION_NOT_FOUND");
   }
-  return toWireCompetition(competition, competition.tournament.tableId);
+  return toWireCompetition(
+    competition,
+    competition.tournament.tableId,
+    await deriveSettlementReady(fastify, competition)
+  );
 }
 
 /**

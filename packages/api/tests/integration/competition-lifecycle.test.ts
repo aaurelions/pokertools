@@ -358,12 +358,14 @@ describe("competition capability", () => {
         id: string;
         tableId: string;
         mode: string;
+        settlementReady: boolean;
         entrants: Array<{ principalId: string; seat: number; entryState: string }>;
       };
       replayed: boolean;
     }>(ctx.app, "POST", "/competitions", { token: orchestrator.token, payload });
     expect(created.statusCode).toBe(201);
     expect(created.body.replayed).toBe(false);
+    expect(created.body.competition.settlementReady).toBe(false);
     const competitionId = created.body.competition.id;
     const tableId = created.body.competition.tableId;
     createdCompetitionIds.push(competitionId);
@@ -452,6 +454,13 @@ describe("competition capability", () => {
     expect(settled.body.prize).toBeNull();
     expect(await ctx.app.prisma.chipLedgerEntry.count()).toBe(chipEntriesBefore);
     expect(await ctx.app.prisma.journalTransaction.count()).toBe(journalsBefore);
+
+    const finishedProjection = await inject<{
+      competition: { status: string; settlementReady: boolean };
+    }>(ctx.app, "GET", `/competitions/${competitionId}`, { token: payer.token });
+    expect(finishedProjection.statusCode).toBe(200);
+    expect(finishedProjection.body.competition.status).toBe("FINISHED");
+    expect(finishedProjection.body.competition.settlementReady).toBe(true);
 
     // Settled competition tables reject public gameplay.
     const postSettleAction = await inject<{ error?: string }>(
