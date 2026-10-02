@@ -1,5 +1,5 @@
 /// <reference path="../../types/fastify.d.ts" />
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
 import { privateKeyToAccount } from "viem/accounts";
@@ -20,7 +20,9 @@ import { FinancialIntentService } from "../../src/services/financial-intents.js"
 import { FinancialIncidentService } from "../../src/services/financial-incidents.js";
 import { ANVIL_PUBLIC_PRIVATE_KEY } from "../fixtures/anvil-public-key.js";
 
-const CHAIN_ID = 31337;
+// This SQLite integration suite deliberately corrupts secondary ledgers. Its
+// route-wide incidents must never freeze another suite's configured chain.
+const CHAIN_ID = crypto.randomInt(1_000_000, 2_000_000);
 const TEST_TIMEOUT = 30000;
 
 function randomTokenAddress(): string {
@@ -37,6 +39,7 @@ describe("Canonical atomic multi-asset finance", () => {
   let userId: string;
   let ownerId: string;
   let token: string;
+  const ownedAssets = new Set<string>();
 
   const ledgerFor = () => new AtomicLedger(app.prisma);
 
@@ -61,6 +64,7 @@ describe("Canonical atomic multi-asset finance", () => {
         ...overrides,
       },
     });
+    ownedAssets.add(asset.id);
     return asset;
   }
 
@@ -94,15 +98,25 @@ describe("Canonical atomic multi-asset finance", () => {
     token = app.jwt.sign({ userId, jti }, { jti, expiresIn: "1h" });
   }, TEST_TIMEOUT);
 
+  async function retireAsset(id: string) {
+    await prisma.withdrawalIntentRecord.deleteMany({ where: { assetId: id } });
+    await prisma.depositClaimRecord.deleteMany({ where: { assetId: id } });
+    await prisma.financialIncident.deleteMany({ where: { assetId: id } });
+    await prisma.treasuryReconciliation.deleteMany({ where: { assetId: id } });
+    await prisma.journalPosting.deleteMany({ where: { assetId: id } });
+    await prisma.journalTransaction.deleteMany({ where: { assetId: id } });
+    await prisma.atomicAccount.deleteMany({ where: { assetId: id } });
+    await prisma.asset.deleteMany({ where: { id } });
+    ownedAssets.delete(id);
+  }
+
+  afterEach(async () => {
+    for (const id of [...ownedAssets]) if (id !== assetId) await retireAsset(id);
+  });
+
   afterAll(async () => {
-    await prisma.withdrawalIntentRecord.deleteMany({ where: { assetId } });
-    await prisma.depositClaimRecord.deleteMany({ where: { assetId } });
-    await prisma.financialIncident.deleteMany({ where: { assetId } });
-    await prisma.treasuryReconciliation.deleteMany({ where: { assetId } });
-    await prisma.journalPosting.deleteMany({ where: { assetId } });
-    await prisma.journalTransaction.deleteMany({ where: { assetId } });
-    await prisma.atomicAccount.deleteMany({ where: { assetId } });
-    await prisma.asset.deleteMany({ where: { id: assetId } });
+    await prisma.financialIncident.deleteMany({ where: { chainId: CHAIN_ID } });
+    for (const id of [...ownedAssets]) await retireAsset(id);
     await prisma.session.deleteMany({ where: { userId } });
     await prisma.user.deleteMany({ where: { id: userId } });
     await app.close();
