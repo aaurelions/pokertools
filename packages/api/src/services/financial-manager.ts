@@ -1,7 +1,7 @@
 import type { Prisma, PrismaClient } from "../../generated/prisma/index.js";
 import { ChipLedger, type ChipAccountRef, type ChipBalances } from "./chip-ledger.js";
 import { EconomicPolicyService } from "./economic-policy.js";
-import { AtomicLedger, runTransactionWithRetry } from "./atomic-ledger.js";
+import { AtomicLedger, LedgerConflictError, runTransactionWithRetry } from "./atomic-ledger.js";
 import { AppError, ValidationError } from "../utils/errors.js";
 
 /**
@@ -782,9 +782,51 @@ export class FinancialManager {
   }
 
   /**
-   * Pay the reserved prize to a WALLET winner. Idempotent on
-   * `competition-prize-payout:<competitionId>`: a retry returns the original
-   * journal and never moves value twice.
+   * Exactly one prize disposition per competition.
+   *
+   * Both payout and release share the same ledger requestId
+   * (`competition-prize-settlement:<competitionId>`), so the first committed
+   * disposition wins: a retry of the same disposition replays it, while a
+   * divergent second disposition (different payload under the same requestId)
+   * is refused instead of creating value. Legacy per-direction requestIds are
+   * also treated as an existing disposition. The asset lock serializes
+   * concurrent dispositions for the same asset before the check.
+   */
+  private async lockAndCheckCompetitionDisposition(
+    tx: Prisma.TransactionClient,
+    competitionId: string,
+    assetId: string
+  ): Promise<string> {
+    // Asset-first lock ordering; also serializes concurrent dispositions.
+    await this.ledger.lockAsset(tx, assetId);
+    const requestId = `competition-prize-settlement:${competitionId}`;
+    const existing = await tx.journalTransaction.findFirst({
+      where: {
+        requestId: {
+          in: [
+            requestId,
+            `competition-prize-payout:${competitionId}`,
+            `competition-prize-release:${competitionId}`,
+          ],
+        },
+      },
+      select: { requestId: true },
+    });
+    if (existing && existing.requestId !== requestId) {
+      throw new AppError(
+        "Competition prize was already disposed by a different disposition",
+        409,
+        "COMPETITION_PRIZE_ALREADY_DISPOSED"
+      );
+    }
+    return requestId;
+  }
+
+  /**
+   * Pay the reserved prize to a WALLET winner. Idempotent on the shared
+   * `competition-prize-settlement:<competitionId>` identity: a retry returns
+   * the original journal and never moves value twice, and a release for the
+   * same competition is impossible.
    */
   async applyCompetitionPrizePayout(
     tx: Prisma.TransactionClient,
@@ -796,6 +838,11 @@ export class FinancialManager {
     }
   ): Promise<{ journalRequestId: string }> {
     const amount = this.positiveAtomic(input.amountAtomic, "competition prize");
+    const requestId = await this.lockAndCheckCompetitionDisposition(
+      tx,
+      input.competitionId,
+      input.assetId
+    );
     const reserve = await this.ledger.ensureAccount(tx, {
       assetId: input.assetId,
       ...this.competitionReserveSpec(input.competitionId),
@@ -805,21 +852,33 @@ export class FinancialManager {
       ownerId: input.winnerId,
       class: "USER_AVAILABLE",
     });
-    const posted = await this.ledger.post(tx, {
-      requestId: `competition-prize-payout:${input.competitionId}`,
-      assetId: input.assetId,
-      postings: [
-        { accountId: reserve.accountId, amountAtomic: (-amount).toString() },
-        { accountId: winner.accountId, amountAtomic: amount.toString() },
-      ],
-    });
-    return { journalRequestId: posted.requestId };
+    try {
+      const posted = await this.ledger.post(tx, {
+        requestId,
+        assetId: input.assetId,
+        postings: [
+          { accountId: reserve.accountId, amountAtomic: (-amount).toString() },
+          { accountId: winner.accountId, amountAtomic: amount.toString() },
+        ],
+      });
+      return { journalRequestId: posted.requestId };
+    } catch (error) {
+      if (error instanceof LedgerConflictError) {
+        throw new AppError(
+          "Competition prize was already disposed by a different disposition",
+          409,
+          "COMPETITION_PRIZE_ALREADY_DISPOSED"
+        );
+      }
+      throw error;
+    }
   }
 
   /**
    * Release the reservation back to the sponsor when settlement produces no
-   * financial winner (e.g. a SERVICE winner). Idempotent on
-   * `competition-prize-release:<competitionId>`; no value is created.
+   * financial winner (e.g. a SERVICE winner). Shares the single disposition
+   * identity, so no value is created and a payout for the same competition is
+   * impossible.
    */
   async applyCompetitionPrizeRelease(
     tx: Prisma.TransactionClient,
@@ -831,6 +890,11 @@ export class FinancialManager {
     }
   ): Promise<{ journalRequestId: string }> {
     const amount = this.positiveAtomic(input.amountAtomic, "competition prize");
+    const requestId = await this.lockAndCheckCompetitionDisposition(
+      tx,
+      input.competitionId,
+      input.assetId
+    );
     const reserve = await this.ledger.ensureAccount(tx, {
       assetId: input.assetId,
       ...this.competitionReserveSpec(input.competitionId),
@@ -840,15 +904,26 @@ export class FinancialManager {
       ownerId: input.sponsorId,
       class: "OPERATOR",
     });
-    const posted = await this.ledger.post(tx, {
-      requestId: `competition-prize-release:${input.competitionId}`,
-      assetId: input.assetId,
-      postings: [
-        { accountId: reserve.accountId, amountAtomic: (-amount).toString() },
-        { accountId: sponsor.accountId, amountAtomic: amount.toString() },
-      ],
-    });
-    return { journalRequestId: posted.requestId };
+    try {
+      const posted = await this.ledger.post(tx, {
+        requestId,
+        assetId: input.assetId,
+        postings: [
+          { accountId: reserve.accountId, amountAtomic: (-amount).toString() },
+          { accountId: sponsor.accountId, amountAtomic: amount.toString() },
+        ],
+      });
+      return { journalRequestId: posted.requestId };
+    } catch (error) {
+      if (error instanceof LedgerConflictError) {
+        throw new AppError(
+          "Competition prize was already disposed by a different disposition",
+          409,
+          "COMPETITION_PRIZE_ALREADY_DISPOSED"
+        );
+      }
+      throw error;
+    }
   }
 
   /** Current competition prize reservation balance (atomic string). */

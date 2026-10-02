@@ -940,22 +940,39 @@ export async function settleCompetition(
       );
     }
     const winnerKind = kindByPrincipal.get(winnerEntry.userId);
+    if (winnerKind !== "WALLET" && winnerKind !== "SERVICE") {
+      throw new AppError(
+        "Competition winner has no durable entrant kind",
+        409,
+        "COMPETITION_SETTLEMENT_INCOMPLETE"
+      );
+    }
     const placements: CompetitionPlacement[] = entries
       .filter((entry) => entry.placement !== null)
-      .map((entry) => ({
-        principalId: entry.userId,
-        kind: kindByPrincipal.get(entry.userId) ?? "SERVICE",
-        placement: entry.placement ?? 0,
-        prize:
-          entry.placement === 1 && prizeAmountAtomic !== null
-            ? { assetId: competition.prizeAssetId!, amountAtomic: prizeAmountAtomic }
-            : null,
-      }));
+      .map((entry) => {
+        const kind = kindByPrincipal.get(entry.userId);
+        if (kind !== "WALLET" && kind !== "SERVICE") {
+          throw new AppError(
+            "Competition placement has no durable entrant kind",
+            409,
+            "COMPETITION_SETTLEMENT_INCOMPLETE"
+          );
+        }
+        return {
+          principalId: entry.userId,
+          kind,
+          placement: entry.placement ?? 0,
+          prize:
+            entry.placement === 1 && prizeAmountAtomic !== null
+              ? { assetId: competition.prizeAssetId!, amountAtomic: prizeAmountAtomic }
+              : null,
+        };
+      });
     return {
       success: true as const,
       competitionId: competition.id,
       winnerPrincipalId: winnerEntry.userId,
-      winnerKind: winnerKind ?? "SERVICE",
+      winnerKind,
       prizeStatus,
       prize:
         prizeAmountAtomic !== null && competition.prizeAssetId !== null
@@ -975,33 +992,101 @@ export async function settleCompetition(
   }
 
   const settled = await settleTournament(fastify, competition.tournamentId, input.actor.id);
-  // Settlement assigns authoritative placements; reload them before projecting.
+  // Settlement assigns authoritative placements; reload them before deciding.
   entries = await fastify.prisma.tournamentEntry.findMany({
     where: { tournamentId: competition.tournamentId },
     orderBy: { placement: "asc" },
   });
-  // Durable recovery: a crash after the tournament settlement commit but before
-  // the prize disposition replays the FINISHED tournament, whose winner must be
-  // derived from placement 1 independent of prize amounts.
-  const winnerId =
-    settled.winnerUserId ?? entries.find((entry) => entry.placement === 1)?.userId ?? null;
-  if (!winnerId) {
+  // Durable winner identity: the authoritative placement, independent of prize
+  // amounts. A live settlement result that disagrees fails closed rather than
+  // flipping the disposition.
+  const placementWinnerId = entries.find((entry) => entry.placement === 1)?.userId ?? null;
+  if (!placementWinnerId) {
     throw new AppError(
       "Competition has no authoritative winner",
       409,
       "COMPETITION_SETTLEMENT_INCOMPLETE"
     );
   }
-  const winnerKind = kindByPrincipal.get(winnerId) ?? "SERVICE";
+  if (settled.winnerUserId && settled.winnerUserId !== placementWinnerId) {
+    throw new AppError(
+      "Competition settlement winner diverged from the authoritative placement",
+      409,
+      "COMPETITION_SETTLEMENT_DIVERGENT"
+    );
+  }
 
+  const isPostgres = (config.DATABASE_URL ?? "").startsWith("postgres");
   const disposition = await fastify.prisma.$transaction(async (tx) => {
-    let prizeStatus: CompetitionPrizeStatus = competition.prizeStatus;
-    let settlementJournalId = competition.prizeSettlementJournalId;
+    // Serialize the durable disposition decision on the competition row. Under
+    // READ COMMITTED two invocations would otherwise branch on stale
+    // status/prizeStatus snapshots and could apply different dispositions.
+    if (isPostgres) {
+      await tx.$queryRawUnsafe(
+        'SELECT "id" FROM "Competition" WHERE "id" = $1 FOR UPDATE',
+        competition.id
+      );
+    }
+    const fresh = await tx.competition.findUniqueOrThrow({
+      where: { id: competition.id },
+      select: {
+        status: true,
+        mode: true,
+        prizeStatus: true,
+        prizeSettlementJournalId: true,
+        prizeAssetId: true,
+        prizeAmountAtomic: true,
+        sponsorId: true,
+      },
+    });
+    if (fresh.status === "FINISHED") {
+      // Another invocation decided durably: replay its decision.
+      return { prizeStatus: fresh.prizeStatus };
+    }
 
-    if (competition.mode === "NONFINANCIAL") {
+    // Winner identity and kind are read inside the same transaction from
+    // durable rows; there is no default that could flip the disposition.
+    const txEntries = await tx.tournamentEntry.findMany({
+      where: { tournamentId: competition.tournamentId },
+      orderBy: { placement: "asc" },
+    });
+    const txWinner = txEntries.find((entry) => entry.placement === 1);
+    if (!txWinner || txWinner.userId !== placementWinnerId) {
+      throw new AppError(
+        "Competition settlement winner diverged from the authoritative placement",
+        409,
+        "COMPETITION_SETTLEMENT_DIVERGENT"
+      );
+    }
+    const entrant = await tx.competitionEntrant.findUnique({
+      where: {
+        competitionId_principalId: {
+          competitionId: competition.id,
+          principalId: txWinner.userId,
+        },
+      },
+      select: { kind: true },
+    });
+    const winnerKind = entrant?.kind;
+    if (winnerKind !== "WALLET" && winnerKind !== "SERVICE") {
+      throw new AppError(
+        "Competition winner has no durable entrant kind",
+        409,
+        "COMPETITION_SETTLEMENT_INCOMPLETE"
+      );
+    }
+
+    let prizeStatus: CompetitionPrizeStatus;
+    let settlementJournalId = fresh.prizeSettlementJournalId;
+
+    if (fresh.mode === "NONFINANCIAL") {
       prizeStatus = "NOT_APPLICABLE";
-    } else if (competition.prizeStatus === "RESERVED") {
-      if (competition.prizeAssetId === null || competition.prizeAmountAtomic === null) {
+    } else {
+      if (fresh.prizeStatus !== "RESERVED") {
+        // A concurrent invocation already applied the single disposition.
+        return { prizeStatus: fresh.prizeStatus };
+      }
+      if (fresh.prizeAssetId === null || fresh.prizeAmountAtomic === null) {
         throw new AppError(
           "Competition prize terms are incomplete",
           409,
@@ -1011,21 +1096,21 @@ export async function settleCompetition(
       if (winnerKind === "WALLET") {
         const payout = await fastify.financialManager.applyCompetitionPrizePayout(tx, {
           competitionId: competition.id,
-          winnerId,
-          assetId: competition.prizeAssetId,
-          amountAtomic: competition.prizeAmountAtomic,
+          winnerId: txWinner.userId,
+          assetId: fresh.prizeAssetId,
+          amountAtomic: fresh.prizeAmountAtomic,
         });
         prizeStatus = "PAID";
         settlementJournalId = payout.journalRequestId;
       } else {
-        if (competition.sponsorId === null) {
+        if (fresh.sponsorId === null) {
           throw new AppError("Competition sponsor is missing", 409, "COMPETITION_TERMS_INCOMPLETE");
         }
         const release = await fastify.financialManager.applyCompetitionPrizeRelease(tx, {
           competitionId: competition.id,
-          sponsorId: competition.sponsorId,
-          assetId: competition.prizeAssetId,
-          amountAtomic: competition.prizeAmountAtomic,
+          sponsorId: fresh.sponsorId,
+          assetId: fresh.prizeAssetId,
+          amountAtomic: fresh.prizeAmountAtomic,
         });
         prizeStatus = "RELEASED";
         settlementJournalId = release.journalRequestId;
@@ -1043,6 +1128,13 @@ export async function settleCompetition(
     });
 
     return { prizeStatus };
+  });
+
+  // A concurrent invocation may have completed while this one waited on the
+  // row lock; project the accepted durable result.
+  entries = await fastify.prisma.tournamentEntry.findMany({
+    where: { tournamentId: competition.tournamentId },
+    orderBy: { placement: "asc" },
   });
 
   await fastify.auditManager.record({

@@ -146,11 +146,14 @@ read-only from platform state and exposes no engine internals.
 
 Fails closed unless exactly one entrant still has chips. Placements and status
 come from the authoritative tournament settlement. For `ASSET`, the reserved
-prize is paid to a WALLET winner exactly once (journal
-`competition-prize-payout:<competitionId>`), or released to the sponsor
-(`RELEASED`) when no financial winner exists. Retries are idempotent.
-Settlement is deliberately **not** readiness-gated: a provider outage must never
-trap a reserved prize or block releasing value.
+prize is disposed through exactly one journal
+(`competition-prize-settlement:<competitionId>`): paid to a WALLET winner, or
+released to the sponsor (`RELEASED`) when no financial winner exists. The
+disposition decision is made inside a single transaction under a competition
+row lock, with winner identity/kind read from durable entries, and the shared
+ledger requestId makes a divergent second disposition impossible. Retries are
+idempotent. Settlement is deliberately **not** readiness-gated: a provider
+outage must never trap a reserved prize or block releasing value.
 
 ### Agent credentials
 

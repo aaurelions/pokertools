@@ -786,12 +786,544 @@ describe("competition acceptance (PostgreSQL + Redis)", () => {
     expect(replayedSettle.body.prizeStatus).toBe("PAID");
     expect(
       await booted.app.prisma.journalTransaction.count({
-        where: { requestId: `competition-prize-payout:${competition.id}` },
+        where: { requestId: `competition-prize-settlement:${competition.id}` },
       })
     ).toBe(1);
     expect(await atomicBalance(booted.app, null, "TOURNAMENT_RESERVE", reserveKey)).toBe(0n);
     expect(await atomicBalance(booted.app, payer.id, "USER_AVAILABLE")).toBe(
       payerBefore - 1000n + 5000n
     );
+  });
+
+  it("applies exactly one disposition journal under concurrent settle races", async () => {
+    const orchestrator = await createOrchestrator(booted.baseUrl, operator.token);
+    servicePrincipalIds.push(orchestrator.principalId);
+    const agent = await provisionServicePrincipal(
+      booted.baseUrl,
+      operator.token,
+      `race-agent-${crypto.randomBytes(3).toString("hex")}`,
+      orchestrator.principalId
+    );
+    servicePrincipalIds.push(agent);
+
+    const payerBefore = await atomicBalance(booted.app, payer.id, "USER_AVAILABLE");
+    const sponsorBefore = await atomicBalance(booted.app, operator.id, "OPERATOR");
+    const created = await createCompetition(booted.baseUrl, operator.token, {
+      name: "Race wallet winner",
+      mode: "ASSET",
+      entrants: [
+        { principalId: payer.id, kind: "WALLET" },
+        { principalId: agent, kind: "SERVICE" },
+      ],
+      smallBlind: 100,
+      bigBlind: 200,
+      terms: {
+        entry: { assetId: ASSET_ID, amountAtomic: "1000", payers: [{ principalId: payer.id }] },
+        prize: { assetId: ASSET_ID, amountAtomic: "5000", sponsorPrincipalId: operator.id },
+      },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const competition = created.body.competition!;
+    competitionIds.push(competition.id);
+    tableIds.push(competition.tableId);
+    const optIn = await apiRequest(
+      booted.baseUrl,
+      "POST",
+      `/competitions/${competition.id}/opt-in`,
+      {
+        token: payer.token,
+        body: { idempotencyKey: crypto.randomUUID() },
+      }
+    );
+    expect(optIn.status).toBe(200);
+    const started = await apiRequest(
+      booted.baseUrl,
+      "POST",
+      `/competitions/${competition.id}/start`,
+      {
+        token: operator.token,
+        body: { idempotencyKey: crypto.randomUUID() },
+      }
+    );
+    expect(started.status).toBe(200);
+    const agentToken = await issueAgentCredential(
+      booted.baseUrl,
+      operator.token,
+      competition.id,
+      agent
+    );
+    await playHeadsUp(booted.baseUrl, competition.tableId, { token: agentToken }, payer);
+    const reconciled = await apiRequest(
+      booted.baseUrl,
+      "POST",
+      `/competitions/${competition.id}/reconcile`,
+      { token: operator.token }
+    );
+    expect(reconciled.status).toBe(200);
+
+    const responses = await Promise.all(
+      Array.from({ length: 6 }, () =>
+        apiRequest(booted.baseUrl, "POST", `/competitions/${competition.id}/settle`, {
+          token: operator.token,
+          body: { idempotencyKey: crypto.randomUUID() },
+        })
+      )
+    );
+    for (const response of responses) {
+      expect(response.status, JSON.stringify(response.body)).toBe(200);
+    }
+
+    const settlementJournals = await booted.app.prisma.journalTransaction.findMany({
+      where: {
+        requestId: {
+          in: [
+            `competition-prize-settlement:${competition.id}`,
+            `competition-prize-payout:${competition.id}`,
+            `competition-prize-release:${competition.id}`,
+          ],
+        },
+      },
+      select: { requestId: true },
+    });
+    expect(settlementJournals).toHaveLength(1);
+    const reserveKey = `competition-prize:${competition.id}`;
+    expect(await atomicBalance(booted.app, null, "TOURNAMENT_RESERVE", reserveKey)).toBe(0n);
+    expect(await atomicBalance(booted.app, payer.id, "USER_AVAILABLE")).toBe(
+      payerBefore - 1000n + 5000n
+    );
+    expect(await atomicBalance(booted.app, operator.id, "OPERATOR")).toBe(
+      sponsorBefore - 5000n + 1000n
+    );
+    expect(await atomicBalance(booted.app, agent, "USER_AVAILABLE")).toBe(0n);
+  });
+
+  it("applies exactly one release under concurrent settle races with a SERVICE winner", async () => {
+    const orchestrator = await createOrchestrator(booted.baseUrl, operator.token);
+    servicePrincipalIds.push(orchestrator.principalId);
+    const agent = await provisionServicePrincipal(
+      booted.baseUrl,
+      operator.token,
+      `race-agent-svc-${crypto.randomBytes(3).toString("hex")}`,
+      orchestrator.principalId
+    );
+    servicePrincipalIds.push(agent);
+
+    const payerBefore = await atomicBalance(booted.app, payer.id, "USER_AVAILABLE");
+    const sponsorBefore = await atomicBalance(booted.app, operator.id, "OPERATOR");
+    const created = await createCompetition(booted.baseUrl, operator.token, {
+      name: "Race service winner",
+      mode: "ASSET",
+      entrants: [
+        { principalId: payer.id, kind: "WALLET" },
+        { principalId: agent, kind: "SERVICE" },
+      ],
+      smallBlind: 100,
+      bigBlind: 200,
+      terms: {
+        entry: { assetId: ASSET_ID, amountAtomic: "1000", payers: [{ principalId: payer.id }] },
+        prize: { assetId: ASSET_ID, amountAtomic: "5000", sponsorPrincipalId: operator.id },
+      },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect(created.status).toBe(201);
+    const competition = created.body.competition!;
+    competitionIds.push(competition.id);
+    tableIds.push(competition.tableId);
+    const optIn = await apiRequest(
+      booted.baseUrl,
+      "POST",
+      `/competitions/${competition.id}/opt-in`,
+      {
+        token: payer.token,
+        body: { idempotencyKey: crypto.randomUUID() },
+      }
+    );
+    expect(optIn.status).toBe(200);
+    const started = await apiRequest(
+      booted.baseUrl,
+      "POST",
+      `/competitions/${competition.id}/start`,
+      {
+        token: operator.token,
+        body: { idempotencyKey: crypto.randomUUID() },
+      }
+    );
+    expect(started.status).toBe(200);
+    const agentToken = await issueAgentCredential(
+      booted.baseUrl,
+      operator.token,
+      competition.id,
+      agent
+    );
+    await playHeadsUp(booted.baseUrl, competition.tableId, payer, { token: agentToken });
+
+    const responses = await Promise.all(
+      Array.from({ length: 6 }, () =>
+        apiRequest(booted.baseUrl, "POST", `/competitions/${competition.id}/settle`, {
+          token: operator.token,
+          body: { idempotencyKey: crypto.randomUUID() },
+        })
+      )
+    );
+    for (const response of responses) {
+      expect(response.status, JSON.stringify(response.body)).toBe(200);
+    }
+    const settlementJournals = await booted.app.prisma.journalTransaction.count({
+      where: {
+        requestId: {
+          in: [
+            `competition-prize-settlement:${competition.id}`,
+            `competition-prize-payout:${competition.id}`,
+            `competition-prize-release:${competition.id}`,
+          ],
+        },
+      },
+    });
+    expect(settlementJournals).toBe(1);
+    const reserveKey = `competition-prize:${competition.id}`;
+    expect(await atomicBalance(booted.app, null, "TOURNAMENT_RESERVE", reserveKey)).toBe(0n);
+    expect(await atomicBalance(booted.app, operator.id, "OPERATOR")).toBe(
+      sponsorBefore - 5000n + 1000n + 5000n
+    );
+    expect(await atomicBalance(booted.app, payer.id, "USER_AVAILABLE")).toBe(payerBefore - 1000n);
+    expect(await atomicBalance(booted.app, agent, "USER_AVAILABLE")).toBe(0n);
+  });
+
+  it("settles exactly once across a crash window with concurrent retries", async () => {
+    const orchestrator = await createOrchestrator(booted.baseUrl, operator.token);
+    servicePrincipalIds.push(orchestrator.principalId);
+    const agent = await provisionServicePrincipal(
+      booted.baseUrl,
+      operator.token,
+      `race-agent-crash-${crypto.randomBytes(3).toString("hex")}`,
+      orchestrator.principalId
+    );
+    servicePrincipalIds.push(agent);
+
+    const payerBefore = await atomicBalance(booted.app, payer.id, "USER_AVAILABLE");
+    const created = await createCompetition(booted.baseUrl, operator.token, {
+      name: "Race crash window",
+      mode: "ASSET",
+      entrants: [
+        { principalId: payer.id, kind: "WALLET" },
+        { principalId: agent, kind: "SERVICE" },
+      ],
+      smallBlind: 100,
+      bigBlind: 200,
+      terms: {
+        entry: { assetId: ASSET_ID, amountAtomic: "1000", payers: [{ principalId: payer.id }] },
+        prize: { assetId: ASSET_ID, amountAtomic: "5000", sponsorPrincipalId: operator.id },
+      },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect(created.status).toBe(201);
+    const competition = created.body.competition!;
+    competitionIds.push(competition.id);
+    tableIds.push(competition.tableId);
+    const optIn = await apiRequest(
+      booted.baseUrl,
+      "POST",
+      `/competitions/${competition.id}/opt-in`,
+      {
+        token: payer.token,
+        body: { idempotencyKey: crypto.randomUUID() },
+      }
+    );
+    expect(optIn.status).toBe(200);
+    const started = await apiRequest(
+      booted.baseUrl,
+      "POST",
+      `/competitions/${competition.id}/start`,
+      {
+        token: operator.token,
+        body: { idempotencyKey: crypto.randomUUID() },
+      }
+    );
+    expect(started.status).toBe(200);
+    const agentToken = await issueAgentCredential(
+      booted.baseUrl,
+      operator.token,
+      competition.id,
+      agent
+    );
+    await playHeadsUp(booted.baseUrl, competition.tableId, { token: agentToken }, payer);
+    await apiRequest(booted.baseUrl, "POST", `/competitions/${competition.id}/reconcile`, {
+      token: operator.token,
+    });
+
+    const row = await booted.app.prisma.competition.findUniqueOrThrow({
+      where: { id: competition.id },
+      select: { tournamentId: true },
+    });
+    const tournamentSettle = await apiRequest(
+      booted.baseUrl,
+      "POST",
+      `/tournaments/${row.tournamentId}/settle`,
+      { token: operator.token }
+    );
+    expect(tournamentSettle.status, JSON.stringify(tournamentSettle.body)).toBe(200);
+
+    const responses = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        apiRequest(booted.baseUrl, "POST", `/competitions/${competition.id}/settle`, {
+          token: operator.token,
+          body: { idempotencyKey: crypto.randomUUID() },
+        })
+      )
+    );
+    for (const response of responses) {
+      expect(response.status, JSON.stringify(response.body)).toBe(200);
+    }
+    const reserveKey = `competition-prize:${competition.id}`;
+    expect(await atomicBalance(booted.app, null, "TOURNAMENT_RESERVE", reserveKey)).toBe(0n);
+    expect(
+      await booted.app.prisma.journalTransaction.count({
+        where: {
+          requestId: {
+            in: [
+              `competition-prize-settlement:${competition.id}`,
+              `competition-prize-payout:${competition.id}`,
+              `competition-prize-release:${competition.id}`,
+            ],
+          },
+        },
+      })
+    ).toBe(1);
+    expect(await atomicBalance(booted.app, payer.id, "USER_AVAILABLE")).toBe(
+      payerBefore - 1000n + 5000n
+    );
+  });
+
+  it("refuses a divergent second disposition and never leaves a negative reserve", async () => {
+    const orchestrator = await createOrchestrator(booted.baseUrl, operator.token);
+    servicePrincipalIds.push(orchestrator.principalId);
+    const agent = await provisionServicePrincipal(
+      booted.baseUrl,
+      operator.token,
+      `race-agent-div-${crypto.randomBytes(3).toString("hex")}`,
+      orchestrator.principalId
+    );
+    servicePrincipalIds.push(agent);
+
+    const created = await createCompetition(booted.baseUrl, operator.token, {
+      name: "Divergent disposition",
+      mode: "ASSET",
+      entrants: [
+        { principalId: payer.id, kind: "WALLET" },
+        { principalId: agent, kind: "SERVICE" },
+      ],
+      smallBlind: 100,
+      bigBlind: 200,
+      terms: {
+        entry: { assetId: ASSET_ID, amountAtomic: "1000", payers: [{ principalId: payer.id }] },
+        prize: { assetId: ASSET_ID, amountAtomic: "5000", sponsorPrincipalId: operator.id },
+      },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect(created.status).toBe(201);
+    const competition = created.body.competition!;
+    competitionIds.push(competition.id);
+    tableIds.push(competition.tableId);
+    const reserveKey = `competition-prize:${competition.id}`;
+    expect(await atomicBalance(booted.app, null, "TOURNAMENT_RESERVE", reserveKey)).toBe(5000n);
+
+    // Adversarial fixture: over-fund the reserve so a divergent second
+    // disposition would be postable if it were not exclusive by identity.
+    const ledger = new AtomicLedger(booted.app.prisma);
+    const treasury = await ledger.ensureAccount(booted.app.prisma, {
+      assetId: ASSET_ID,
+      ownerId: null,
+      class: "TREASURY_RESERVE",
+    });
+    const reserve = await ledger.ensureAccount(booted.app.prisma, {
+      assetId: ASSET_ID,
+      ownerId: `competition-prize:${competition.id}`,
+      class: "TOURNAMENT_RESERVE",
+    });
+    await ledger.postAtomic({
+      requestId: `adversarial-topup:${competition.id}`,
+      assetId: ASSET_ID,
+      postings: [
+        { accountId: treasury.accountId, amountAtomic: "-5000" },
+        { accountId: reserve.accountId, amountAtomic: "5000" },
+      ],
+    });
+    expect(await atomicBalance(booted.app, null, "TOURNAMENT_RESERVE", reserveKey)).toBe(10000n);
+
+    await booted.app.prisma.$transaction((tx) =>
+      booted.app.financialManager.applyCompetitionPrizePayout(tx, {
+        competitionId: competition.id,
+        winnerId: payer.id,
+        assetId: ASSET_ID,
+        amountAtomic: "5000",
+      })
+    );
+    await expect(
+      booted.app.prisma.$transaction((tx) =>
+        booted.app.financialManager.applyCompetitionPrizeRelease(tx, {
+          competitionId: competition.id,
+          sponsorId: operator.id,
+          assetId: ASSET_ID,
+          amountAtomic: "5000",
+        })
+      )
+    ).rejects.toThrow();
+    expect(
+      await booted.app.prisma.journalTransaction.count({
+        where: {
+          requestId: {
+            in: [
+              `competition-prize-settlement:${competition.id}`,
+              `competition-prize-payout:${competition.id}`,
+              `competition-prize-release:${competition.id}`,
+            ],
+          },
+        },
+      })
+    ).toBe(1);
+    expect(await atomicBalance(booted.app, null, "TOURNAMENT_RESERVE", reserveKey)).toBe(5000n);
+
+    // Reverse order: a release followed by a divergent payout is also refused.
+    const second = await createCompetition(booted.baseUrl, operator.token, {
+      name: "Divergent disposition reverse",
+      mode: "ASSET",
+      entrants: [
+        { principalId: payer.id, kind: "WALLET" },
+        { principalId: agent, kind: "SERVICE" },
+      ],
+      smallBlind: 100,
+      bigBlind: 200,
+      terms: {
+        entry: { assetId: ASSET_ID, amountAtomic: "1000", payers: [{ principalId: payer.id }] },
+        prize: { assetId: ASSET_ID, amountAtomic: "5000", sponsorPrincipalId: operator.id },
+      },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect(second.status).toBe(201);
+    const secondCompetition = second.body.competition!;
+    competitionIds.push(secondCompetition.id);
+    tableIds.push(secondCompetition.tableId);
+    await booted.app.prisma.$transaction((tx) =>
+      booted.app.financialManager.applyCompetitionPrizeRelease(tx, {
+        competitionId: secondCompetition.id,
+        sponsorId: operator.id,
+        assetId: ASSET_ID,
+        amountAtomic: "5000",
+      })
+    );
+    await expect(
+      booted.app.prisma.$transaction((tx) =>
+        booted.app.financialManager.applyCompetitionPrizePayout(tx, {
+          competitionId: secondCompetition.id,
+          winnerId: payer.id,
+          assetId: ASSET_ID,
+          amountAtomic: "5000",
+        })
+      )
+    ).rejects.toThrow();
+    expect(
+      await atomicBalance(
+        booted.app,
+        null,
+        "TOURNAMENT_RESERVE",
+        `competition-prize:${secondCompetition.id}`
+      )
+    ).toBe(0n);
+  });
+
+  it("keeps reconciliation idempotent across repeated director calls", async () => {
+    const orchestrator = await createOrchestrator(booted.baseUrl, operator.token);
+    servicePrincipalIds.push(orchestrator.principalId);
+    const agent = await provisionServicePrincipal(
+      booted.baseUrl,
+      operator.token,
+      `recon-agent-${crypto.randomBytes(3).toString("hex")}`,
+      orchestrator.principalId
+    );
+    servicePrincipalIds.push(agent);
+
+    const created = await createCompetition(booted.baseUrl, orchestrator.token, {
+      name: "Reconcile idempotency",
+      mode: "NONFINANCIAL",
+      entrants: [
+        { principalId: payer.id, kind: "WALLET" },
+        { principalId: agent, kind: "SERVICE" },
+      ],
+      smallBlind: 100,
+      bigBlind: 200,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect(created.status).toBe(201);
+    const competition = created.body.competition!;
+    competitionIds.push(competition.id);
+    tableIds.push(competition.tableId);
+    const started = await apiRequest(
+      booted.baseUrl,
+      "POST",
+      `/competitions/${competition.id}/start`,
+      {
+        token: orchestrator.token,
+        body: { idempotencyKey: crypto.randomUUID() },
+      }
+    );
+    expect(started.status).toBe(200);
+    const agentToken = await issueAgentCredential(
+      booted.baseUrl,
+      orchestrator.token,
+      competition.id,
+      agent
+    );
+    await playHeadsUp(booted.baseUrl, competition.tableId, { token: agentToken }, payer);
+
+    const first = await apiRequest(
+      booted.baseUrl,
+      "POST",
+      `/competitions/${competition.id}/reconcile`,
+      { token: orchestrator.token }
+    );
+    expect(first.status).toBe(200);
+    const placementsAfterFirst = await booted.app.prisma.tournamentEntry.findMany({
+      where: {
+        tournamentId: (
+          await booted.app.prisma.competition.findUniqueOrThrow({
+            where: { id: competition.id },
+            select: { tournamentId: true },
+          })
+        ).tournamentId,
+      },
+      orderBy: { userId: "asc" },
+      select: { userId: true, placement: true, status: true },
+    });
+    const tournamentId = (
+      await booted.app.prisma.competition.findUniqueOrThrow({
+        where: { id: competition.id },
+        select: { tournamentId: true },
+      })
+    ).tournamentId;
+    const reconcileEventsAfterFirst = await booted.app.prisma.tournamentEvent.count({
+      where: { tournamentId, type: "TOURNAMENT_RECONCILED" },
+    });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const repeat = await apiRequest(
+        booted.baseUrl,
+        "POST",
+        `/competitions/${competition.id}/reconcile`,
+        { token: orchestrator.token }
+      );
+      expect(repeat.status).toBe(200);
+    }
+    const placementsAfterRepeats = await booted.app.prisma.tournamentEntry.findMany({
+      where: { tournamentId },
+      orderBy: { userId: "asc" },
+      select: { userId: true, placement: true, status: true },
+    });
+    expect(placementsAfterRepeats).toEqual(placementsAfterFirst);
+    // Repeated reconciles of the same accepted state append no new event.
+    expect(
+      await booted.app.prisma.tournamentEvent.count({
+        where: { tournamentId, type: "TOURNAMENT_RECONCILED" },
+      })
+    ).toBe(reconcileEventsAfterFirst);
   });
 });
