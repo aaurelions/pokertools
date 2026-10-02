@@ -20,6 +20,7 @@ import type {
   TableScope,
 } from "../src/services/principal-manager.js";
 import type { IncidentReadinessCheck } from "../src/services/financial-incidents.js";
+import type { PlatformReadinessService } from "../src/services/platform-readiness.js";
 
 declare module "@fastify/jwt" {
   interface FastifyJWT {
@@ -47,6 +48,18 @@ declare module "fastify" {
     riskManager: RiskManager;
     idempotencyManager: IdempotencyManager;
     principalManager: PrincipalManager;
+    /**
+     * Central platform readiness service (real DB/Redis/queue/ledger/chain/
+     * custody probes). Paid competition admission fails closed on its
+     * financial readiness; there is no environment bypass.
+     */
+    platformReadiness: PlatformReadinessService;
+    /**
+     * Paid competition admission policy. Defaults to the explicit
+     * `COMPETITION_PAID_ENABLED` configuration; readiness is always evaluated
+     * independently so narrowing the flag can never widen admission.
+     */
+    competitionPolicy: { paidEnabled: boolean };
     /**
      * Optional injected fail-closed incident-resolution readiness check
      * (RPC quorum, native gas). When absent the resolve route refuses to

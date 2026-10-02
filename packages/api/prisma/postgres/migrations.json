@@ -17,6 +17,12 @@
       "file": "003_audit_invariants.sql",
       "sha256": "bf6aae547626518facfa25fdc5ba198c410bf5e50751ca8502843ba4ea7eba1f",
       "description": "Append-only audit invariants: GameEvent and TournamentEvent immutability (no UPDATE; DELETE only via owning-row cascade), GameActionRequest one-way terminal transition with frozen identity/response, and re-assertion of the ordered/state-fingerprint unique indexes. Immutable/append-only: never edit after release."
+    },
+    {
+      "name": "004_competitions",
+      "file": "004_competitions.sql",
+      "sha256": "05e85390f62d8fbf9f7db82c4811479647bdf200f8ac0bebcaa2d479b85602ad",
+      "description": "Generic competition provisioning (NONFINANCIAL/ASSET modes), explicit canonical atomic entry/prize terms with mode-consistency, zero-entry SERVICE entrants, reserved prize status and multi-credential SERVICE principals with operator-delegated orchestration. Immutable/append-only: never edit after release."
     }
   ]
 }

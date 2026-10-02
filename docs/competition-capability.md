@@ -1,6 +1,8 @@
 # Competition capability (generic, public contract)
 
-Status: **contract revised per platform review; API/SDK implementation in progress.**
+Status: **contract frozen; API implemented and verified on PostgreSQL + Redis.**
+The SDK competition client lives on the separate public subpath and is owned by
+the SDK surface.
 
 This document is the public interface any external product orchestrator can
 build against. The runtime contracts live in `@pokertools/types`
@@ -85,9 +87,14 @@ Rules enforced at create (fail closed):
 - the prize sponsor must be authorized delegation: the organizer itself (when
   the organizer is a WALLET) or a fixed platform sponsor account. An
   orchestrator can never direct an arbitrary wallet to fund a prize;
-- referenced assets must exist in the database with `ACTIVE` status;
+- referenced assets must exist in the database with `ACTIVE` status, re-checked
+  inside the admission transaction so a concurrent freeze cannot admit value;
 - the full prize is reserved from the sponsor's operator atomic account in the
-  same transaction that creates the roster (before any start/admission).
+  same transaction that creates the roster (before any start/admission), so a
+  sponsor without funds fails the whole provisioning transaction closed;
+- `ASSET` admission requires the explicit `COMPETITION_PAID_ENABLED` feature
+  enable **and** the central platform readiness reporting financial `READY`.
+  There is no environment bypass and no test-only attestation in production.
 
 ### Opt-in
 
@@ -97,9 +104,12 @@ Rules enforced at create (fail closed):
 ```
 
 Only a configured WALLET payer may call it. The payer's explicit entry is
-charged atomically to the authorized sponsor's account; insufficient funds or
-any mismatch fails the whole request closed (no partial seat/charge). Replays
-return the original journal conversion.
+charged atomically to the authorized sponsor's account; the asset is re-checked
+`ACTIVE` inside the charging transaction and the operation requires the same
+paid-readiness gate as create. Insufficient funds or any mismatch fails the
+whole request closed (no partial seat/charge). Replays return the original
+journal conversion, and the durable PAID marker makes a retry after a crash a
+no-op rather than a second charge.
 
 ### Start
 
@@ -109,9 +119,13 @@ return the original journal conversion.
 ```
 
 Fails closed unless the competition is `REGISTRATION`, has ≥2 entrants, and
-every configured entry payer has paid. Starting delegates to the authoritative
-tournament lifecycle: the server seats every entrant at their assigned engine
-seat and deals the first hand.
+every configured entry payer has paid (and, for `ASSET`, assets are still
+`ACTIVE` and the prize reservation is intact). Starting is one database
+transaction: the server seats every entrant at their assigned engine seat, deals
+the first hand, and only then makes the competition `RUNNING`. Before that
+commit no seat or hand is publicly observable, and public gameplay on a
+competition table is rejected until the competition is fully seated and
+`RUNNING` (and after settlement).
 
 ### Settle
 
@@ -125,6 +139,8 @@ come from the authoritative tournament settlement. For `ASSET`, the reserved
 prize is paid to a WALLET winner exactly once (journal
 `competition-prize-payout:<competitionId>`), or released to the sponsor
 (`RELEASED`) when no financial winner exists. Retries are idempotent.
+Settlement is deliberately **not** readiness-gated: a provider outage must never
+trap a reserved prize or block releasing value.
 
 ### Agent credentials
 

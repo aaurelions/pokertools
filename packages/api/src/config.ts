@@ -1,4 +1,4 @@
-import { cleanEnv, str, num, makeValidator } from "envalid";
+import { cleanEnv, str, num, bool, makeValidator } from "envalid";
 import { assertPublicProcessSafety } from "./safety.js";
 
 assertPublicProcessSafety(process.env);
@@ -167,6 +167,14 @@ export const config = cleanEnv(process.env, {
     default: 100,
     desc: "Default page size for tournament listing",
   }),
+  COMPETITION_SPONSOR_PRINCIPAL_IDS: str({
+    default: "",
+    desc: "Comma-separated fixed platform sponsor principal ids authorized to finance competition prizes",
+  }),
+  COMPETITION_PAID_ENABLED: bool({
+    default: false,
+    desc: "Explicit enable for ASSET competition admission (still requires financial readiness READY)",
+  }),
   MAX_TOURNAMENT_TABLES: num({
     default: 10,
     desc: "Maximum tables allowed in a multi-table tournament",
@@ -190,5 +198,14 @@ export function allowedSiweChainIds(): Set<number> {
     config.ALLOWED_SIWE_CHAIN_IDS.split(",")
       .map((value) => Number(value.trim()))
       .filter((value) => Number.isInteger(value) && value > 0)
+  );
+}
+
+/** Fixed platform sponsor principal ids authorized to finance prizes. */
+export function competitionSponsorPrincipalIds(): Set<string> {
+  return new Set(
+    config.COMPETITION_SPONSOR_PRINCIPAL_IDS.split(",")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0)
   );
 }

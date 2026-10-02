@@ -43,6 +43,7 @@ export type GameAuthorityCode =
   | "IDENTITY_MISMATCH"
   | "INVALID_CANONICAL_ACTION"
   | "SEAT_OCCUPIED"
+  | "COMPETITION_NOT_ACTIONABLE"
   | "GAME_ACTION_REJECTED";
 
 export class GameAuthorityError extends Error {

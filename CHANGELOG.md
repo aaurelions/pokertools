@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Generic competition capability (provider-agnostic): `NONFINANCIAL` (zero entry/prize, mixed WALLET/SERVICE) and `ASSET` (explicit atomic entry per configured WALLET payer, sponsor-reserved fixed prize) competitions with 2-10 pre-provisioned entrants, authoritative server-assigned seats, atomic admission (table + snapshot + tournament + roster + prize reservation in one database transaction), atomic start (all seats + first deal + RUNNING in one transaction), and idempotent settlement (PAID to a WALLET winner or RELEASED when no financial winner exists).
+- Durable SERVICE principal provisioning/delegation and multi-credential lifecycle: operator-provisioned principals delegated to one orchestration principal, per-room table-scoped agent credentials (observe/act/chat only), in-place rotation that retains the principal identity, and a narrow `competition:orchestrate` credential that can only manage its own competitions and issue credentials for delegated entrants.
+- PostgreSQL migration `004_competitions` with mode-consistent atomic terms, zero-entry SERVICE invariants and competition credential indexes; `schema.sql` regenerated.
+- Paid admission fails closed on the central platform financial readiness plus the explicit `COMPETITION_PAID_ENABLED` flag; competition tables reject generic buy-in/add-chips/stand and public gameplay outside a fully-seated RUNNING competition.
+
 ### Fixed
 
 - Operator chip grants retry transient write conflicts at the whole-transaction boundary with the original idempotency key.

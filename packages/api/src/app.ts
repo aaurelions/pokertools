@@ -25,19 +25,27 @@ import { financeRoutes } from "./routes/finance/index.js";
 import { notesRoutes } from "./routes/notes/index.js";
 import { tournamentRoutes } from "./routes/tournaments/index.js";
 import { chipRoutes } from "./routes/chips/index.js";
+import { competitionRoutes } from "./routes/competitions/index.js";
 
 import { config } from "./config.js";
 import { HealthResponseSchema } from "@pokertools/types";
-import type { TableScope } from "./services/principal-manager.js";
+import {
+  ORCHESTRATION_SCOPE,
+  type ServiceScopeName,
+  type TableScope,
+} from "./services/principal-manager.js";
 import { createPlatformReadiness, buildReadinessResponse } from "./services/readiness-adapters.js";
+import type { CreatePlatformReadinessOptions } from "./services/readiness-adapters.js";
 import { createIncidentReadinessCheck } from "./services/incident-readiness.js";
 
 /**
- * Table scopes a SERVICE principal is permitted to reach over REST. Any other
- * route is categorically denied for machine credentials (no admin, finance,
- * custody, user, tournament-management, or auth-operator access).
+ * Scanner for the global SERVICE boundary. Table scopes authorize the canonical
+ * table protocol; `competition:orchestrate` authorizes the competition
+ * provisioning surface. Any other REST route is categorically denied for
+ * machine credentials (no admin, finance, custody, user, tournament-management
+ * or auth-operator access).
  */
-function serviceRequiredScope(method: string, routeUrl: string): TableScope | null {
+function serviceRequiredScope(method: string, routeUrl: string): ServiceScopeName | null {
   if (routeUrl === "/tables" || routeUrl === "/tables/:id") {
     return method === "GET" ? "table:observe" : null;
   }
@@ -53,10 +61,33 @@ function serviceRequiredScope(method: string, routeUrl: string): TableScope | nu
   if (routeUrl === "/tables/:id/chat") {
     return method === "POST" ? "table:chat" : method === "GET" ? "table:observe" : null;
   }
+  if (routeUrl === "/competitions") {
+    return method === "POST" ? ORCHESTRATION_SCOPE : null;
+  }
+  if (
+    [
+      "/competitions/:id",
+      "/competitions/:id/start",
+      "/competitions/:id/reconcile",
+      "/competitions/:id/settle",
+      "/competitions/:id/agent-credentials",
+    ].includes(routeUrl)
+  ) {
+    return ORCHESTRATION_SCOPE;
+  }
   return null;
 }
 
-export async function buildApp() {
+export interface BuildAppOptions {
+  /**
+   * Test/embedded seam for the central readiness composition. Production never
+   * passes this: the defaults are the real DB/Redis/queue/ledger/chain/custody
+   * probes. Financial admission always evaluates the composed service.
+   */
+  readiness?: Partial<CreatePlatformReadinessOptions>;
+}
+
+export async function buildApp(options: BuildAppOptions = {}) {
   const app = Fastify({
     logger:
       config.NODE_ENV === "test"
@@ -253,6 +284,15 @@ export async function buildApp() {
       return;
     }
 
+    // Orchestration is a narrow, non-table provisioning grant. It carries no
+    // resource restrictions and never reaches the table authorization path.
+    if (requiredScope === ORCHESTRATION_SCOPE) {
+      if (!principal.scopes.includes(ORCHESTRATION_SCOPE)) {
+        await reply.code(403).send({ error: "SERVICE_SCOPE_FORBIDDEN" });
+      }
+      return;
+    }
+
     const tableId = (request.params as { id?: string } | undefined)?.id ?? null;
 
     // Seat restrictions are checked against the principal's authoritative seat
@@ -293,6 +333,7 @@ export async function buildApp() {
   await app.register(authRoutes, { prefix: "/auth" });
   await app.register(tableRoutes, { prefix: "/tables" });
   await app.register(tournamentRoutes, { prefix: "/tournaments" });
+  await app.register(competitionRoutes, { prefix: "/competitions" });
   await app.register(userRoutes, { prefix: "/user" });
   await app.register(wsRoutes, { prefix: "/ws" });
   await app.register(financeRoutes, { prefix: "/finance" });
@@ -303,6 +344,7 @@ export async function buildApp() {
   }
 
   app.setErrorHandler((error, request, reply) => {
+    process.stdout.write("[CUSTOM_ERROR_HANDLER]\n");
     const err = error as Error & { statusCode?: number; code?: string };
     const statusCode = err.statusCode ? Number(err.statusCode) : 500;
     const code = typeof err.code === "string" ? err.code : "INTERNAL_ERROR";
@@ -330,7 +372,12 @@ export async function buildApp() {
           take: 1000,
         }),
     },
+    ...options.readiness,
   });
+  app.decorate("platformReadiness", readiness);
+  // Explicit paid-admission policy (defaults from configuration; embedders may
+  // narrow it). Readiness is always evaluated separately and independently.
+  app.decorate("competitionPolicy", { paidEnabled: config.COMPETITION_PAID_ENABLED });
   app.get("/ready", async (_request, reply) => {
     const report = await readiness.evaluate();
     return reply.code(report.ready ? 200 : 503).send(buildReadinessResponse(report));

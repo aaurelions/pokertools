@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
-import type { PrismaClient } from "../../generated/prisma/index.js";
-import type { Principal, PrincipalKind, ServiceScope } from "@pokertools/types";
+import type { Prisma, PrismaClient } from "../../generated/prisma/index.js";
+import type { Principal, PrincipalKind } from "@pokertools/types";
+import { AppError } from "../utils/errors.js";
 
 // ---------------------------------------------------------------------------
 // Canonical principal identity + table authorization.
@@ -10,12 +11,25 @@ import type { Principal, PrincipalKind, ServiceScope } from "@pokertools/types";
 // additional, server-only authorization state onto `AuthenticatedPrincipal`
 // (effective scopes, resource restrictions, operator authority). Those extras
 // are never a client-selectable DTO.
+//
+// A durable SERVICE principal may hold several credentials (one table-scoped
+// credential per room), so credentials never replace the principal identity.
 // ---------------------------------------------------------------------------
 
 export type { Principal, PrincipalKind, ServiceScope } from "@pokertools/types";
 
 export const TABLE_SCOPES = ["table:observe", "table:act", "table:chat"] as const;
-export type TableScope = ServiceScope;
+export type TableScope = (typeof TABLE_SCOPES)[number];
+
+/** Narrow provisioning grant. Exclusive with table scopes. */
+export const ORCHESTRATION_SCOPE = "competition:orchestrate" as const;
+export type OrchestrationScope = typeof ORCHESTRATION_SCOPE;
+
+export const SERVICE_SCOPES = [...TABLE_SCOPES, ORCHESTRATION_SCOPE] as const;
+export type ServiceScopeName = (typeof SERVICE_SCOPES)[number];
+
+export const ORCHESTRATION_AUTHORIZATION_REASONS = ["OK", "NO_PRINCIPAL", "SCOPE_MISSING"] as const;
+export type OrchestrationAuthorizationReason = (typeof ORCHESTRATION_AUTHORIZATION_REASONS)[number];
 
 export interface PrincipalRestrictions {
   tableId: string | null;
@@ -28,7 +42,7 @@ export interface PrincipalRestrictions {
  */
 export interface AuthenticatedPrincipal extends Principal {
   role: "PLAYER" | "ADMIN" | null;
-  scopes: TableScope[];
+  scopes: ServiceScopeName[];
   restrictions: PrincipalRestrictions;
   /** Only true for an explicitly ADMIN wallet principal. Never for SERVICE. */
   isOperator: boolean;
@@ -53,7 +67,9 @@ export interface CredentialAuditContext {
 
 export interface CreateServiceCredentialInput {
   name: string;
-  scopes: TableScope[];
+  scopes: ServiceScopeName[];
+  /** Issue for an existing durable SERVICE principal instead of creating one. */
+  principalId?: string | null;
   tableId?: string | null;
   seat?: number | null;
   expiresAt?: Date | null;
@@ -66,7 +82,7 @@ export interface CreatedServiceCredential {
   id: string;
   userId: string;
   name: string;
-  scopes: TableScope[];
+  scopes: ServiceScopeName[];
   tableId: string | null;
   seat: number | null;
   expiresAt: Date | null;
@@ -78,13 +94,26 @@ export interface ServiceCredentialSummary {
   id: string;
   userId: string;
   name: string;
-  scopes: TableScope[];
+  scopes: ServiceScopeName[];
   tableId: string | null;
   seat: number | null;
   revoked: boolean;
   expiresAt: Date | null;
   lastUsedAt: Date | null;
   revokedAt: Date | null;
+  createdAt: Date;
+}
+
+/**
+ * A durable SERVICE principal provisioned by an operator, optionally delegated
+ * to an orchestration principal. The principal is a User row of kind SERVICE
+ * with no wallet address.
+ */
+export interface ProvisionedServicePrincipal {
+  principalId: string;
+  name: string;
+  kind: "SERVICE";
+  delegatedToPrincipalId: string | null;
   createdAt: Date;
 }
 
@@ -100,14 +129,20 @@ function isTableScope(value: unknown): value is TableScope {
   return typeof value === "string" && (TABLE_SCOPES as readonly string[]).includes(value);
 }
 
-function parseScopes(raw: unknown): TableScope[] {
+function isServiceScopeName(value: unknown): value is ServiceScopeName {
+  return typeof value === "string" && (SERVICE_SCOPES as readonly string[]).includes(value);
+}
+
+function parseScopes(raw: unknown): ServiceScopeName[] {
   if (!Array.isArray(raw)) return [];
-  const unique = new Set<TableScope>();
+  const unique = new Set<ServiceScopeName>();
   for (const value of raw) {
-    if (isTableScope(value)) unique.add(value);
+    if (isServiceScopeName(value)) unique.add(value);
   }
   return [...unique];
 }
+
+const SERVICE_PRINCIPAL_NAME_PATTERN = /^[A-Za-z0-9 _.:-]+$/;
 
 /**
  * Generate a 256-bit random service secret with a namespaced prefix.
@@ -252,36 +287,79 @@ export class PrincipalManager {
   }
 
   /**
-   * Create a service credential and its backing SERVICE identity. The token is
+   * Create a service credential. Without `principalId` a new durable SERVICE
+   * principal is created; with `principalId` the credential is attached to an
+   * existing SERVICE principal and no new `User` row is created. The token is
    * generated here and returned once; callers must never persist the plaintext.
    * When `audit` is supplied, the credential and its durable audit record are
    * committed atomically.
+   *
+   * Shape invariant: an orchestration credential carries exactly
+   * `competition:orchestrate` and no resource restriction; table credentials
+   * carry table scopes only. Mixing the two is rejected so a single credential
+   * can never be both a room agent and a competition orchestrator.
    */
   async createServiceCredential(
     input: CreateServiceCredentialInput
   ): Promise<CreatedServiceCredential> {
+    const scopes = parseScopes(input.scopes);
+    if (scopes.length === 0) {
+      throw new AppError(
+        "At least one valid service scope is required",
+        400,
+        "SERVICE_SCOPE_INVALID"
+      );
+    }
+    const tableId = input.tableId ?? null;
+    const seat = input.seat ?? null;
+    const hasOrchestration = scopes.includes(ORCHESTRATION_SCOPE);
+    if (hasOrchestration && (scopes.length !== 1 || tableId !== null || seat !== null)) {
+      throw new AppError(
+        "competition:orchestrate is exclusive: it cannot be combined with table scopes or resource restrictions",
+        400,
+        "SERVICE_CREDENTIAL_SCOPE_CONFLICT"
+      );
+    }
+    if (!hasOrchestration && scopes.every((scope) => !isTableScope(scope))) {
+      throw new AppError("Table credentials require table scopes", 400, "SERVICE_SCOPE_INVALID");
+    }
+
     const token = generateServiceToken();
     const keyHash = hashServiceToken(token);
     const username = `service_${crypto.randomBytes(8).toString("hex")}`;
 
     const credential = await this.prisma.$transaction(async (tx) => {
-      const serviceUser = await tx.user.create({
-        data: {
-          username,
-          address: null,
-          kind: "SERVICE",
-          role: "PLAYER",
-        },
-      });
+      let serviceUserId: string;
+      if (input.principalId) {
+        const existing = await tx.user.findUnique({
+          where: { id: input.principalId },
+          select: { id: true, kind: true },
+        });
+        if (!existing || existing.kind !== "SERVICE") {
+          throw new AppError("SERVICE principal not found", 404, "SERVICE_PRINCIPAL_NOT_FOUND");
+        }
+        serviceUserId = existing.id;
+      } else {
+        const serviceUser = await tx.user.create({
+          data: {
+            username,
+            address: null,
+            kind: "SERVICE",
+            role: "PLAYER",
+          },
+          select: { id: true },
+        });
+        serviceUserId = serviceUser.id;
+      }
 
       const created = await tx.serviceCredential.create({
         data: {
-          userId: serviceUser.id,
+          userId: serviceUserId,
           name: input.name,
           keyHash,
-          scopes: input.scopes,
-          tableId: input.tableId ?? null,
-          seat: input.seat ?? null,
+          scopes,
+          tableId,
+          seat,
           expiresAt: input.expiresAt ?? null,
           createdById: input.createdById ?? null,
         },
@@ -297,10 +375,10 @@ export class PrincipalManager {
             userAgent: input.audit.userAgent ?? null,
             metadata: {
               name: created.name,
-              scopes: input.scopes,
+              scopes,
               tableId: created.tableId,
               seat: created.seat,
-              serviceUserId: serviceUser.id,
+              serviceUserId,
             },
           },
         });
@@ -319,6 +397,330 @@ export class PrincipalManager {
       expiresAt: credential.expiresAt,
       token,
     };
+  }
+
+  /**
+   * Provision a durable, named SERVICE principal. No credential is minted here:
+   * credentials are issued separately so an operator controls exactly which
+   * rooms a principal may act in. When `delegatedToPrincipalId` is supplied,
+   * that principal (an ADMIN wallet or a SERVICE principal holding an active
+   * orchestration credential) may roster the principal and issue its
+   * table-scoped room credentials.
+   */
+  async provisionServicePrincipal(input: {
+    name: string;
+    delegatedToPrincipalId?: string | null;
+    createdById?: string | null;
+    audit?: CredentialAuditContext;
+  }): Promise<ProvisionedServicePrincipal> {
+    const name = input.name.trim();
+    if (name.length === 0 || name.length > 64 || !SERVICE_PRINCIPAL_NAME_PATTERN.test(name)) {
+      throw new AppError("Invalid service principal name", 400, "SERVICE_PRINCIPAL_NAME_INVALID");
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const existingName = await tx.user.findUnique({ where: { username: name } });
+      if (existingName) {
+        throw new AppError(
+          "Service principal name is already taken",
+          409,
+          "SERVICE_PRINCIPAL_NAME_TAKEN"
+        );
+      }
+
+      const delegatedToPrincipalId = input.delegatedToPrincipalId ?? null;
+      if (delegatedToPrincipalId) {
+        await this.assertOrchestrationDelegate(tx, delegatedToPrincipalId);
+      }
+
+      const user = await tx.user.create({
+        data: { username: name, address: null, kind: "SERVICE", role: "PLAYER" },
+        select: { id: true, username: true, createdAt: true },
+      });
+
+      if (delegatedToPrincipalId) {
+        await tx.servicePrincipalDelegation.create({
+          data: { servicePrincipalId: user.id, delegatePrincipalId: delegatedToPrincipalId },
+        });
+      }
+
+      if (input.audit) {
+        await tx.auditLog.create({
+          data: {
+            actorId: input.audit.actorId ?? null,
+            action: "SERVICE_PRINCIPAL_PROVISION",
+            resource: `service-principal:${user.id}`,
+            ip: input.audit.ip ?? null,
+            userAgent: input.audit.userAgent ?? null,
+            metadata: { name: user.username, delegatedToPrincipalId },
+          },
+        });
+      }
+
+      return {
+        principalId: user.id,
+        name: user.username,
+        kind: "SERVICE" as const,
+        delegatedToPrincipalId,
+        createdAt: user.createdAt,
+      };
+    });
+  }
+
+  /**
+   * True when `delegatePrincipalId` is authorized for orchestration (ADMIN
+   * wallet or a SERVICE principal with an active orchestration credential).
+   */
+  private async assertOrchestrationDelegate(
+    tx: Prisma.TransactionClient,
+    delegatePrincipalId: string
+  ): Promise<void> {
+    const delegate = await tx.user.findUnique({
+      where: { id: delegatePrincipalId },
+      select: { id: true, kind: true, role: true },
+    });
+    if (!delegate) {
+      throw new AppError("Delegate principal not found", 404, "DELEGATE_PRINCIPAL_NOT_FOUND");
+    }
+    if (delegate.kind === "WALLET" && delegate.role === "ADMIN") return;
+
+    const credentials = await tx.serviceCredential.findMany({
+      where: { userId: delegatePrincipalId, revoked: false },
+      select: { scopes: true, expiresAt: true },
+    });
+    const now = new Date();
+    const authorized = credentials.some(
+      (credential) =>
+        (credential.expiresAt === null || credential.expiresAt > now) &&
+        parseScopes(credential.scopes).includes(ORCHESTRATION_SCOPE)
+    );
+    if (!authorized) {
+      throw new AppError(
+        "Delegate principal does not hold orchestration authority",
+        403,
+        "DELEGATE_NOT_ORCHESTRATOR"
+      );
+    }
+  }
+
+  /**
+   * Rotate one credential in place. The durable `principalId` (userId) is
+   * retained and the previous secret stops working immediately. Returns null
+   * when the credential does not exist.
+   */
+  async rotateServiceCredential(
+    credentialId: string,
+    input: { expiresAt?: Date | null } = {},
+    audit?: CredentialAuditContext
+  ): Promise<CreatedServiceCredential | null> {
+    const token = generateServiceToken();
+    const keyHash = hashServiceToken(token);
+
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.serviceCredential.findUnique({ where: { id: credentialId } });
+      if (!existing) return null;
+      if (existing.revoked) {
+        throw new AppError(
+          "Revoked credentials cannot be rotated; issue a new credential",
+          409,
+          "SERVICE_CREDENTIAL_REVOKED"
+        );
+      }
+
+      const updated = await tx.serviceCredential.update({
+        where: { id: credentialId },
+        data: {
+          keyHash,
+          lastUsedAt: null,
+          expiresAt: input.expiresAt !== undefined ? input.expiresAt : existing.expiresAt,
+        },
+      });
+
+      if (audit) {
+        await tx.auditLog.create({
+          data: {
+            actorId: audit.actorId ?? null,
+            action: "SERVICE_CREDENTIAL_ROTATE",
+            resource: `service-credential:${updated.id}`,
+            ip: audit.ip ?? null,
+            userAgent: audit.userAgent ?? null,
+            metadata: { serviceUserId: updated.userId },
+          },
+        });
+      }
+
+      return {
+        id: updated.id,
+        userId: updated.userId,
+        name: updated.name,
+        scopes: parseScopes(updated.scopes),
+        tableId: updated.tableId,
+        seat: updated.seat,
+        expiresAt: updated.expiresAt,
+        token,
+      };
+    });
+  }
+
+  /**
+   * Issue or rotate a narrow table-scoped credential for an existing SERVICE
+   * principal. Used by competition orchestration for its own entrants; the
+   * caller is responsible for the entrant/delegation/table ownership checks.
+   * The credential is always bound to `tableId`; rotation requires the existing
+   * credential to already be bound to the same table.
+   */
+  async issueScopedCredential(input: {
+    principalId: string;
+    tableId: string;
+    name: string;
+    scopes: TableScope[];
+    seat?: number | null;
+    expiresAt?: Date | null;
+    credentialId?: string | null;
+    createdById?: string | null;
+    audit?: CredentialAuditContext & { metadata?: Record<string, unknown> };
+  }): Promise<CreatedServiceCredential> {
+    const scopes = [...new Set(input.scopes.filter(isTableScope))];
+    if (scopes.length === 0) {
+      throw new AppError("At least one table scope is required", 400, "SERVICE_SCOPE_INVALID");
+    }
+    if (!input.tableId) {
+      throw new AppError(
+        "Scoped credentials require a table",
+        400,
+        "SERVICE_CREDENTIAL_TABLE_REQUIRED"
+      );
+    }
+    const seat = input.seat ?? null;
+    if (seat !== null && (seat < 0 || seat > 9)) {
+      throw new AppError("Seat restriction must be between 0 and 9", 400, "SEAT_INVALID");
+    }
+
+    const token = generateServiceToken();
+    const keyHash = hashServiceToken(token);
+
+    const credential = await this.prisma.$transaction(async (tx) => {
+      const principal = await tx.user.findUnique({
+        where: { id: input.principalId },
+        select: { id: true, kind: true },
+      });
+      if (!principal || principal.kind !== "SERVICE") {
+        throw new AppError("SERVICE principal not found", 404, "SERVICE_PRINCIPAL_NOT_FOUND");
+      }
+
+      let created;
+      if (input.credentialId) {
+        const existing = await tx.serviceCredential.findUnique({
+          where: { id: input.credentialId },
+        });
+        if (!existing || existing.userId !== input.principalId) {
+          throw new AppError(
+            "Credential not found for principal",
+            404,
+            "SERVICE_CREDENTIAL_NOT_FOUND"
+          );
+        }
+        if (existing.tableId !== input.tableId) {
+          throw new AppError(
+            "Credential is bound to a different table",
+            403,
+            "SERVICE_CREDENTIAL_TABLE_MISMATCH"
+          );
+        }
+        if (existing.revoked) {
+          throw new AppError(
+            "Revoked credentials cannot be rotated; issue a new credential",
+            409,
+            "SERVICE_CREDENTIAL_REVOKED"
+          );
+        }
+        created = await tx.serviceCredential.update({
+          where: { id: existing.id },
+          data: {
+            keyHash,
+            name: input.name,
+            scopes,
+            seat,
+            lastUsedAt: null,
+            expiresAt: input.expiresAt !== undefined ? input.expiresAt : existing.expiresAt,
+          },
+        });
+      } else {
+        created = await tx.serviceCredential.create({
+          data: {
+            userId: input.principalId,
+            name: input.name,
+            keyHash,
+            scopes,
+            tableId: input.tableId,
+            seat,
+            expiresAt: input.expiresAt ?? null,
+            createdById: input.createdById ?? null,
+          },
+        });
+      }
+
+      if (input.audit) {
+        await tx.auditLog.create({
+          data: {
+            actorId: input.audit.actorId ?? null,
+            action: input.credentialId ? "AGENT_CREDENTIAL_ROTATE" : "AGENT_CREDENTIAL_ISSUE",
+            resource: `service-credential:${created.id}`,
+            ip: input.audit.ip ?? null,
+            userAgent: input.audit.userAgent ?? null,
+            metadata: {
+              serviceUserId: input.principalId,
+              tableId: input.tableId,
+              scopes,
+              seat,
+              ...(input.audit.metadata ?? {}),
+            },
+          },
+        });
+      }
+
+      return created;
+    });
+
+    return {
+      id: credential.id,
+      userId: credential.userId,
+      name: credential.name,
+      scopes: parseScopes(credential.scopes),
+      tableId: credential.tableId,
+      seat: credential.seat,
+      expiresAt: credential.expiresAt,
+      token,
+    };
+  }
+
+  /**
+   * Durable delegation check: may `delegatePrincipalId` provision/credential
+   * this SERVICE principal? Revoked delegations fail closed.
+   */
+  async isServicePrincipalDelegatedTo(
+    servicePrincipalId: string,
+    delegatePrincipalId: string
+  ): Promise<boolean> {
+    const delegation = await this.prisma.servicePrincipalDelegation.findUnique({
+      where: { servicePrincipalId },
+    });
+    return (
+      delegation !== null &&
+      delegation.revokedAt === null &&
+      delegation.delegatePrincipalId === delegatePrincipalId
+    );
+  }
+
+  /** True when the principal may orchestrate competitions (ADMIN or grant). */
+  authorizeOrchestration(principal: AuthenticatedPrincipal | undefined | null): {
+    allowed: boolean;
+    reason: OrchestrationAuthorizationReason;
+  } {
+    if (!principal) return { allowed: false, reason: "NO_PRINCIPAL" };
+    if (principal.isOperator) return { allowed: true, reason: "OK" };
+    if (principal.scopes.includes(ORCHESTRATION_SCOPE)) return { allowed: true, reason: "OK" };
+    return { allowed: false, reason: "SCOPE_MISSING" };
   }
 
   /**

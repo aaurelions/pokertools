@@ -118,6 +118,50 @@ CREATE TABLE IF NOT EXISTS "ChipLedgerEntry" (
     CONSTRAINT "ChipLedgerEntry_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "ChipAccount" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS "Competition" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "name" TEXT NOT NULL,
+    "mode" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'REGISTRATION',
+    "idempotencyKey" TEXT NOT NULL,
+    "requestHash" TEXT NOT NULL,
+    "organizerId" TEXT NOT NULL,
+    "tournamentId" TEXT NOT NULL,
+    "startingStack" INTEGER NOT NULL,
+    "smallBlind" INTEGER NOT NULL,
+    "bigBlind" INTEGER NOT NULL,
+    "entryAssetId" TEXT,
+    "entryAmountAtomic" TEXT,
+    "prizeAssetId" TEXT,
+    "prizeAmountAtomic" TEXT,
+    "sponsorId" TEXT,
+    "prizeStatus" TEXT NOT NULL DEFAULT 'NOT_APPLICABLE',
+    "prizeReservationJournalId" TEXT,
+    "prizeSettlementJournalId" TEXT,
+    "startedAt" DATETIME,
+    "finishedAt" DATETIME,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "Competition_organizerId_fkey" FOREIGN KEY ("organizerId") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT "Competition_tournamentId_fkey" FOREIGN KEY ("tournamentId") REFERENCES "Tournament" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT "Competition_sponsorId_fkey" FOREIGN KEY ("sponsorId") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS "CompetitionEntrant" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "competitionId" TEXT NOT NULL,
+    "principalId" TEXT NOT NULL,
+    "kind" TEXT NOT NULL,
+    "seat" INTEGER NOT NULL,
+    "entryState" TEXT NOT NULL DEFAULT 'NOT_REQUIRED',
+    "entryAmountAtomic" TEXT,
+    "entryJournalId" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "CompetitionEntrant_competitionId_fkey" FOREIGN KEY ("competitionId") REFERENCES "Competition" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "CompetitionEntrant_principalId_fkey" FOREIGN KEY ("principalId") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS "CustodyHeartbeat" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "chainId" INTEGER NOT NULL,
@@ -302,6 +346,17 @@ CREATE TABLE IF NOT EXISTS "ServiceCredential" (
     "updatedAt" DATETIME NOT NULL,
     CONSTRAINT "ServiceCredential_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT "ServiceCredential_createdById_fkey" FOREIGN KEY ("createdById") REFERENCES "User" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS "ServicePrincipalDelegation" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "servicePrincipalId" TEXT NOT NULL,
+    "delegatePrincipalId" TEXT NOT NULL,
+    "revokedAt" DATETIME,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "ServicePrincipalDelegation_servicePrincipalId_fkey" FOREIGN KEY ("servicePrincipalId") REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "ServicePrincipalDelegation_delegatePrincipalId_fkey" FOREIGN KEY ("delegatePrincipalId") REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS "Session" (
@@ -500,6 +555,28 @@ CREATE INDEX IF NOT EXISTS "ChipLedgerEntry_referenceId_idx" ON "ChipLedgerEntry
 
 CREATE INDEX IF NOT EXISTS "ChipLedgerEntry_type_idx" ON "ChipLedgerEntry"("type");
 
+CREATE UNIQUE INDEX IF NOT EXISTS "CompetitionEntrant_competitionId_principalId_key" ON "CompetitionEntrant"("competitionId", "principalId");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "CompetitionEntrant_competitionId_seat_key" ON "CompetitionEntrant"("competitionId", "seat");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "CompetitionEntrant_entryJournalId_key" ON "CompetitionEntrant"("entryJournalId");
+
+CREATE INDEX IF NOT EXISTS "CompetitionEntrant_principalId_idx" ON "CompetitionEntrant"("principalId");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "Competition_organizerId_idempotencyKey_key" ON "Competition"("organizerId", "idempotencyKey");
+
+CREATE INDEX IF NOT EXISTS "Competition_organizerId_idx" ON "Competition"("organizerId");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "Competition_prizeReservationJournalId_key" ON "Competition"("prizeReservationJournalId");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "Competition_prizeSettlementJournalId_key" ON "Competition"("prizeSettlementJournalId");
+
+CREATE INDEX IF NOT EXISTS "Competition_sponsorId_idx" ON "Competition"("sponsorId");
+
+CREATE INDEX IF NOT EXISTS "Competition_status_createdAt_idx" ON "Competition"("status", "createdAt");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "Competition_tournamentId_key" ON "Competition"("tournamentId");
+
 CREATE INDEX IF NOT EXISTS "CustodyHeartbeat_chainId_signerAddress_observedAt_idx" ON "CustodyHeartbeat"("chainId", "signerAddress", "observedAt");
 
 CREATE UNIQUE INDEX IF NOT EXISTS "CustodyHeartbeat_chainId_signerAddress_workerId_key" ON "CustodyHeartbeat"("chainId", "signerAddress", "workerId");
@@ -578,7 +655,13 @@ CREATE INDEX IF NOT EXISTS "ServiceCredential_tableId_idx" ON "ServiceCredential
 
 CREATE INDEX IF NOT EXISTS "ServiceCredential_userId_idx" ON "ServiceCredential"("userId");
 
-CREATE UNIQUE INDEX IF NOT EXISTS "ServiceCredential_userId_key" ON "ServiceCredential"("userId");
+CREATE INDEX IF NOT EXISTS "ServiceCredential_userId_revoked_idx" ON "ServiceCredential"("userId", "revoked");
+
+CREATE INDEX IF NOT EXISTS "ServicePrincipalDelegation_delegatePrincipalId_idx" ON "ServicePrincipalDelegation"("delegatePrincipalId");
+
+CREATE INDEX IF NOT EXISTS "ServicePrincipalDelegation_delegatePrincipalId_revokedAt_idx" ON "ServicePrincipalDelegation"("delegatePrincipalId", "revokedAt");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "ServicePrincipalDelegation_servicePrincipalId_key" ON "ServicePrincipalDelegation"("servicePrincipalId");
 
 CREATE INDEX IF NOT EXISTS "Session_jti_idx" ON "Session"("jti");
 

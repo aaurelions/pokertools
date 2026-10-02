@@ -12,7 +12,10 @@ import {
   LogoutResponseSchema,
   NonceResponseSchema,
   PrincipalSchema,
+  ProvisionServicePrincipalRequestSchema,
+  ProvisionedServicePrincipalSchema,
   RevokeServiceCredentialResponseSchema,
+  RotateServiceCredentialRequestSchema,
   type LoginRequest,
 } from "@pokertools/types";
 import { allowedSiweChainIds, config } from "../../config.js";
@@ -245,6 +248,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       const created = await fastify.principalManager.createServiceCredential({
         name: parsed.data.name,
         scopes: parsed.data.scopes,
+        principalId: parsed.data.principalId ?? null,
         tableId: parsed.data.tableId ?? null,
         seat: parsed.data.seat ?? null,
         expiresAt: parsed.data.expiresAt ? new Date(parsed.data.expiresAt) : null,
@@ -304,6 +308,75 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       return RevokeServiceCredentialResponseSchema.parse({ success: true });
+    }
+  );
+
+  // POST /auth/service-credentials/:id/rotate
+  fastify.post<{ Params: { id: string } }>(
+    "/service-credentials/:id/rotate",
+    { onRequest: [fastify.authenticate, fastify.requireOperator] },
+    async (request, reply) => {
+      const parsedId = CredentialIdSchema.safeParse(request.params.id);
+      if (!parsedId.success) {
+        return reply.code(400).send({ error: "Invalid credential id" });
+      }
+      const parsed = RotateServiceCredentialRequestSchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return reply.code(400).send({ error: "Validation failed", issues: parsed.error.issues });
+      }
+
+      const rotated = await fastify.principalManager.rotateServiceCredential(
+        parsedId.data,
+        { expiresAt: parsed.data.expiresAt ? new Date(parsed.data.expiresAt) : undefined },
+        {
+          actorId: request.principal?.id ?? null,
+          ip: request.ip,
+          userAgent: request.headers["user-agent"] ?? null,
+        }
+      );
+      if (!rotated) {
+        return reply.code(404).send({ error: "SERVICE_CREDENTIAL_NOT_FOUND" });
+      }
+
+      return reply.code(200).send(
+        CreatedServiceCredentialSchema.parse({
+          ...rotated,
+          expiresAt: rotated.expiresAt ? rotated.expiresAt.toISOString() : null,
+        })
+      );
+    }
+  );
+
+  // POST /auth/service-principals — provision a durable SERVICE principal
+  // (optionally delegated to an orchestration principal). No credential is
+  // minted here; room credentials are issued separately (operator route or
+  // competition-scoped agent credential route).
+  fastify.post(
+    "/service-principals",
+    { onRequest: [fastify.authenticate, fastify.requireOperator] },
+    async (request, reply) => {
+      const parsed = ProvisionServicePrincipalRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: "Validation failed", issues: parsed.error.issues });
+      }
+
+      const created = await fastify.principalManager.provisionServicePrincipal({
+        name: parsed.data.name,
+        delegatedToPrincipalId: parsed.data.delegatedToPrincipalId ?? null,
+        createdById: request.principal?.id ?? null,
+        audit: {
+          actorId: request.principal?.id ?? null,
+          ip: request.ip,
+          userAgent: request.headers["user-agent"] ?? null,
+        },
+      });
+
+      return reply.code(201).send(
+        ProvisionedServicePrincipalSchema.parse({
+          ...created,
+          createdAt: created.createdAt.toISOString(),
+        })
+      );
     }
   );
 };

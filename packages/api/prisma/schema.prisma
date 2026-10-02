@@ -33,8 +33,13 @@ model User {
   idempotency       IdempotencyRecord[]
   tournamentEntries TournamentEntry[]
   createdTournaments Tournament[]        @relation("TournamentCreator")
-  serviceIdentity   ServiceCredential?   @relation("ServiceIdentity")
+  serviceCredentials ServiceCredential[] @relation("ServiceIdentity")
   createdServiceCredentials ServiceCredential[] @relation("ServiceCredentialCreator")
+  delegatedServicePrincipals ServicePrincipalDelegation[] @relation("DelegatedServicePrincipal")
+  serviceDelegations         ServicePrincipalDelegation[] @relation("ServicePrincipalDelegate")
+  organizedCompetitions   Competition[]        @relation("CompetitionOrganizer")
+  sponsoredCompetitions   Competition[]        @relation("CompetitionSponsor")
+  competitionEntrants     CompetitionEntrant[] @relation("CompetitionEntrant")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -57,15 +62,17 @@ enum PrincipalKind {
 
 // Revocable, scoped machine credential. Only the SHA-256 hash of the secret is
 // persisted; the plaintext 256-bit secret is returned exactly once on creation.
-// Restrictions are optional and additive: a credential restricted to a tableId
-// or seat can never act outside that resource.
+// A SERVICE principal may hold several concurrently valid credentials (one per
+// room/table), so a credential is keyed by its own id and never changes the
+// durable principal identity. Restrictions are optional and additive: a
+// credential restricted to a tableId or seat can never act outside it.
 model ServiceCredential {
   id          String   @id @default(cuid())
-  userId      String   @unique
+  userId      String
   user        User     @relation("ServiceIdentity", fields: [userId], references: [id], onDelete: Cascade)
   name        String
   keyHash     String   @unique
-  // JSON array of table scopes: "table:observe" | "table:act" | "table:chat".
+  // JSON array of service scopes: table observe/act/chat or competition:orchestrate.
   scopes      Json
   // Optional resource restrictions.
   tableId     String?
@@ -80,9 +87,29 @@ model ServiceCredential {
   updatedAt   DateTime @updatedAt
 
   @@index([userId])
+  @@index([userId, revoked])
   @@index([createdById])
   @@index([revoked])
   @@index([tableId])
+}
+
+/// Operator-authorized delegation of a durable SERVICE principal to exactly one
+/// orchestration principal. Only the delegate may roster the principal into its
+/// competitions and mint/rotate its table-scoped agent credentials. Revoking
+/// the delegation immediately blocks further orchestration use without touching
+/// the principal or its existing room credentials.
+model ServicePrincipalDelegation {
+  id                  String    @id @default(cuid())
+  servicePrincipalId  String    @unique
+  servicePrincipal    User      @relation("DelegatedServicePrincipal", fields: [servicePrincipalId], references: [id], onDelete: Cascade)
+  delegatePrincipalId String
+  delegate            User      @relation("ServicePrincipalDelegate", fields: [delegatePrincipalId], references: [id], onDelete: Cascade)
+  revokedAt           DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([delegatePrincipalId])
+  @@index([delegatePrincipalId, revokedAt])
 }
 
 model Session {
@@ -186,6 +213,10 @@ model Tournament {
   // Append-only canonical tournament audit (start/reconcile/close/settle).
   tournamentEvents TournamentEvent[]
 
+  // Competitions reuse the authoritative tournament/game machinery; a
+  // competition owns exactly one backing tournament.
+  competition Competition? @relation("CompetitionTournament")
+
   // Optional exact chip<->asset conversion policy. Null means the tournament
   // runs on the durable PLAY_CHIPS economy (integer chips, no implied value).
   economicPolicyId String?
@@ -240,6 +271,112 @@ enum TournamentEntryStatus {
   ACTIVE
   ELIMINATED
   PAID
+}
+
+// ============================================================================
+// COMPETITIONS (generic 2-10 entrant provisioning on the authoritative
+// tournament/game machinery)
+// ============================================================================
+
+enum CompetitionMode {
+  NONFINANCIAL
+  ASSET
+}
+
+enum CompetitionStatus {
+  REGISTRATION
+  RUNNING
+  FINISHED
+  CANCELLED
+}
+
+enum CompetitionEntryState {
+  NOT_REQUIRED
+  PENDING
+  PAID
+}
+
+enum CompetitionPrizeStatus {
+  NOT_APPLICABLE
+  RESERVED
+  PAID
+  RELEASED
+}
+
+/// A generic server-authoritative competition. The roster is provisioned into
+/// an owned Tournament (zero buy-in/fee for NONFINANCIAL) and every ASSET
+/// movement is an idempotent balanced atomic journal.
+model Competition {
+  id     String            @id @default(cuid())
+  name   String
+  mode   CompetitionMode
+  status CompetitionStatus @default(REGISTRATION)
+
+  // Client-supplied create identity. The unique pair makes provisioning
+  // idempotent across retries/crashes without depending on an idempotency
+  // record's PROCESSING/FAILED lifecycle.
+  idempotencyKey String
+  requestHash    String
+
+  // Provisioning principal: an ADMIN wallet or a competition:orchestrate
+  // SERVICE credential (the backing tournament creator identity).
+  organizerId String
+  organizer   User   @relation("CompetitionOrganizer", fields: [organizerId], references: [id], onDelete: Restrict)
+
+  // Authoritative tournament/game machinery owner (1:1).
+  tournamentId String     @unique
+  tournament   Tournament @relation("CompetitionTournament", fields: [tournamentId], references: [id], onDelete: Restrict)
+
+  startingStack Int
+  smallBlind    Int
+  bigBlind      Int
+
+  // Explicit ASSET economics (null for NONFINANCIAL); canonical atomic strings.
+  entryAssetId      String?
+  entryAmountAtomic String?
+  prizeAssetId      String?
+  prizeAmountAtomic String?
+  sponsorId         String?
+  sponsor           User?   @relation("CompetitionSponsor", fields: [sponsorId], references: [id], onDelete: Restrict)
+
+  prizeStatus               CompetitionPrizeStatus @default(NOT_APPLICABLE)
+  prizeReservationJournalId String?                @unique
+  prizeSettlementJournalId  String?                @unique
+
+  entrants CompetitionEntrant[]
+
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@unique([organizerId, idempotencyKey])
+  @@index([status, createdAt])
+  @@index([organizerId])
+  @@index([sponsorId])
+}
+
+/// Provisioned roster entry with the authoritative registration seat. `kind` is
+/// a durable snapshot validated against the principal at provisioning time.
+model CompetitionEntrant {
+  id            String      @id @default(cuid())
+  competitionId String
+  competition   Competition @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  principalId   String
+  principal     User        @relation("CompetitionEntrant", fields: [principalId], references: [id], onDelete: Restrict)
+  kind          PrincipalKind
+  seat          Int
+  entryState    CompetitionEntryState @default(NOT_REQUIRED)
+  // Resolved per-payer amount (nullable for SERVICE / non-paying entrants).
+  entryAmountAtomic String?
+  entryJournalId    String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([competitionId, principalId])
+  @@unique([competitionId, seat])
+  @@index([principalId])
 }
 
 enum GameMode {

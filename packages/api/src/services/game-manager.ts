@@ -153,6 +153,11 @@ export class GameManager {
       );
     }
 
+    // Public/worker mutations on a competition-managed table are only legal
+    // while the competition is RUNNING and fully seated. Director/management
+    // mutations (skipIdentity) are exempt.
+    if (!options.skipIdentity) await this.assertCompetitionActionable(tableId);
+
     const result = await this.runMutationWithLock(
       {
         tableId,
@@ -186,6 +191,9 @@ export class GameManager {
         400
       );
     }
+    // Competition-managed tables are only actionable while RUNNING and fully
+    // seated; settled/cancelled/partial states fail closed before any mutation.
+    await this.assertCompetitionActionable(tableId);
     const data = parsed.data;
     const requestHash = canonicalActionHash({
       tableId,
@@ -360,6 +368,54 @@ export class GameManager {
     actionTimeoutSeconds?: number;
     allowSpectators?: boolean;
   }): Promise<string> {
+    const { tableId, snapshot } = await this.prisma.$transaction(
+      (tx) => this.createTableInTx(tx, config),
+      { maxWait: 10_000, timeout: 15_000 }
+    );
+
+    try {
+      await this.redis.set(
+        `table:${tableId}`,
+        JSON.stringify(snapshot),
+        "EX",
+        appConfig.TABLE_REDIS_TTL_SECONDS
+      );
+    } catch {
+      // Redis is only a cache; table creation already committed to the DB.
+    }
+
+    return tableId;
+  }
+
+  /**
+   * Create a table, its initial durable snapshot and the sealed TABLE_CREATED
+   * event inside a caller-owned transaction. This is the atomic admission seam
+   * used by generic provisioning (e.g. competitions), so a table can never be
+   * visible without its owning metadata, roster or financial reservation. The
+   * caller owns the transaction boundary and any post-commit cache/dispatch.
+   */
+  async createTableInTx(
+    tx: Prisma.TransactionClient,
+    config: {
+      name: string;
+      mode: "CASH" | "TOURNAMENT";
+      smallBlind: number;
+      bigBlind: number;
+      maxPlayers: number;
+      minBuyIn?: number;
+      maxBuyIn?: number;
+      blindStructure?: Array<{ smallBlind: number; bigBlind: number; ante: number }>;
+      startingStack?: number;
+      ante?: number;
+      rakePercent?: number;
+      rakeCap?: number;
+      noFlopNoDrop?: boolean;
+      timeBankSeconds?: number;
+      timeBankDeductionSeconds?: number;
+      actionTimeoutSeconds?: number;
+      allowSpectators?: boolean;
+    }
+  ): Promise<{ tableId: string; snapshot: Snapshot }> {
     const engineConfig: {
       smallBlind: number;
       bigBlind: number;
@@ -391,40 +447,49 @@ export class GameManager {
     const snapshot: Snapshot = engine.snapshot;
     snapshot._version = 0;
 
-    const table = await this.prisma.$transaction(
-      async (tx) => {
-        const created = await tx.table.create({
-          data: {
-            name: config.name,
-            mode: config.mode,
-            config: JSON.parse(JSON.stringify(config)) as Prisma.InputJsonValue,
-            status: "WAITING",
-            state: JSON.stringify(snapshot),
-            stateVersion: 0,
-            eventSeq: 1,
-          },
-        });
-        const events = sealEvents(created.id, 0, 1, null, [
-          buildTableCreatedEvent(JSON.parse(JSON.stringify(config)) as Record<string, unknown>),
-        ]);
-        await insertGameEvents(tx, created.id, events);
-        return created;
+    const created = await tx.table.create({
+      data: {
+        name: config.name,
+        mode: config.mode,
+        config: JSON.parse(JSON.stringify(config)) as Prisma.InputJsonValue,
+        status: "WAITING",
+        state: JSON.stringify(snapshot),
+        stateVersion: 0,
+        eventSeq: 1,
       },
-      { maxWait: 10_000, timeout: 15_000 }
-    );
+    });
+    const events = sealEvents(created.id, 0, 1, null, [
+      buildTableCreatedEvent(JSON.parse(JSON.stringify(config)) as Record<string, unknown>),
+    ]);
+    await insertGameEvents(tx, created.id, events);
+    return { tableId: created.id, snapshot };
+  }
 
-    try {
-      await this.redis.set(
-        `table:${table.id}`,
-        JSON.stringify(snapshot),
-        "EX",
-        appConfig.TABLE_REDIS_TTL_SECONDS
+  /**
+   * Competition-managed tables only accept play while their competition is
+   * RUNNING and fully seated. Registration/partial seating and post-settlement
+   * states fail closed for public and worker mutations; director/management
+   * mutations (skipIdentity) are exempt. Non-competition tables are unaffected.
+   */
+  private async assertCompetitionActionable(tableId: string): Promise<void> {
+    const table = await this.prisma.table.findUnique({
+      where: { id: tableId },
+      select: { tournamentId: true },
+    });
+    if (!table?.tournamentId) return;
+    const tournament = await this.prisma.tournament.findUnique({
+      where: { id: table.tournamentId },
+      select: { competition: { select: { status: true, startedAt: true } } },
+    });
+    const competition = tournament?.competition;
+    if (!competition) return;
+    if (competition.status !== "RUNNING" || competition.startedAt === null) {
+      throw new GameAuthorityError(
+        "COMPETITION_NOT_ACTIONABLE",
+        "Competition is not open for play",
+        409
       );
-    } catch {
-      // Redis is only a cache; table creation already committed to the DB.
     }
-
-    return table.id;
   }
 
   /** Append a bounded public chat message to the table's immutable event log. */

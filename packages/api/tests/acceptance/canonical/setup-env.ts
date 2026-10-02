@@ -22,5 +22,9 @@ process.env.COOKIE_SECRET = process.env.COOKIE_SECRET ?? "acceptance-cookie-secr
 process.env.ENABLE_TEST_ROUTES = "false";
 process.env.ALLOWED_SIWE_CHAIN_IDS = "31337,1";
 process.env.LOG_LEVEL = "error";
+// Explicit acceptance enable for paid competition admission. Readiness is
+// still evaluated for real (fixtures + injected test chain-quorum seam); this
+// flag never substitutes for readiness.
+process.env.COMPETITION_PAID_ENABLED = process.env.COMPETITION_PAID_ENABLED ?? "true";
 // Keep scheduled/lock timings tight but deterministic for race tests.
 process.env.ACTION_TIMEOUT_SECONDS = process.env.ACTION_TIMEOUT_SECONDS ?? "2";

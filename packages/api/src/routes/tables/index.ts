@@ -52,6 +52,32 @@ function parseOptionalInteger(value: string | undefined): number | undefined {
   return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
+/**
+ * Competition-managed rosters are provisioned and seated by the platform; the
+ * generic table routes must not admit outsiders or drift engine state for them.
+ * Self-register tournaments and cash tables keep their existing behavior.
+ */
+async function competitionManagedTableError(
+  fastify: FastifyInstance,
+  tableId: string
+): Promise<{ statusCode: number; code: string; message: string } | null> {
+  const table = await fastify.prisma.table.findUnique({
+    where: { id: tableId },
+    select: { tournamentId: true },
+  });
+  if (!table?.tournamentId) return null;
+  const tournament = await fastify.prisma.tournament.findUnique({
+    where: { id: table.tournamentId },
+    select: { competition: { select: { id: true } } },
+  });
+  if (!tournament?.competition) return null;
+  return {
+    statusCode: 403,
+    code: "COMPETITION_MANAGED_TABLE",
+    message: "Competition-managed roster cannot be changed through table routes",
+  };
+}
+
 function parseRequiredInteger(value: string | undefined): number | undefined {
   return parseOptionalInteger(value);
 }
@@ -231,6 +257,14 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
 
       if (!idempotencyKey) {
         return reply.code(400).send({ error: "idempotencyKey is required" });
+      }
+
+      const competitionManaged = await competitionManagedTableError(fastify, id);
+      if (competitionManaged) {
+        return reply.code(competitionManaged.statusCode).send({
+          error: competitionManaged.code,
+          message: competitionManaged.message,
+        });
       }
 
       const amountNum = typeof amount === "string" ? parseInt(amount, 10) : amount;
@@ -790,10 +824,20 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post<{ Params: { id: string } }>(
     "/:id/stand",
     { onRequest: [fastify.authenticate] },
-    async (request) => {
+    async (request, reply) => {
       const { id } = request.params;
       const { userId } = request.user;
       const actorId = userId;
+
+      // Competition rosters are platform-managed: a voluntary stand could
+      // corrupt the authoritative roster/elimination record.
+      const competitionManaged = await competitionManagedTableError(fastify, id);
+      if (competitionManaged) {
+        return reply.code(competitionManaged.statusCode).send({
+          error: competitionManaged.code,
+          message: competitionManaged.message,
+        });
+      }
 
       // Use the same table lock namespace as game actions/settlement so engine
       // state reads, settlement flush and financial writes are serialized for

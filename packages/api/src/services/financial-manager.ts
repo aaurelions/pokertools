@@ -1,8 +1,8 @@
 import type { Prisma, PrismaClient } from "../../generated/prisma/index.js";
 import { ChipLedger, type ChipAccountRef, type ChipBalances } from "./chip-ledger.js";
 import { EconomicPolicyService } from "./economic-policy.js";
+import { AtomicLedger, runTransactionWithRetry } from "./atomic-ledger.js";
 import { ValidationError } from "../utils/errors.js";
-import { runTransactionWithRetry } from "./atomic-ledger.js";
 
 /**
  * FinancialManager — economic integration for the engine.
@@ -97,10 +97,12 @@ function operatorRef(operatorId: string): ChipAccountRef {
 export class FinancialManager {
   private readonly chips: ChipLedger;
   private readonly economics: EconomicPolicyService;
+  private readonly ledger: AtomicLedger;
 
   constructor(private readonly prisma: PrismaClient) {
     this.chips = new ChipLedger(prisma);
     this.economics = new EconomicPolicyService(prisma);
+    this.ledger = new AtomicLedger(prisma);
   }
 
   // ==========================================================================
@@ -639,5 +641,185 @@ export class FinancialManager {
   async getTournamentPool(tournamentId: string): Promise<bigint> {
     const account = await this.chips.getAccount(this.prisma, tournamentPoolRef(tournamentId));
     return account?.balance ?? 0n;
+  }
+
+  // ==========================================================================
+  // Competitions — explicit atomic economics (no chip journal, no prize pool)
+  // ==========================================================================
+
+  /**
+   * Competition prize reservations use a durable per-competition system account
+   * so a reservation can never be commingled with a tournament pool or another
+   * competition. The namespaced owner makes the account non-negative-enforced.
+   */
+  private competitionReserveSpec(competitionId: string): {
+    ownerId: string;
+    class: "TOURNAMENT_RESERVE";
+  } {
+    return { ownerId: `competition-prize:${competitionId}`, class: "TOURNAMENT_RESERVE" };
+  }
+
+  private positiveAtomic(amountAtomic: string, label: string): bigint {
+    let amount: bigint;
+    try {
+      amount = BigInt(amountAtomic);
+    } catch {
+      throw new ValidationError(`Invalid ${label} atomic amount`);
+    }
+    if (amount <= 0n) throw new ValidationError(`${label} atomic amount must be positive`);
+    return amount;
+  }
+
+  /**
+   * Charge one configured WALLET entry payer into the authorized sponsor's
+   * operator account. Idempotent on `competition-entry:<competitionId>:<payerId>`;
+   * a different amount under the same identity is a conflict, never a second
+   * charge.
+   */
+  async applyCompetitionEntry(
+    tx: Prisma.TransactionClient,
+    input: {
+      competitionId: string;
+      payerId: string;
+      sponsorId: string;
+      assetId: string;
+      amountAtomic: string;
+    }
+  ): Promise<{ journalRequestId: string }> {
+    const amount = this.positiveAtomic(input.amountAtomic, "competition entry");
+    const from = await this.ledger.ensureAccount(tx, {
+      assetId: input.assetId,
+      ownerId: input.payerId,
+      class: "USER_AVAILABLE",
+    });
+    const to = await this.ledger.ensureAccount(tx, {
+      assetId: input.assetId,
+      ownerId: input.sponsorId,
+      class: "OPERATOR",
+    });
+    const posted = await this.ledger.post(tx, {
+      requestId: `competition-entry:${input.competitionId}:${input.payerId}`,
+      assetId: input.assetId,
+      postings: [
+        { accountId: from.accountId, amountAtomic: (-amount).toString() },
+        { accountId: to.accountId, amountAtomic: amount.toString() },
+      ],
+    });
+    return { journalRequestId: posted.requestId };
+  }
+
+  /**
+   * Reserve the fixed sponsor prize before admission. The reservation is taken
+   * from the authorized sponsor's operator account and held in the
+   * competition's reserve account until settlement. Fails closed when the
+   * sponsor is unfunded.
+   */
+  async applyCompetitionPrizeReserve(
+    tx: Prisma.TransactionClient,
+    input: {
+      competitionId: string;
+      sponsorId: string;
+      assetId: string;
+      amountAtomic: string;
+    }
+  ): Promise<{ journalRequestId: string }> {
+    const amount = this.positiveAtomic(input.amountAtomic, "competition prize");
+    const from = await this.ledger.ensureAccount(tx, {
+      assetId: input.assetId,
+      ownerId: input.sponsorId,
+      class: "OPERATOR",
+    });
+    const reserve = await this.ledger.ensureAccount(tx, {
+      assetId: input.assetId,
+      ...this.competitionReserveSpec(input.competitionId),
+    });
+    const posted = await this.ledger.post(tx, {
+      requestId: `competition-prize-reserve:${input.competitionId}`,
+      assetId: input.assetId,
+      postings: [
+        { accountId: from.accountId, amountAtomic: (-amount).toString() },
+        { accountId: reserve.accountId, amountAtomic: amount.toString() },
+      ],
+    });
+    return { journalRequestId: posted.requestId };
+  }
+
+  /**
+   * Pay the reserved prize to a WALLET winner. Idempotent on
+   * `competition-prize-payout:<competitionId>`: a retry returns the original
+   * journal and never moves value twice.
+   */
+  async applyCompetitionPrizePayout(
+    tx: Prisma.TransactionClient,
+    input: {
+      competitionId: string;
+      winnerId: string;
+      assetId: string;
+      amountAtomic: string;
+    }
+  ): Promise<{ journalRequestId: string }> {
+    const amount = this.positiveAtomic(input.amountAtomic, "competition prize");
+    const reserve = await this.ledger.ensureAccount(tx, {
+      assetId: input.assetId,
+      ...this.competitionReserveSpec(input.competitionId),
+    });
+    const winner = await this.ledger.ensureAccount(tx, {
+      assetId: input.assetId,
+      ownerId: input.winnerId,
+      class: "USER_AVAILABLE",
+    });
+    const posted = await this.ledger.post(tx, {
+      requestId: `competition-prize-payout:${input.competitionId}`,
+      assetId: input.assetId,
+      postings: [
+        { accountId: reserve.accountId, amountAtomic: (-amount).toString() },
+        { accountId: winner.accountId, amountAtomic: amount.toString() },
+      ],
+    });
+    return { journalRequestId: posted.requestId };
+  }
+
+  /**
+   * Release the reservation back to the sponsor when settlement produces no
+   * financial winner (e.g. a SERVICE winner). Idempotent on
+   * `competition-prize-release:<competitionId>`; no value is created.
+   */
+  async applyCompetitionPrizeRelease(
+    tx: Prisma.TransactionClient,
+    input: {
+      competitionId: string;
+      sponsorId: string;
+      assetId: string;
+      amountAtomic: string;
+    }
+  ): Promise<{ journalRequestId: string }> {
+    const amount = this.positiveAtomic(input.amountAtomic, "competition prize");
+    const reserve = await this.ledger.ensureAccount(tx, {
+      assetId: input.assetId,
+      ...this.competitionReserveSpec(input.competitionId),
+    });
+    const sponsor = await this.ledger.ensureAccount(tx, {
+      assetId: input.assetId,
+      ownerId: input.sponsorId,
+      class: "OPERATOR",
+    });
+    const posted = await this.ledger.post(tx, {
+      requestId: `competition-prize-release:${input.competitionId}`,
+      assetId: input.assetId,
+      postings: [
+        { accountId: reserve.accountId, amountAtomic: (-amount).toString() },
+        { accountId: sponsor.accountId, amountAtomic: amount.toString() },
+      ],
+    });
+    return { journalRequestId: posted.requestId };
+  }
+
+  /** Current competition prize reservation balance (atomic string). */
+  async getCompetitionPrizeReserve(competitionId: string, assetId: string): Promise<string> {
+    const account = await this.ledger.getAccount(this.prisma, {
+      assetId,
+      ...this.competitionReserveSpec(competitionId),
+    });
+    return account?.balanceAtomic ?? "0";
   }
 }

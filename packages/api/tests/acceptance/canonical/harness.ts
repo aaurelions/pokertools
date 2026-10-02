@@ -16,6 +16,7 @@ import { CanonicalActionReceiptSchema } from "@pokertools/types";
 import { SaferSeatObservationSchema } from "./schemas.js";
 import type { AcceptanceEnv } from "./infra.js";
 import { readAcceptanceEnv } from "./infra.js";
+import type { CreatePlatformReadinessOptions } from "../../../src/services/readiness-adapters.js";
 
 export interface AcceptanceApp {
   app: FastifyInstance;
@@ -59,10 +60,18 @@ export interface PrincipalSpec {
 /**
  * Boot the real app on the provisioned PostgreSQL/Redis. The PostgreSQL-provider
  * Prisma client is injected by the Vitest alias in the acceptance config.
+ *
+ * `readiness` is an explicit test seam for the central readiness composition
+ * (e.g. a chain-quorum probe in an environment without live RPC endpoints).
+ * Production boots the real probes; readiness is always evaluated.
  */
-export async function bootApp(): Promise<AcceptanceApp> {
+export async function bootApp(
+  options: {
+    readiness?: Partial<CreatePlatformReadinessOptions>;
+  } = {}
+): Promise<AcceptanceApp> {
   const { buildApp } = await import("../../../src/app.js");
-  const app = await buildApp();
+  const app = await buildApp({ readiness: options.readiness });
   await app.ready();
   const baseUrl = await app.listen({ host: "127.0.0.1", port: 0 });
   return {
