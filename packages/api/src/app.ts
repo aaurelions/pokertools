@@ -318,12 +318,14 @@ export async function buildApp(options: BuildAppOptions = {}) {
       }
     }
 
-    const authorization = app.principalManager.authorizeTable(
+    const authorization = await app.principalManager.authorizeTableRequest({
       principal,
-      requiredScope,
+      scope: requiredScope,
       tableId,
-      persistedSeat
-    );
+      persistedSeat,
+      // Durable historical-seat proof applies only to canonical action replay.
+      canonicalAction: routeUrl === "/tables/:id/action" ? request.body : undefined,
+    });
     if (!authorization.allowed) {
       await reply.code(403).send({ error: authorization.reason });
     }

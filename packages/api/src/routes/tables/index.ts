@@ -446,12 +446,13 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(401).send({ error: "Unauthorized" });
       }
 
-      const authorization = fastify.authorizeTable(
-        request,
-        "table:act",
-        id,
-        await persistedSeatFor(fastify, id, principal)
-      );
+      const authorization = await fastify.principalManager.authorizeTableRequest({
+        principal,
+        scope: "table:act",
+        tableId: id,
+        persistedSeat: await persistedSeatFor(fastify, id, principal),
+        canonicalAction: request.body,
+      });
       if (!authorization.allowed) {
         return reply.code(403).send({ error: authorization.reason });
       }

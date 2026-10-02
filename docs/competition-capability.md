@@ -182,10 +182,18 @@ place; omit it to mint a fresh one (safe after a restart).
 - **Agent credential**: issued/rotated via
   `POST /competitions/:id/agent-credentials` for a delegated SERVICE entrant of
   that competition. It always carries only `table:observe | table:act | table:chat`
-  and is bound to the competition table (optionally the assigned seat). One
+  and is bound to the competition table. `seat` is optional and defaults to
+  table-only; an explicit seat must equal the entrant's assigned seat. One
   principal may hold several credentials (one per room), so an agent can play
   simultaneous competitions. Omit `credentialId` to mint a fresh credential
   after a restart; pass it to rotate the old secret in place.
+- **Accepted-receipt replay**: an accepted canonical action remains replayable
+  after the agent is eliminated. When a seat-restricted credential has no
+  current engine seat, the platform derives the historical authorized seat only
+  from the exact durable COMPLETED request (same principal and payload hash) in
+  its own database, then returns the stored receipt. New requests, altered
+  payloads, foreign actors and revoked credentials have no such proof and stay
+  denied.
 - **Rotation**: operator rotation (`POST /auth/service-credentials/:id/rotate`)
   and competition-scoped rotation both re-key the credential and never change
   `principalId`. Callers may persist only `credentialId` for metadata/revoke and

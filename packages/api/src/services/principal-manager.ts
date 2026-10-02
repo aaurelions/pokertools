@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
 import type { Prisma, PrismaClient } from "../../generated/prisma/index.js";
-import type { Principal, PrincipalKind } from "@pokertools/types";
+import {
+  CanonicalActionRequestSchema,
+  type Principal,
+  type PrincipalKind,
+} from "@pokertools/types";
+import { canonicalActionHash, findActionRequest } from "./game-repository.js";
 import { AppError } from "../utils/errors.js";
 
 // ---------------------------------------------------------------------------
@@ -282,6 +287,72 @@ export class PrincipalManager {
         return { allowed: false, reason: "SEAT_RESTRICTED" };
       }
     }
+
+    return { allowed: true, reason: "OK" };
+  }
+
+  /**
+   * Centralized table-request authorization used by the global SERVICE
+   * preHandler and the canonical action route.
+   *
+   * Scope, revocation (resolved before this call) and table binding are
+   * enforced first by {@link authorizeTable}. A seat-restricted credential
+   * whose principal currently holds no engine seat (eliminated) may still read
+   * its own already-accepted mutation receipt: when the strictly parsed
+   * canonical request exactly matches a durable COMPLETED `GameActionRequest`
+   * for the same principal and payload hash, the historical authorized seat is
+   * derived from that stored result. New/unknown payloads, foreign actors and
+   * revoked credentials have no such proof and stay denied. No audit or engine
+   * internals are exposed; the platform database is the authority.
+   */
+  async authorizeTableRequest(input: {
+    principal: AuthenticatedPrincipal | undefined | null;
+    scope: TableScope;
+    tableId?: string | null;
+    persistedSeat?: number | null;
+    /** Raw canonical action body, only for POST /tables/:id/action. */
+    canonicalAction?: unknown;
+  }): Promise<TableAuthorization> {
+    const base = this.authorizeTable(
+      input.principal,
+      input.scope,
+      input.tableId,
+      input.persistedSeat
+    );
+    if (base.allowed || base.reason !== "SEAT_RESTRICTED") return base;
+
+    const principal = input.principal;
+    if (!principal || principal.kind !== "SERVICE") return base;
+    if (!input.tableId || input.scope !== "table:act") return base;
+    // Only when the principal currently holds no seat (eliminated); a current
+    // seat that differs is a real restriction violation.
+    if (input.persistedSeat !== null && input.persistedSeat !== undefined) return base;
+    if (input.canonicalAction === undefined) return base;
+
+    const parsed = CanonicalActionRequestSchema.safeParse(input.canonicalAction);
+    if (!parsed.success) return base;
+    const requestHash = canonicalActionHash({
+      tableId: input.tableId,
+      principalId: principal.id,
+      turnId: parsed.data.turnId,
+      expectedVersion: parsed.data.expectedVersion,
+      actionId: parsed.data.actionId,
+      amount: parsed.data.amount,
+    });
+    const record = await findActionRequest(this.prisma, input.tableId, parsed.data.requestId);
+    if (!record || record.status !== "COMPLETED" || record.response === null) return base;
+    if (record.principalId !== principal.id || record.requestHash !== requestHash) return base;
+
+    const response = record.response as {
+      observation?: { state?: { players?: Array<{ id?: unknown } | null> } };
+    } | null;
+    const players = response?.observation?.state?.players;
+    if (!Array.isArray(players)) return base;
+    const historicalSeat = players.findIndex(
+      (player) => player !== null && player.id === principal.id
+    );
+    if (historicalSeat < 0) return base;
+    if (principal.restrictions.seat !== historicalSeat) return base;
 
     return { allowed: true, reason: "OK" };
   }
