@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from "../../generated/prisma/index.js";
 import { ChipLedger, type ChipAccountRef, type ChipBalances } from "./chip-ledger.js";
 import { EconomicPolicyService } from "./economic-policy.js";
 import { ValidationError } from "../utils/errors.js";
+import { runTransactionWithRetry } from "./atomic-ledger.js";
 
 /**
  * FinancialManager — economic integration for the engine.
@@ -158,7 +159,7 @@ export class FinancialManager {
   ) {
     const chips = toChipBigInt(amount, "grant amount");
     if (chips <= 0n) throw new ValidationError("grant amount must be positive");
-    return this.prisma.$transaction((tx) =>
+    return runTransactionWithRetry(this.prisma, (tx) =>
       this.chips.grant(tx, {
         principalId,
         amount: chips,
