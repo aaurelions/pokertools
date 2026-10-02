@@ -344,7 +344,6 @@ export async function buildApp(options: BuildAppOptions = {}) {
   }
 
   app.setErrorHandler((error, request, reply) => {
-    process.stdout.write("[CUSTOM_ERROR_HANDLER]\n");
     const err = error as Error & { statusCode?: number; code?: string };
     const statusCode = err.statusCode ? Number(err.statusCode) : 500;
     const code = typeof err.code === "string" ? err.code : "INTERNAL_ERROR";
