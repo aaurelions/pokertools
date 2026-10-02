@@ -285,13 +285,14 @@ export async function settleTournament(
   });
   if (!preCheck) throw new AppError("Tournament not found", 404, "TOURNAMENT_NOT_FOUND");
 
-  // Return idempotent settlement details if already FINISHED
+  // Return idempotent settlement details if already FINISHED. The winner is
+  // derived from the authoritative placement, independent of prize amounts
+  // (a zero-prize competition tournament has no `prize > 0` rows).
   if (preCheck.status === "FINISHED") {
     const finishedTournament = await fastify.prisma.tournament.findUnique({
       where: { id: tournamentId },
       include: {
         entries: {
-          where: { prize: { gt: 0 } },
           include: { user: { select: { username: true } } },
           orderBy: { placement: "asc" },
         },
@@ -299,11 +300,12 @@ export async function settleTournament(
     });
     if (finishedTournament) {
       const winnerEntry = finishedTournament.entries.find((e) => e.placement === 1);
+      const paidEntries = finishedTournament.entries.filter((e) => e.prize > 0);
       return {
         success: true,
         winnerUserId: winnerEntry?.userId ?? null,
         prize: winnerEntry?.prize ?? 0,
-        payouts: finishedTournament.entries.map((e) => ({
+        payouts: paidEntries.map((e) => ({
           userId: e.userId,
           placement: e.placement ?? 0,
           amount: e.prize,
@@ -331,19 +333,22 @@ export async function settleTournament(
     });
     if (!tournament) throw new AppError("Tournament not found", 404, "TOURNAMENT_NOT_FOUND");
 
-    // Double-check under lock: if another request settled this already, return idempotent result
+    // Double-check under lock: if another request settled this already, return
+    // the idempotent result with the winner derived from placement 1 (never
+    // from prize amounts).
     if (tournament.status === "FINISHED") {
       const finishedEntries = await fastify.prisma.tournamentEntry.findMany({
-        where: { tournamentId, prize: { gt: 0 } },
+        where: { tournamentId },
         include: { user: { select: { username: true } } },
         orderBy: { placement: "asc" },
       });
       const winnerEntry = finishedEntries.find((e) => e.placement === 1);
+      const paidEntries = finishedEntries.filter((e) => e.prize > 0);
       return {
         success: true,
         winnerUserId: winnerEntry?.userId ?? null,
         prize: winnerEntry?.prize ?? 0,
-        payouts: finishedEntries.map((e) => ({
+        payouts: paidEntries.map((e) => ({
           userId: e.userId,
           placement: e.placement ?? 0,
           amount: e.prize,

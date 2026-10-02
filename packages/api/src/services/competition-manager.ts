@@ -917,7 +917,11 @@ export async function settleCompetition(
     where: { tournamentId: competition.tournamentId },
     orderBy: { placement: "asc" },
   });
-  const winnerId = settled.winnerUserId;
+  // Durable recovery: a crash after the tournament settlement commit but before
+  // the prize disposition replays the FINISHED tournament, whose winner must be
+  // derived from placement 1 independent of prize amounts.
+  const winnerId =
+    settled.winnerUserId ?? entries.find((entry) => entry.placement === 1)?.userId ?? null;
   if (!winnerId) {
     throw new AppError(
       "Competition has no authoritative winner",
