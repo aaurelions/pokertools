@@ -514,9 +514,14 @@ Obtain it via `new PokerClient(config)` or `usePokerClient()`.
 | `setToken(token)`                  | Update or clear the bearer token.                                                                                |
 | `getToken()` / `isAuthenticated()` | Inspect the current credential.                                                                                  |
 | `health()`                         | `GET /health` — canonical liveness check.                                                                        |
+| `getReadiness()`                   | `GET /ready` — canonical readiness report; resolves on 200 **and** 503 (inspect `status`/`financial.state`).     |
 | `getNonce()`                       | `POST /auth/nonce` — get SIWE nonce.                                                                             |
 | `login(request)`                   | `POST /auth/login` — complete SIWE auth and store the token.                                                     |
 | `logout()`                         | `POST /auth/logout` — revoke session and clear the token.                                                        |
+| `getPrincipal()`                   | `GET /auth/me` — canonical `{ id, kind, walletAddress }` identity for the caller.                                |
+| `createServiceCredential(request)` | `POST /auth/service-credentials` — operator-only mint; returns the one-time plaintext `token`.                   |
+| `listServiceCredentials()`         | `GET /auth/service-credentials` — operator-only summaries (never the token).                                     |
+| `revokeServiceCredential(id)`      | `POST /auth/service-credentials/:id/revoke` — operator-only, effective immediately.                              |
 | `getTables()`                      | `GET /tables` — list active tables.                                                                              |
 | `createTable(config)`              | `POST /tables` — create a table. Returns the `tableId`.                                                          |
 | `getTableState(id, since?)`        | Schema-validated `PublicWireState` view; returns `null` on 304. Use `getObservation` for turns/legal actions.    |
@@ -524,6 +529,9 @@ Obtain it via `new PokerClient(config)` or `usePokerClient()`.
 | `action(tableId, request)`         | `POST /tables/:id/action` — submit a canonical action; returns the stored result with `receipt` + `observation`. |
 | `buyIn(tableId, request)`          | `POST /tables/:id/buy-in`.                                                                                       |
 | `addChips(tableId, request)`       | `POST /tables/:id/add-chips`.                                                                                    |
+| `getChat(tableId, options?)`       | `GET /tables/:id/chat` — bounded, ordered `ChatPage`; `{ limit?, beforeSeq? }`.                                  |
+| `sendChat(tableId, body)`          | `POST /tables/:id/chat` — append one server-escaped `ChatMessage`.                                               |
+| `getReplay(tableId, options)`      | `GET /tables/:id/replay` — hash-chained `ReplayFrame` for `{ fromEventSeq, toEventSeq? }` (event log).           |
 | `getTournaments()`                 | `GET /tournaments`.                                                                                              |
 | `createTournament(request)`        | `POST /tournaments`.                                                                                             |
 | `getTournament(id)`                | `GET /tournaments/:id`.                                                                                          |

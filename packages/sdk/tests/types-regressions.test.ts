@@ -3,12 +3,19 @@ import type {
   AssetBalance,
   CanonicalActionRequest,
   CanonicalActionResult,
+  ChatMessage,
+  ChatPage,
+  CreatedServiceCredential,
   DepositClaimRequest,
   HandHistoryEntry,
   LegalAction,
   PlayerNote,
+  Principal,
   PublicWireState,
+  ReadinessResponse,
+  ReplayFrame,
   SeatObservation,
+  ServiceCredentialSummary,
   UserBalances,
   UserProfile,
   WithdrawalIntent,
@@ -71,6 +78,73 @@ describe("SDK canonical type surface", () => {
       inPlayAtomic: string;
       pendingWithdrawalAtomic: string;
     }>();
+  });
+});
+
+describe("SDK generic endpoint type surface", () => {
+  it("exposes the three-field public principal for GET /auth/me", () => {
+    expectTypeOf<Principal>().toMatchTypeOf<{
+      id: string;
+      kind: "WALLET" | "SERVICE";
+      walletAddress: string | null;
+    }>();
+  });
+
+  it("exposes readiness as a discriminated-ready platform report", () => {
+    expectTypeOf<ReadinessResponse>().toMatchTypeOf<{
+      status: "ready" | "not_ready";
+      timestamp: number;
+      checks: Array<{ name: string; state: string; mandatory: boolean }>;
+      financial: { state: string; reasons: string[] };
+    }>();
+  });
+
+  it("exposes append-only chat and replay frames", () => {
+    expectTypeOf<ChatMessage>().toMatchTypeOf<{
+      messageId: string;
+      tableId: string;
+      handId: string;
+      eventSeq: number;
+      principalId: string;
+      body: string;
+      sentAt: number;
+    }>();
+    expectTypeOf<ChatPage>().toMatchTypeOf<{
+      tableId: string;
+      messages: ChatMessage[];
+      nextBeforeSeq: number | null;
+    }>();
+    expectTypeOf<ReplayFrame>().toMatchTypeOf<{
+      tableId: string;
+      fromEventSeq: number;
+      toEventSeq: number;
+      anchorHash: string | null;
+      headEventSeq: number;
+      events: Array<{ eventSeq: number; hash: string; previousHash: string | null }>;
+      chainValid: boolean;
+    }>();
+  });
+
+  it("keeps the one-time credential token out of list summaries", () => {
+    expectTypeOf<CreatedServiceCredential>().toMatchTypeOf<{
+      id: string;
+      userId: string;
+      name: string;
+      scopes: Array<"table:observe" | "table:act" | "table:chat">;
+      tableId: string | null;
+      seat: number | null;
+      expiresAt: string | null;
+      token: string;
+    }>();
+    expectTypeOf<ServiceCredentialSummary>().toMatchTypeOf<{
+      id: string;
+      userId: string;
+      name: string;
+      revoked: boolean;
+      lastUsedAt: string | null;
+      createdAt: string;
+    }>();
+    expectTypeOf<ServiceCredentialSummary>().not.toHaveProperty("token");
   });
 });
 

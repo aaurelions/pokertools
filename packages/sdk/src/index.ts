@@ -89,6 +89,19 @@ export type {
   CanonicalActionReceipt,
   CanonicalActionResult,
   PublicWireState,
+  // Canonical append-only table streams (chat/events/replay)
+  ChatMessage,
+  ChatPage,
+  ReplayFrame,
+  // Canonical operational readiness
+  ReadinessResponse,
+  // Canonical service-credential administration
+  CredentialId,
+  CreateServiceCredentialRequest,
+  CreatedServiceCredential,
+  ServiceCredentialSummary,
+  ListServiceCredentialsResponse,
+  RevokeServiceCredentialResponse,
   // Canonical finance (atomic decimal strings only)
   Asset,
   AssetStatus,
@@ -115,6 +128,10 @@ export {
   ObservationMessageSchema,
   ServerMessageSchema,
   safeParseServerMessage,
+  ChatMessageSchema,
+  ChatPageSchema,
+  ReplayFrameSchema,
+  ReadinessResponseSchema,
   AssetSchema,
   BalanceSchema,
   DepositClaimSchema,

@@ -25,6 +25,7 @@ import type {
   ReconcileTournamentResponse,
   SettleTournamentResponse,
   HealthResponse,
+  ReadinessResponse,
   UserProfile,
   HandHistoryEntry,
   PlayerNote,
@@ -35,6 +36,14 @@ import type {
   CanonicalActionRequest,
   CanonicalActionResult,
   PublicWireState,
+  Principal,
+  ChatMessage,
+  ChatPage,
+  ReplayFrame,
+  CredentialId,
+  CreateServiceCredentialRequest,
+  CreatedServiceCredential,
+  ServiceCredentialSummary,
   Asset,
   Balance as AssetBalance,
   DepositClaim,
@@ -44,6 +53,15 @@ import type {
 } from "@pokertools/types";
 import {
   HealthResponseSchema,
+  ReadinessResponseSchema,
+  PrincipalSchema,
+  ChatMessageSchema,
+  ChatPageSchema,
+  ReplayFrameSchema,
+  CreateServiceCredentialRequestSchema,
+  CreatedServiceCredentialSchema,
+  ListServiceCredentialsResponseSchema,
+  RevokeServiceCredentialResponseSchema,
   GetTablesResponseSchema,
   GetTableStateResponseSchema,
   SeatObservationSchema,
@@ -223,6 +241,60 @@ export class PokerClient {
     this.token = null;
   }
 
+  /**
+   * Get the authenticated principal identity (`GET /auth/me`).
+   *
+   * Returns exactly the canonical public principal: `{ id, kind, walletAddress }`.
+   * Wallet sessions and SERVICE credentials both resolve; the wire shape never
+   * carries roles, scopes or credential material. SERVICE principals may call
+   * this endpoint even though every other `/auth` route is operator-only.
+   */
+  async getPrincipal(): Promise<Principal> {
+    return PrincipalSchema.parse(await this.request<unknown>("GET", "/auth/me"));
+  }
+
+  // ============================================================================
+  // Service credentials (operator-only, ADMIN wallet)
+  //
+  // Machine credentials are table-scoped (table:observe/table:act/table:chat)
+  // and can never hold operator or finance authority. Only an ADMIN wallet
+  // principal may mint or revoke them; other callers receive a typed
+  // PokerSDKError (401/403) from the API.
+  // ============================================================================
+
+  /**
+   * Mint a scoped SERVICE credential. The returned plaintext `token` is
+   * available exactly once; only its digest is persisted server-side.
+   */
+  async createServiceCredential(
+    request: CreateServiceCredentialRequest
+  ): Promise<CreatedServiceCredential> {
+    const parsed = CreateServiceCredentialRequestSchema.parse(request);
+    const response = await this.request<unknown>("POST", "/auth/service-credentials", parsed);
+    return CreatedServiceCredentialSchema.parse(response);
+  }
+
+  /**
+   * List every service credential minted by the operator. Summaries never
+   * carry the plaintext token.
+   */
+  async listServiceCredentials(): Promise<ServiceCredentialSummary[]> {
+    const response = await this.request<unknown>("GET", "/auth/service-credentials");
+    return ListServiceCredentialsResponseSchema.parse(response).credentials;
+  }
+
+  /**
+   * Revoke a service credential by id. Revocation takes effect immediately for
+   * both REST and WebSocket use of the credential.
+   */
+  async revokeServiceCredential(credentialId: CredentialId): Promise<void> {
+    const response = await this.request<unknown>(
+      "POST",
+      `/auth/service-credentials/${credentialId}/revoke`
+    );
+    RevokeServiceCredentialResponseSchema.parse(response);
+  }
+
   // ============================================================================
   // Tables
   // ============================================================================
@@ -302,6 +374,80 @@ export class PokerClient {
    */
   async addChips(tableId: string, request: AddChipsRequest): Promise<void> {
     await this.request("POST", `/tables/${tableId}/add-chips`, request);
+  }
+
+  /**
+   * Read a bounded page of the append-only table chat stream
+   * (`GET /tables/:id/chat`).
+   *
+   * Pages are oldest-first; `nextBeforeSeq` is the cursor for the next older
+   * page (null when the caller has reached the start). The server clamps
+   * `limit` to its bounded page size.
+   */
+  async getChat(
+    tableId: string,
+    options: { limit?: number; beforeSeq?: number } = {}
+  ): Promise<ChatPage> {
+    const params: string[] = [];
+    if (options.limit !== undefined) params.push(`limit=${options.limit}`);
+    if (options.beforeSeq !== undefined) params.push(`beforeSeq=${options.beforeSeq}`);
+    const query = params.length > 0 ? `?${params.join("&")}` : "";
+    const response = await this.request<unknown>("GET", `/tables/${tableId}/chat${query}`);
+    return ChatPageSchema.parse(response);
+  }
+
+  /**
+   * Append one chat message (`POST /tables/:id/chat`).
+   *
+   * The server escapes the body before persisting it and binds the message to
+   * the authoritative hand. Chat never advances the table state version, so it
+   * is not part of the canonical action protocol.
+   */
+  async sendChat(tableId: string, body: string): Promise<ChatMessage> {
+    const response = await this.request<unknown>("POST", `/tables/${tableId}/chat`, { body });
+    return ChatMessageSchema.parse(response);
+  }
+
+  /**
+   * Read an ordered, hash-chained replay slice of the append-only event log
+   * (`GET /tables/:id/replay`).
+   *
+   * `fromEventSeq` is the inclusive lower bound (must be >= 1) and
+   * `toEventSeq` is the optional inclusive upper bound. The returned frame
+   * carries the events, their hash-chain provenance and `chainValid`.
+   */
+  async getReplay(
+    tableId: string,
+    options: { fromEventSeq: number; toEventSeq?: number }
+  ): Promise<ReplayFrame> {
+    const { fromEventSeq, toEventSeq } = options;
+    if (!Number.isSafeInteger(fromEventSeq) || fromEventSeq < 1) {
+      throw new PokerSDKError(
+        "fromEventSeq must be a positive integer",
+        "INVALID_REPLAY_RANGE",
+        undefined,
+        { fromEventSeq }
+      );
+    }
+    if (
+      toEventSeq !== undefined &&
+      (!Number.isSafeInteger(toEventSeq) || toEventSeq < fromEventSeq)
+    ) {
+      throw new PokerSDKError(
+        "toEventSeq must not precede fromEventSeq",
+        "INVALID_REPLAY_RANGE",
+        undefined,
+        { fromEventSeq, toEventSeq }
+      );
+    }
+
+    const params = [`fromEventSeq=${fromEventSeq}`];
+    if (toEventSeq !== undefined) params.push(`toEventSeq=${toEventSeq}`);
+    const response = await this.request<unknown>(
+      "GET",
+      `/tables/${tableId}/replay?${params.join("&")}`
+    );
+    return ReplayFrameSchema.parse(response);
   }
 
   // ============================================================================
@@ -584,6 +730,22 @@ export class PokerClient {
     return HealthResponseSchema.parse(await this.request("GET", "/health"));
   }
 
+  /**
+   * Evaluate platform readiness (`GET /ready`).
+   *
+   * Not-ready is a valid, typed answer: the API returns the same canonical
+   * readiness body with HTTP 503. This method resolves for both 200 (`ready`)
+   * and 503 (`not_ready`) so callers inspect `status`/`financial.state`
+   * instead of catching transport errors. Any other non-2xx status still
+   * throws a `PokerSDKError`.
+   */
+  async getReadiness(): Promise<ReadinessResponse> {
+    const response = await this.request<unknown>("GET", "/ready", undefined, {
+      allowStatus: [503],
+    });
+    return ReadinessResponseSchema.parse(response);
+  }
+
   // ============================================================================
   // Private Methods
   // ============================================================================
@@ -671,8 +833,17 @@ export class PokerClient {
 
   /**
    * Make HTTP request with retry logic
+   *
+   * `options.allowStatus` lists non-2xx status codes whose bodies are still
+   * typed responses (e.g. `/ready` returns 503 with the canonical readiness
+   * payload). Those statuses resolve instead of throwing and are never retried.
    */
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  private async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    options?: { allowStatus?: readonly number[] }
+  ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = { Accept: "application/json" };
     const serializedBody = body === undefined ? undefined : JSON.stringify(body);
@@ -710,7 +881,7 @@ export class PokerClient {
         }
 
         // Handle non-2xx responses
-        if (!response.ok) {
+        if (!response.ok && !options?.allowStatus?.includes(response.status)) {
           const errorData = (await response.json().catch(() => ({}))) as {
             message?: string;
             error?: string;
