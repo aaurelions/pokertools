@@ -1,30 +1,33 @@
 # Competition capability (generic, public contract)
 
-Status: **contract frozen for consumers; API/SDK implementation in progress.**
+Status: **contract revised per platform review; API/SDK implementation in progress.**
 
-This document is the public interface NLHE (and any external product
-orchestrator) can build against. The runtime contracts live in
-`@pokertools/types` (`packages/types/src/canonical/competition.ts`, re-exported
-through `packages/types/src/api/competitions.ts`). Nothing here is poker-variant
-specific: the capability is a generic 2-10 entrant, single-table, authoritative
-competition, not a Hold'em feature.
+This document is the public interface any external product orchestrator can
+build against. The runtime contracts live in `@pokertools/types`
+(`packages/types/src/canonical/competition.ts`, re-exported through
+`packages/types/src/api/competitions.ts`). The capability is generic: a 2-10
+entrant, single-table, server-authoritative competition provisioned into the
+existing tournament/game machinery. There is no second poker runner.
 
 ## What a competition is
 
 A server-authoritative single-table tournament with a pre-provisioned roster:
 
-| Property        | `NONFINANCIAL`                              | `SPONSORED`                                             |
-| --------------- | ------------------------------------------- | ------------------------------------------------------- |
-| Entrants        | 2-10, any mix of WALLET/SERVICE             | exactly one WALLET + at least one SERVICE (2-10 total)  |
-| Entry           | zero                                        | explicit asset amount paid by the single WALLET entrant |
-| Prize           | zero                                        | fixed asset amount financed by a platform sponsor       |
-| Ledger movement | none (no chip journal, no atomic ledger)    | exact atomic entry debit + exact atomic prize credit    |
-| Seats           | PokerTools-assigned (never client-supplied) | same                                                    |
+| Property        | `NONFINANCIAL`                              | `ASSET`                                                                  |
+| --------------- | ------------------------------------------- | ------------------------------------------------------------------------ |
+| Entrants        | 2-10, any mix of WALLET/SERVICE             | 2-10, mixed; one or more WALLET entrants may be configured entry payers  |
+| Entry           | zero                                        | explicit atomic amount per configured WALLET payer, paid via opt-in      |
+| Prize           | zero                                        | fixed atomic prize, reserved from an authorized sponsor before admission |
+| Ledger movement | none (no chip journal, no atomic ledger)    | balanced, idempotent atomic journals only                                |
+| Seats           | PokerTools-assigned (never client-supplied) | same                                                                     |
 
-Service entrants are never charged, never receive value, and never need a chip
-grant. A SERVICE winner is never a financial owner: the fixed "human prize" is
-paid only to a WALLET winner, otherwise the competition records
-`UNCLAIMED_SERVICE_WINNER` with no ledger movement.
+SERVICE entrants are always zero-entry, never financial owners, and never
+receive value. If settlement produces a SERVICE winner, the reserved prize is
+released back to the sponsor (`RELEASED`) and no value is created.
+
+The platform enforces the generic rules; product-level roster policy (for
+example "exactly one human") is the orchestrator's configuration choice, not a
+platform invariant.
 
 ## HTTP surface
 
@@ -32,21 +35,22 @@ All routes are JSON. Mutations are idempotent on `idempotencyKey`; replaying a
 mutation returns the original result and never creates a second entry, charge or
 prize.
 
-| Method | Path                       | Authority                                                         |
-| ------ | -------------------------- | ----------------------------------------------------------------- |
-| POST   | `/competitions`            | orchestration SERVICE (`competition:orchestrate`) or ADMIN wallet |
-| GET    | `/competitions/:id`        | authenticated                                                     |
-| POST   | `/competitions/:id/opt-in` | the provisioned WALLET entrant only (`SPONSORED`)                 |
-| POST   | `/competitions/:id/start`  | orchestration SERVICE or ADMIN wallet                             |
-| POST   | `/competitions/:id/settle` | orchestration SERVICE or ADMIN wallet                             |
+| Method | Path                                  | Authority                                                         |
+| ------ | ------------------------------------- | ----------------------------------------------------------------- |
+| POST   | `/competitions`                       | orchestration SERVICE (`competition:orchestrate`) or ADMIN wallet |
+| GET    | `/competitions/:id`                   | authenticated (privacy-preserving projection)                     |
+| POST   | `/competitions/:id/opt-in`            | a configured WALLET entry payer only                              |
+| POST   | `/competitions/:id/start`             | orchestration SERVICE or ADMIN wallet                             |
+| POST   | `/competitions/:id/settle`            | orchestration SERVICE or ADMIN wallet                             |
+| POST   | `/competitions/:id/agent-credentials` | orchestration SERVICE or ADMIN wallet                             |
 
 ### Create
 
 ```jsonc
 // POST /competitions
 {
-  "name": "Sponsored table",
-  "mode": "SPONSORED",
+  "name": "Asset table",
+  "mode": "ASSET",
   "entrants": [
     { "principalId": "user-wallet-1", "kind": "WALLET" },
     { "principalId": "user-agent-1", "kind": "SERVICE" },
@@ -54,10 +58,17 @@ prize.
   "startingStack": 1000, // optional, default 1000
   "smallBlind": 10, // optional, default 10
   "bigBlind": 20, // optional, default 20
-  "paidTerms": {
-    "entry": { "assetId": "eip155:8453/erc20:0x…", "amountAtomic": "1000000" },
-    "prize": { "assetId": "eip155:8453/erc20:0x…", "amountAtomic": "5000000" },
-    "sponsorPrincipalId": "user-sponsor",
+  "terms": {
+    "entry": {
+      "assetId": "eip155:8453/erc20:0x…",
+      "amountAtomic": "1000000",
+      "payers": [{ "principalId": "user-wallet-1" }], // optional per-payer amountAtomic
+    },
+    "prize": {
+      "assetId": "eip155:8453/erc20:0x…",
+      "amountAtomic": "5000000",
+      "sponsorPrincipalId": "user-sponsor",
+    },
   },
   "idempotencyKey": "create-1",
 }
@@ -68,14 +79,15 @@ is the authoritative assignment.
 
 Rules enforced at create (fail closed):
 
-- rosters are unique and 2-10;
-- `kind` must match the durable principal kind (`User.kind`);
-- SERVICE principals are only valid entrants; they are never charged;
-- `NONFINANCIAL` must not carry `paidTerms`; `SPONSORED` must carry them and
-  respect the exactly-one-WALLET rule;
-- for `SPONSORED`, each referenced asset must have an ACTIVE persisted
-  `EconomicPolicy`, the entry must be exactly representable (no rounding), and
-  the sponsor's operator atomic account must be funded for the full prize.
+- rosters are unique and 2-10; `kind` must match the durable principal kind;
+- entry payers must be WALLET roster entrants; SERVICE entrants are never payers;
+- `NONFINANCIAL` must not carry `terms`; `ASSET` must carry them;
+- the prize sponsor must be authorized delegation: the organizer itself (when
+  the organizer is a WALLET) or a fixed platform sponsor account. An
+  orchestrator can never direct an arbitrary wallet to fund a prize;
+- referenced assets must exist in the database with `ACTIVE` status;
+- the full prize is reserved from the sponsor's operator atomic account in the
+  same transaction that creates the roster (before any start/admission).
 
 ### Opt-in
 
@@ -84,10 +96,10 @@ Rules enforced at create (fail closed):
 { "idempotencyKey": "optin-1" }
 ```
 
-Only the single provisioned WALLET entrant may call it. The entry is charged
-atomically through the persisted `EconomicPolicy`; insufficient funds, a missing
-policy, an unfunded sponsor or any mismatch fails the whole request closed (no
-partial seat/charge). Replays return the original conversion id.
+Only a configured WALLET payer may call it. The payer's explicit entry is
+charged atomically to the authorized sponsor's account; insufficient funds or
+any mismatch fails the whole request closed (no partial seat/charge). Replays
+return the original journal conversion.
 
 ### Start
 
@@ -96,9 +108,10 @@ partial seat/charge). Replays return the original conversion id.
 { "idempotencyKey": "start-1" }
 ```
 
-Fails closed unless the competition is `REGISTRATION`, has ≥2 entrants, and (for
-`SPONSORED`) the WALLET entry is paid. The server seats every entrant at their
-assigned engine seat with the starting stack and deals the first hand.
+Fails closed unless the competition is `REGISTRATION`, has ≥2 entrants, and
+every configured entry payer has paid. Starting delegates to the authoritative
+tournament lifecycle: the server seats every entrant at their assigned engine
+seat and deals the first hand.
 
 ### Settle
 
@@ -107,33 +120,53 @@ assigned engine seat with the starting stack and deals the first hand.
 { "idempotencyKey": "settle-1" }
 ```
 
-Fails closed unless exactly one entrant still has chips. Placement is
-authoritative. For `SPONSORED`, the fixed prize is paid from the sponsor's
-operator account to a WALLET winner exactly once (journal
-`competition-prize:<competitionId>`), or recorded `UNCLAIMED_SERVICE_WINNER`.
+Fails closed unless exactly one entrant still has chips. Placements and status
+come from the authoritative tournament settlement. For `ASSET`, the reserved
+prize is paid to a WALLET winner exactly once (journal
+`competition-prize-payout:<competitionId>`), or released to the sponsor
+(`RELEASED`) when no financial winner exists. Retries are idempotent.
+
+### Agent credentials
+
+```jsonc
+// POST /competitions/:id/agent-credentials
+{
+  "principalId": "user-agent-1",
+  "name": "agent-1",
+  "scopes": ["table:observe", "table:act"], // optional, defaults to all table scopes
+  "seat": 1, // optional; defaults to the entrant's authoritative seat
+  "expiresAt": "2026-01-01T00:00:00.000Z", // optional
+}
+```
+
+The principal must be a SERVICE entrant of this competition. The issued
+credential is always bound to the competition table and only carries table
+scopes: it can observe, act and chat at its assigned table, and nothing else.
+Calling the route again rotates the credential for the same durable principal
+(`rotated: true`) and invalidates the previous secret.
 
 ## Principal / credential model
 
 - **Orchestration credential**: a SERVICE credential whose only scope is
-  `competition:orchestrate`. It may create and provision competitions, start and
-  settle them, and nothing else. It can never withdraw, custody, act as
-  financing owner, or hold operator/table/finance scopes. Created by an ADMIN
-  wallet via `POST /auth/service-credentials`.
+  `competition:orchestrate`. It can create/provision/start/settle its
+  competitions and issue table-scoped agent credentials for their SERVICE
+  entrants. It can never withdraw, custody, hold operator authority, or carry
+  table/finance scopes.
 - **Agent credential**: a SERVICE credential restricted to
-  `table:observe | table:act | table:chat`, ideally with `tableId` (and
-  optionally `seat`) bound to the competition table it was assigned. Agents act
-  only through the existing table protocol; they cannot reach `/competitions`.
+  `table:observe | table:act | table:chat`, bound to the competition table
+  (optionally the assigned seat). Agents act only through the existing table
+  protocol and cannot reach `/competitions`.
 - **Durable identity**: a competition entrant references `principalId`, the
-  durable principal identity. Credential rotation
-  (`POST /auth/service-credentials/:id/rotate`) issues a new secret for the same
-  principal, so the roster reference and assigned seat never change.
-- **Rotation**: revoking or rotating an agent credential immediately removes its
-  access; the principal remains the entrant.
+  durable principal identity. Credential rotation issues a new secret for the
+  same principal, so roster references and seats never change.
+- **Privacy**: projections never expose wallet addresses, usernames, credential
+  digests or raw audit records; only opaque principal ids, kind, seat and entry
+  state.
 
 ## SDK
 
-Consumers that already use `@pokertools/sdk` import the separate public subpath,
-which does not touch the main `PokerClient`:
+Consumers import the separate public subpath, which does not touch the main
+`PokerClient`:
 
 ```ts
 import { CompetitionClient } from "@pokertools/sdk/competitions";
@@ -144,13 +177,13 @@ const competitions = new CompetitionClient({
 });
 
 const created = await competitions.createCompetition({
-  name: "Sponsored table",
-  mode: "SPONSORED",
+  name: "Asset table",
+  mode: "ASSET",
   entrants: [
     { principalId: walletPrincipalId, kind: "WALLET" },
     { principalId: agentPrincipalId, kind: "SERVICE" },
   ],
-  paidTerms,
+  terms,
   idempotencyKey: crypto.randomUUID(),
 });
 ```
@@ -160,5 +193,5 @@ const created = await competitions.createCompetition({
 - No prize pool, rake, or player-funded prizes; no implicit currency.
 - No multi-table flights, late registration, rebuys or re-entries.
 - No client-chosen seats; no open self-registration.
-- `SPONSORED` economics depend on the asset/policy rows provisioned in the
-  database (there is intentionally no public policy-provisioning route).
+- Asset and sponsor provisioning is database/operator configuration; there is
+  intentionally no public asset-provisioning route.
