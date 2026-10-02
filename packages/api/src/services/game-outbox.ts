@@ -119,7 +119,7 @@ export async function dispatchPendingOutbox(
   redis: Redis,
   options: { limit?: number; tableId?: string } = {}
 ): Promise<{ dispatched: number; failed: number }> {
-  const rows = (await prisma.gameOutbox.findMany({
+  const rows = await prisma.gameOutbox.findMany({
     where: {
       status: "PENDING",
       availableAt: { lte: new Date() },
@@ -127,7 +127,7 @@ export async function dispatchPendingOutbox(
     },
     orderBy: { createdAt: "asc" },
     take: options.limit ?? 100,
-  })) as unknown as OutboxRow[];
+  });
 
   let dispatched = 0;
   let failed = 0;

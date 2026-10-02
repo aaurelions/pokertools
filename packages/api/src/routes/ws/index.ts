@@ -269,6 +269,7 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
               type: "ERROR",
               code: scopeAuthorization.reason,
               message: "Not authorized to observe this table",
+              ...(requestId ? { requestId } : {}),
             };
             sendMessage(errorMsg);
             return;
@@ -283,6 +284,7 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
                 authorization.reason === "TABLE_NOT_FOUND"
                   ? "Table not found"
                   : "Not authorized to join this table",
+              ...(requestId ? { requestId } : {}),
             };
             sendMessage(errorMsg);
             return;

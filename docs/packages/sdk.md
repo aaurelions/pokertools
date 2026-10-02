@@ -145,8 +145,11 @@ reconnects with backoff and re-joins previously joined tables.
 `PublicWireState` plus the server-issued `legalActions` for the acting seat.
 `action(id, request)` takes a strict `CanonicalActionRequest`
 (`{ requestId, turnId, expectedVersion, actionId, amount? }`) and returns
-`{ receipt, observation }`. `getTableState(id, since?)` remains a deprecated
-engine-shaped view; prefer `getObservation`.
+`{ receipt, observation }`. `getTableState(id, since?)` returns the same
+`PublicWireState` projection (or `null` on 304), without turn/legal-action metadata.
+Maps are decimal seat-keyed records on every public transport. The SDK does not
+export authoritative engine/reducer models; use the engine/types packages for
+standalone engine applications.
 
 ## Canonical withdrawals
 

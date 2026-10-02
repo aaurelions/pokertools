@@ -187,11 +187,7 @@ export class ViemQuorumReader implements RpcQuorumReader {
             topics: log.topics,
           });
           if (decoded.eventName !== "Transfer") continue;
-          const args = decoded.args as unknown as {
-            from: EvmAddress;
-            to: EvmAddress;
-            value: bigint;
-          };
+          const args = decoded.args;
           transfers.push({
             tokenAddress: log.address,
             from: args.from,

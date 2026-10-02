@@ -1,7 +1,9 @@
 /// <reference path="../../types/fastify.d.ts" />
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { FastifyInstance } from "fastify";
-import WebSocket from "ws";
+import WebSocket, { type RawData } from "ws";
+import { once } from "node:events";
+import { ServerMessageSchema, type ServerMessage } from "@pokertools/types";
 import { buildApp } from "../../src/app.js";
 import {
   createTestUser,
@@ -10,6 +12,41 @@ import {
   cleanupTestTable,
   type TestUser,
 } from "../helpers/test-utils.js";
+
+function waitForFrame(
+  ws: WebSocket,
+  matches: (frame: ServerMessage) => boolean
+): Promise<ServerMessage> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      ws.off("message", onMessage);
+      ws.off("error", onError);
+      ws.off("close", onClose);
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onClose = () => onError(new Error("WS closed before expected frame"));
+    const onMessage = (data: RawData) => {
+      try {
+        const frame = ServerMessageSchema.parse(JSON.parse(data.toString()));
+        if (matches(frame)) {
+          cleanup();
+          resolve(frame);
+        }
+      } catch (error) {
+        cleanup();
+        reject(error);
+      }
+    };
+    const timer = setTimeout(() => onError(new Error("WS frame timeout")), 5000);
+    ws.on("message", onMessage);
+    ws.on("error", onError);
+    ws.on("close", onClose);
+  });
+}
 
 interface CreatedCredential {
   id: string;
@@ -290,32 +327,28 @@ describe("Service principal auth + scoped authorization", () => {
 
     const ws = new WebSocket(`${baseUrl}/ws/play`, ["pokertools", `jwt.${body.token}`]);
     try {
-      await new Promise<void>((resolve, reject) => {
-        ws.on("open", () => resolve());
-        ws.on("error", reject);
-        setTimeout(() => reject(new Error("WS open timeout")), 5000);
-      });
-
-      const snapshot = await new Promise<Record<string, unknown>>((resolve, reject) => {
-        ws.on("message", (data) => {
-          resolve(JSON.parse(data.toString()) as Record<string, unknown>);
-        });
-        ws.send(JSON.stringify({ type: "JOIN", tableId: tableA, requestId: "ws-1" }));
-        setTimeout(() => reject(new Error("WS message timeout")), 5000);
-      });
+      await once(ws, "open", { signal: AbortSignal.timeout(5000) });
+      const observation = waitForFrame(
+        ws,
+        (frame) => frame.type === "OBSERVATION" && frame.requestId === "ws-1"
+      );
+      const ack = waitForFrame(ws, (frame) => frame.type === "ACK" && frame.requestId === "ws-1");
+      ws.send(JSON.stringify({ type: "JOIN", tableId: tableA, requestId: "ws-1" }));
+      const [snapshot] = await Promise.all([observation, ack]);
       // Canonical server-to-client decision boundary is a full OBSERVATION.
       expect(snapshot.type).toBe("OBSERVATION");
-      expect((snapshot.observation as { tableId?: string } | undefined)?.tableId).toBe(tableA);
+      if (snapshot.type !== "OBSERVATION") throw new Error("Expected observation");
+      expect(snapshot.observation.tableId).toBe(tableA);
 
       // A different table is masked from a table-restricted credential.
-      const error = await new Promise<Record<string, unknown>>((resolve, reject) => {
-        ws.once("message", (data) =>
-          resolve(JSON.parse(data.toString()) as Record<string, unknown>)
-        );
-        ws.send(JSON.stringify({ type: "JOIN", tableId: tableB, requestId: "ws-2" }));
-        setTimeout(() => reject(new Error("WS error timeout")), 5000);
-      });
+      const rejected = waitForFrame(
+        ws,
+        (frame) => frame.type === "ERROR" && frame.requestId === "ws-2"
+      );
+      ws.send(JSON.stringify({ type: "JOIN", tableId: tableB, requestId: "ws-2" }));
+      const error = await rejected;
       expect(error.type).toBe("ERROR");
+      if (error.type !== "ERROR") throw new Error("Expected authorization error");
       expect(error.code).toBe("TABLE_RESTRICTED");
     } finally {
       ws.close();

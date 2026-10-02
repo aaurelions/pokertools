@@ -11,7 +11,6 @@
  */
 
 import type {
-  PublicState,
   CreateTableRequest,
   BuyInRequest,
   AddChipsRequest,
@@ -46,6 +45,7 @@ import type {
 import {
   HealthResponseSchema,
   GetTablesResponseSchema,
+  GetTableStateResponseSchema,
   SeatObservationSchema,
   CanonicalActionRequestSchema,
   CanonicalActionResultSchema,
@@ -246,22 +246,17 @@ export class PokerClient {
   /**
    * Get table state
    *
-   * @deprecated Legacy engine `PublicState` view of `GET /tables/:id`. The
-   * canonical single protocol is {@link getObservation}, which returns the
-   * authoritative per-seat `SeatObservation` (masked state + legal actions).
-   * Retained as a semantic view only; it is not a wire DTO contract.
+   * Conditional masked view using the same wire state as observations.
+   * Use {@link getObservation} for server-issued turns and legal actions.
    *
    * @param tableId - Table ID
    * @param since - Optional version for conditional fetch (returns null if unchanged)
    */
-  async getTableState(tableId: string, since?: number): Promise<PublicState | null> {
+  async getTableState(tableId: string, since?: number): Promise<PublicWireState | null> {
     const query = since !== undefined ? `?since=${since}` : "";
     try {
-      const response = await this.request<{ state: PublicState }>(
-        "GET",
-        `/tables/${tableId}${query}`
-      );
-      return response.state;
+      const response = await this.request<unknown>("GET", `/tables/${tableId}${query}`);
+      return GetTableStateResponseSchema.parse(response).state;
     } catch (error) {
       if (error instanceof PokerSDKError && error.statusCode === 304) {
         return null;

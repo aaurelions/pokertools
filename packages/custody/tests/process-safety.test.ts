@@ -6,16 +6,20 @@ const SAFE_PRODUCTION = {
   DATABASE_URL: "postgresql://user:pass@db:5432/pokertools",
   TREASURY_SIGNING_KEYS_JSON: JSON.stringify({ 31337: `0x${"a".repeat(64)}` }),
 };
+const loadEnvironment = vi.hoisted(() =>
+  vi.fn(() => {
+    process.env.NODE_ENV = "production";
+  })
+);
 vi.mock("dotenv", () => ({
   default: {
-    config: () => {
-      process.env.NODE_ENV = "production";
-    },
+    config: loadEnvironment,
   },
 }));
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.resetModules();
+  vi.clearAllMocks();
 });
 
 describe("custody production configuration", () => {
@@ -32,6 +36,11 @@ describe("custody production configuration", () => {
     await expect(import("../src/config.js")).rejects.toThrow(
       "CUSTODY_PRODUCTION_REQUIRES_POSTGRESQL"
     );
+    expect(loadEnvironment).toHaveBeenCalledTimes(1);
+    expect(loadEnvironment).toHaveBeenCalledWith({
+      path: expect.stringMatching(/packages[/\\]custody[/\\]\.env$/),
+      quiet: true,
+    });
   });
   it("admits production custody with safe configuration and signing keys", () => {
     expect(() => assertCustodyProcessSafety(SAFE_PRODUCTION)).not.toThrow();

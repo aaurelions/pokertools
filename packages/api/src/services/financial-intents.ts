@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { verifyTypedData, type TypedData, type TypedDataDomain } from "viem";
+import { verifyTypedData, type TypedDataDomain } from "viem";
 import {
   AssetIdSchema,
   WITHDRAWAL_DOMAIN_NAME,
@@ -138,8 +138,10 @@ export class FinancialIntentService {
     try {
       return await verifyTypedData({
         address: params.walletAddress as `0x${string}`,
+        // Shared schemas validate the address; viem additionally models it as
+        // a hex template literal, which Zod's string inference does not retain.
         domain: typedData.domain as TypedDataDomain,
-        types: typedData.types as unknown as TypedData,
+        types: typedData.types,
         primaryType: typedData.primaryType,
         message: typedData.message,
         signature: params.signature as `0x${string}`,

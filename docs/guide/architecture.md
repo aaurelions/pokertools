@@ -103,7 +103,7 @@ SQLite is only a disposable local-test adapter generated from the same model;
 it has no migration history and does not prove PostgreSQL financial/audit
 constraints. Redis is non-authoritative and rebuildable.
 
-`/health` is liveness. `/ready` uses bounded live probes and a short report cache:
+`/health` is liveness. `/ready` uses bounded live probes and a short monotonic-TTL report cache:
 schema hashes, durable cursors/outbox, provenance, journal/projections, assets,
 incidents, quorum, fresh reconciliation, custody heartbeats and native gas.
 Missing/unreadable evidence blocks admission. Probe details are safe codes, not

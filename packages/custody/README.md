@@ -89,6 +89,14 @@ in-memory doubles in `tests/core/fakes.ts`.
 Production admission (`src/safety.ts`) requires a `postgresql://`/`postgres://`
 `DATABASE_URL` and a non-empty, well-formed `TREASURY_SIGNING_KEYS_JSON`.
 
+## Solidity utility
+
+`BatchSweeper` batches ERC-2612 permit redemption into transfers to its owner.
+It is an optional owner-operated treasury utility, not the withdrawal worker or
+an API signing surface. Ownership checks prevent copied permits from redirecting
+funds; Forge tests cover that boundary. Ordinary direct ERC-20 treasury claims
+do not require this utility.
+
 ## Tests
 
 ```bash

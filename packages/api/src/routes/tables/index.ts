@@ -10,6 +10,7 @@ import {
   ChatMessageSchema,
   ChatPageSchema,
   ReplayFrameSchema,
+  toPublicWireState,
 } from "@pokertools/types";
 import type { AuthenticatedPrincipal } from "../../services/principal-manager.js";
 import { config } from "../../config.js";
@@ -210,7 +211,7 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
         }
       }
 
-      return { state };
+      return { state: toPublicWireState(state) };
     }
   );
 

@@ -461,11 +461,13 @@ describe("readiness-adapters", () => {
     expect(custody?.detail).toBe("PAYOUTS_DISABLED");
   });
 
-  it("caches the evaluate promise for the configured TTL", async () => {
+  it("expires readiness on monotonic time even when wall time moves backward", async () => {
     let calls = 0;
     let now = Date.now();
+    let elapsed = 0;
     const service = createPlatformReadiness(makeApp(), {
       now: () => now,
+      elapsedNow: () => elapsed,
       cacheTtlMs: 50,
       rpcQuorumRequired: true,
       chainQuorum: {
@@ -481,7 +483,8 @@ describe("readiness-adapters", () => {
     expect(second).toBe(first);
     expect(calls).toBe(1);
 
-    now += 60;
+    now -= 60 * 60_000;
+    elapsed += 60;
     const third = await service.evaluate();
     expect(third).not.toBe(first);
     expect(calls).toBe(2);

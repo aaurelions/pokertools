@@ -57,13 +57,8 @@ export { PokerSDKError } from "./types";
 
 // Re-export commonly used types from @pokertools/types
 export type {
-  PublicState,
-  PublicPlayer,
-  GameState,
-  Player,
-  Action,
-  ActionType,
-  TableConfig,
+  PublicWirePlayer,
+  PublicTableConfig,
   ServerMessage,
   ClientMessage,
   ObservationMessage,

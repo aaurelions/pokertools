@@ -487,6 +487,7 @@ export async function hasConfiguredCanonicalAsset(
 }
 
 export interface CreatePlatformReadinessOptions {
+  elapsedNow?: () => number;
   /**
    * Explicit public, non-financial deployment. Supports only when no canonical
    * asset carries value; payouts/custody gating is then disabled. This is a
@@ -554,6 +555,7 @@ export function createPlatformReadiness(
         now: options.now,
       }),
     cacheTtlMs: options.cacheTtlMs ?? 5_000,
+    elapsedNow: options.elapsedNow,
     probeTimeoutMs: options.probeTimeoutMs,
     now: options.now,
     nodeEnv: options.nodeEnv,

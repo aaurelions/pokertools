@@ -8,8 +8,8 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Load .env from root or package-level
-dotenv.config({ path: path.resolve(__dirname, "../../../.env"), quiet: true });
+// Load only the worker-local file; API authentication secrets do not belong in
+// this process. Deployments supply custody settings through their isolated env.
 dotenv.config({ path: path.resolve(__dirname, "../.env"), quiet: true });
 
 // Validate before initializing persistence, RPC clients or signing infrastructure.

@@ -8,6 +8,7 @@ import {
   type LegalAction,
   type LegalActionFamily,
   type SeatObservation,
+  type CreateTableRequest,
 } from "@pokertools/types";
 import { buildApp } from "../../src/app.js";
 
@@ -174,15 +175,7 @@ export async function runCleanup(cleanup: (() => Promise<void>)[]): Promise<void
 export async function createTable(
   app: FastifyInstance,
   token: string,
-  config: {
-    name: string;
-    mode: "CASH" | "TOURNAMENT";
-    smallBlind: number;
-    bigBlind: number;
-    maxPlayers?: number;
-    minBuyIn?: number;
-    maxBuyIn?: number;
-  }
+  config: Omit<CreateTableRequest, "maxPlayers"> & { maxPlayers?: number }
 ): Promise<string> {
   const response = await app.inject({
     method: "POST",
@@ -191,13 +184,8 @@ export async function createTable(
       authorization: `Bearer ${token}`,
     },
     payload: {
-      name: config.name,
-      mode: config.mode,
-      smallBlind: config.smallBlind,
-      bigBlind: config.bigBlind,
+      ...config,
       maxPlayers: config.maxPlayers ?? 6,
-      minBuyIn: config.minBuyIn,
-      maxBuyIn: config.maxBuyIn,
     },
   });
 

@@ -5,6 +5,38 @@ import { PokerSDKError } from "../src/types";
 // Mock fetch
 const mockFetch = vi.fn();
 
+const wireState = {
+  config: { smallBlind: 5, bigBlind: 10, maxPlayers: 2 },
+  players: [null, null],
+  maxPlayers: 2,
+  handNumber: 1,
+  buttonSeat: null,
+  bigBlindSeat: null,
+  deck: [],
+  board: [],
+  street: "PREFLOP",
+  pots: [],
+  currentBets: {},
+  minRaise: 10,
+  lastRaiseAmount: 0,
+  actionTo: null,
+  lastAggressorSeat: null,
+  activePlayers: [],
+  winners: null,
+  rakeThisHand: 0,
+  smallBlind: 5,
+  bigBlind: 10,
+  ante: 0,
+  blindLevel: 0,
+  timeBanks: {},
+  timeBankActiveSeat: null,
+  actionHistory: [],
+  timestamp: 1700000000000,
+  handId: "hand-1",
+  viewingPlayerId: null,
+  version: 5,
+};
+
 describe("PokerClient", () => {
   let client: PokerClient;
 
@@ -150,7 +182,7 @@ describe("PokerClient", () => {
     });
 
     it("getTableState returns state", async () => {
-      const state = { pot: 100, players: [] };
+      const state = { ...wireState, timeBanks: { "0": 90 } };
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({ state }),
@@ -158,6 +190,14 @@ describe("PokerClient", () => {
 
       const result = await client.getTableState("table-1");
       expect(result).toEqual(state);
+    });
+
+    it("rejects table views containing undo history", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ state: { ...wireState, previousStates: [] } }),
+      });
+      await expect(client.getTableState("table-1")).rejects.toThrow();
     });
 
     it("getTableState returns null on 304", async () => {
@@ -173,37 +213,6 @@ describe("PokerClient", () => {
   });
 
   describe("actions", () => {
-    const wireState = {
-      config: { smallBlind: 5, bigBlind: 10, maxPlayers: 2 },
-      players: [null, null],
-      maxPlayers: 2,
-      handNumber: 1,
-      buttonSeat: null,
-      bigBlindSeat: null,
-      deck: [],
-      board: [],
-      street: "PREFLOP",
-      pots: [],
-      currentBets: {},
-      minRaise: 10,
-      lastRaiseAmount: 0,
-      actionTo: null,
-      lastAggressorSeat: null,
-      activePlayers: [],
-      winners: null,
-      rakeThisHand: 0,
-      smallBlind: 5,
-      bigBlind: 10,
-      ante: 0,
-      blindLevel: 0,
-      timeBanks: {},
-      timeBankActiveSeat: null,
-      actionHistory: [],
-      timestamp: 1700000000000,
-      handId: "hand-1",
-      viewingPlayerId: null,
-      version: 5,
-    };
     const observation = {
       tableId: "table-1",
       handId: "hand-1",

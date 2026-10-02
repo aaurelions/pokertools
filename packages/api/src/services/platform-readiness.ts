@@ -119,6 +119,8 @@ export interface PlatformReadinessOptions {
   custody?: CustodyReadinessProbe;
   freeze?: FreezeStateProvider;
   now?: () => number;
+  /** Monotonic milliseconds for cache expiry and latency, independent of wall time. */
+  elapsedNow?: () => number;
   /** Defaults to `process.env.NODE_ENV`. */
   nodeEnv?: string;
   /** Defaults to `process.env.DATABASE_URL`. */
@@ -454,6 +456,7 @@ export class PlatformReadinessService {
   private readonly custody?: CustodyReadinessProbe;
   private readonly freeze?: FreezeStateProvider;
   private readonly now: () => number;
+  private readonly elapsedNow: () => number;
   private readonly nodeEnv: string;
   private readonly databaseUrl?: string;
   private readonly payoutsEnabled: boolean | (() => Promise<boolean>);
@@ -490,6 +493,7 @@ export class PlatformReadinessService {
     this.custody = options.custody;
     this.freeze = options.freeze;
     this.now = options.now ?? (() => Date.now());
+    this.elapsedNow = options.elapsedNow ?? (() => performance.now());
     this.nodeEnv = options.nodeEnv ?? process.env.NODE_ENV ?? "development";
     this.databaseUrl = options.databaseUrl ?? process.env.DATABASE_URL;
     this.payoutsEnabled = options.payoutsEnabled ?? false;
@@ -506,7 +510,7 @@ export class PlatformReadinessService {
   async evaluate(): Promise<PlatformReadinessReport> {
     if (this.cacheTtlMs <= 0) return this.runEvaluation();
 
-    const now = this.now();
+    const now = this.elapsedNow();
     if (this.cachedReport !== undefined && now - this.cachedAt < this.cacheTtlMs) {
       return this.cachedReport;
     }
@@ -515,7 +519,7 @@ export class PlatformReadinessService {
     const run = this.runEvaluation().then(
       (report) => {
         this.cachedReport = report;
-        this.cachedAt = this.now();
+        this.cachedAt = this.elapsedNow();
         this.inflightEvaluation = undefined;
         return report;
       },
@@ -588,7 +592,7 @@ export class PlatformReadinessService {
     mandatory: boolean,
     probe: () => Promise<ProbeOutcome>
   ): Promise<PlatformReadinessCheck> {
-    const started = this.now();
+    const started = this.elapsedNow();
     let outcome: ProbeOutcome;
     try {
       outcome = await withTimeout(probe(), this.probeTimeoutMs);
@@ -598,7 +602,7 @@ export class PlatformReadinessService {
         code: error instanceof ProbeTimeoutError ? "PROBE_TIMEOUT" : "PROBE_FAILURE",
       };
     }
-    const latencyMs = Math.max(0, Math.round(this.now() - started));
+    const latencyMs = Math.max(0, Math.round(this.elapsedNow() - started));
     return { name, state: outcome.state, mandatory, latencyMs, detail: outcome.code };
   }
 

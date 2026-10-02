@@ -9,7 +9,7 @@ import {
 } from "./primitives";
 import { BalanceSchema } from "./finance";
 import { PrincipalRoleSchema, ServiceScopeSchema } from "./principal";
-import { PublicTableConfigSchema } from "./masked-state";
+import { PublicTableConfigSchema, PublicWireStateSchema } from "./masked-state";
 
 /**
  * Canonical REST wire schemas for the remaining hand-rolled / interface-only
@@ -283,6 +283,10 @@ export const GetTablesResponseSchema = z.strictObject({
   tables: z.array(TableListItemSchema),
 });
 export type GetTablesResponseWire = z.infer<typeof GetTablesResponseSchema>;
+
+/** Conditional table reads and observations share exactly one masked wire state. */
+export const GetTableStateResponseSchema = z.strictObject({ state: PublicWireStateSchema });
+export type GetTableStateResponseWire = z.infer<typeof GetTableStateResponseSchema>;
 
 // ============================================================================
 // Tournaments

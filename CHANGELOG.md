@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- PostgreSQL manifest migrations are the sole deployment authority; SQLite is a disposable local-test adapter without a migration history.
+- Production admission depends on current configuration and live readiness, not compiled historical test evidence.
+- Removed redundant snapshot write-behind jobs; game snapshots and outbox intents commit synchronously.
+- Conditional table reads use the shared masked wire projection, preserving time-bank records and normalizing spectator identity. SDK responses validate that schema; engine/reducer models are no longer SDK exports.
+- Risk amount settings use `RISK_*_CHIP_AMOUNT_*`, not cents; worker polling settings are centrally declared.
+- Custody loads only its own environment file. WebSocket authorization errors echo request identity.
+- Readiness cache expiry and probe latency use monotonic time, so wall-clock corrections cannot prolong stale admission.
+- Coverage gates, dependency-boundary checks, production-image admission and journal property tests protect these boundaries.
+
 ## [1.0.20] - 2026-09-19
 
 ### Fixed
