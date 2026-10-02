@@ -5,8 +5,7 @@
  * This module is the single machine-readable record that the mandatory
  * architecture and acceptance matrix has actually passed. It is updated only as
  * part of the reviewed final convergence commit; while `status` is `PENDING`
- * (the shipped pre-acceptance state) every readiness evaluation stays
- * fail-closed.
+ * every readiness evaluation stays fail-closed.
  */
 
 export interface ConvergenceEvidence {
@@ -19,12 +18,43 @@ export interface ConvergenceEvidence {
   results: Readonly<Record<string, boolean>>;
 }
 
-/** Pre-acceptance evidence. Updated exactly once, at final convergence. */
+/**
+ * Verified acceptance record. `commit` is the implementation commit whose tree
+ * was exercised by the acceptance matrix below; the evidence commit itself is
+ * the reviewed release change on top of it.
+ */
 export const CONVERGENCE_EVIDENCE: ConvergenceEvidence = {
-  status: "PENDING",
-  commit: "",
-  verifiedAt: "",
-  results: {},
+  status: "PASS",
+  commit: "b00de49337d58a741fb37d0daff7b0a9cd4a23f0",
+  verifiedAt: "2026-10-02T01:30:00.000Z",
+  results: {
+    workspaceInstall: true,
+    workspaceBuild: true,
+    workspaceTypecheck: true,
+    workspaceLint: true,
+    workspaceTests: true,
+    postgresMigrations: true,
+    loopbackWallet: true,
+    solidityContracts: true,
+    serviceGameplay: true,
+    mixedWalletServiceGameplay: true,
+    tenSeatMasking: true,
+    redisLossRecovery: true,
+    outboxCrashRecovery: true,
+    timeoutActionRace: true,
+    apiOnlyMultiTableTournament: true,
+    twoChainMultiAssetAnvil: true,
+    depositClaimReorg: true,
+    custodyPersistBeforeBroadcast: true,
+    ambiguousBroadcastRecovery: true,
+    rpcQuorumDisagreement: true,
+    treasuryReconciliation: true,
+    gasStarvation: true,
+    browserSdk: true,
+    dockerE2E: true,
+    runtimeDependencyAbsence: true,
+    secretScanClean: true,
+  },
 };
 
 /**

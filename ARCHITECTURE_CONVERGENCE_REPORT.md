@@ -392,3 +392,139 @@ No downstream product integration was attempted. Passing legacy/new regression
 tests does not enable valuable assets. **Production remains blocked.**
 
 POKERTOOLS_CONVERGENCE=FAIL
+
+---
+
+# Final convergence (next-major architecture completed)
+
+The historical sections above are preserved as handoff evidence. This section
+records the completed convergence; source and executed acceptance results are
+authoritative.
+
+## Final commits
+
+- Implementation commit: **`b00de49337d58a741fb37d0daff7b0a9cd4a23f0`**
+  (`feat!: converge on canonical next-major architecture`).
+- Evidence/admission commit: the commit containing this section (compiled
+  `CONVERGENCE_EVIDENCE` in `@pokertools/types` references the implementation
+  commit and every mandatory acceptance result).
+- Recoverable handoff checkpoints remain: `90d867e`, `820bf90`, `9f35a7d`,
+  `f81a5cd`, `0b68c62`, `c21f779`. No history was reset or discarded.
+
+## Final package responsibility map
+
+| Package                 | Authority                                                                                                                                                                                                     |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@pokertools/engine`    | Deterministic Hold'em rules, action legality, showdown/pots, snapshots, seat-masked views. No AI/LLM concepts.                                                                                                |
+| `@pokertools/evaluator` | Deterministic hand evaluation.                                                                                                                                                                                |
+| `@pokertools/types`     | Sole environment-independent runtime/wire contracts (principals, turns, observations, actions, chat/replay, finance, incidents, readiness) and compiled convergence evidence.                                 |
+| `@pokertools/api`       | Principals/auth (SIWE + scoped SERVICE), seats/tables/tournaments, canonical turns, PostgreSQL-authoritative game state/events/outbox, atomic ledger, payment intents, blockchain verification, replay/audit. |
+| `@pokertools/sdk`       | Universal Browser/Node client and optional React subpath over the shared protocol; no client poker-legality authority.                                                                                        |
+| `@pokertools/custody`   | Isolated private signing, serialized treasury nonces, persist-before-broadcast, broadcast/observation/finality, incidents and reconciliation; Telegram-independent core.                                      |
+| PostgreSQL              | Durable authoritative platform state.                                                                                                                                                                         |
+| Redis                   | Cache, pubsub, locks, queues, ephemeral coordination only.                                                                                                                                                    |
+
+## Schema / breaking changes
+
+- Pre-production PostgreSQL baseline reset (allowed by this task): `001_initial_schema`
+  is now generated from the final Prisma schema with native enums; `002_financial_invariants`
+  and `003_audit_invariants` carry only non-Prisma enforcement (balanced/immutable
+  journal, same-asset FKs, append-only events/audit). The three hashes are pinned in
+  `prisma/postgres/migrations.json`; future migrations are append-only and immutable.
+- Removed obsolete models/enums (`Account`, `LedgerEntry`, `PaymentTransaction`,
+  `Blockchain`, `Token`, `AdminWallet`, `UserWallet`, `DepositSession`, `Role.BOT`).
+- Backward compatibility with the pre-production architecture is intentionally gone:
+  no caller-selected actor, no Redis game authority, no cents/default-currency money,
+  no hand-built withdrawal messages, no legacy API/SDK finance DTOs or aliases, no
+  Telegram-coupled payout path in the canonical runtime.
+
+## Dependency versions and exceptions
+
+- All external dependencies are on the newest stable mutually compatible releases
+  (re-checked at implementation time), including `viem@2.57.2`, `fastify@5.12.5`,
+  `zod@4.6.5`, `bullmq@6.3.11`, `ioredis@6.0.0`, `prisma/@prisma/*@7.10.0`,
+  `playwright@1.63.0`, `esbuild@0.28.2`.
+- Documented stable exceptions (unchanged reasons): TypeScript 6.0.3 (TS7 has no
+  supported JS compiler API for tsup DTS/ts-node; typescript-eslint peers `<6.1.0`),
+  Prisma 7.10.0 (latest tag is an 8.0.0 RC), Redlock 4.2.0 (latest is 5.0.0-beta),
+  VitePress 1.6.4 + markdown-it-mathjax3 4.3.2 (stable peer range; newer math plugin
+  is incompatible with stable VitePress). No `--legacy-peer-deps`, forced
+  incompatible overrides, disabled type checking or ignored audit failures were used.
+- `npm audit --omit=dev` still reports four high package findings in the npm graph
+  (`prisma` CLI → `@prisma/config`/`deepmerge-ts`, `mysql2`). These are CLI/build-only:
+  the production Docker image deletes them and the API/custody runtime does not
+  resolve them. Reproducible artifact evidence (final image
+  `sha256:711b648646543e204132e6537d3e28241f47598d2ea6b6ef4320c42b30c9bf1f`):
+  `RUNTIME_ADVISORY_PACKAGES_ABSENT=PASS` and `PRISMA_CLIENT_PROVIDER=postgresql`.
+  No reachable high/critical runtime vulnerability remains in the shipped artifact.
+
+## Executed acceptance matrix (fresh infrastructure)
+
+| Area                             | Command                                                        | Result                                                                                                   |
+| -------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Install/build/typecheck/lint     | `npm ci`, `npm run build`, `npm run typecheck`, `npm run lint` | all exit 0                                                                                               |
+| Workspace tests                  | `npm test`                                                     | API 452, custody 42, engine 397, evaluator 94 (+1 skip), SDK 194, types 221 = **1400 passed, 1 skipped** |
+| PostgreSQL migrations            | `npm run test:postgres:migrations -w @pokertools/api`          | 5/5 (hash/history/gap/unhashed fail-closed)                                                              |
+| Loopback wallet SDK              | `npm run test:loopback -w @pokertools/api`                     | 3/3                                                                                                      |
+| Solidity                         | `npm run contracts:test -w @pokertools/custody`                | 5/5                                                                                                      |
+| Canonical gameplay/recovery      | `npm run test:canonical -w @pokertools/api`                    | 16/16                                                                                                    |
+| Two-chain finance/custody        | `bash scripts/run-finance-acceptance.sh`                       | 42/42                                                                                                    |
+| Browser SDK                      | `npm run test:browser -w @pokertools/api`                      | 1/1 (headless Chromium 1.63.0)                                                                           |
+| Docker E2E (incl. 30-player MTT) | `npm run e2e:docker`                                           | 25/25                                                                                                    |
+| Runtime dependency artifact      | `node scripts/test-runtime-dependencies.mjs pokertools:final`  | PASS, PostgreSQL provider                                                                                |
+| Secret scan                      | Gitleaks 8.30.1 with `.gitleaks.toml`                          | 0 findings; `SECRET_POLICY_CANARIES=PASS` (8 first-party paths)                                          |
+
+Acceptance evidence:
+
+- **2 SERVICE gameplay**, **mixed 2 WALLET + 2 SERVICE**, and **10-seat** hands
+  complete through the public API/SDK with masking, legal-action contract, stale
+  rejection, duplicate-request idempotency, reconnect resume and chip conservation.
+- **Redis loss**: Redis is killed/flushed and restarted; accepted actions are
+  recovered from PostgreSQL only, versions remain monotonic and event sequences
+  intact; the commit-before-publish crash path is covered by the durable outbox
+  recovery test.
+- **Timeout/action race**: a real client action races the scheduled timeout worker
+  for the same canonical turn; exactly one mutation wins and the loser observes a
+  stale turn/version without a second mutation.
+- **API-only multi-table tournament**: 30 SDK principals register, start four tables
+  (8/8/7/7), play real hands/actions, are eliminated and balanced through the public
+  director endpoints, consolidate 4 → 2 → 1, settle once, and repeat
+  reconcile/settle as idempotent no-ops with chip conservation.
+- **Two isolated Anvil chains (31337/31338), 6- and 18-decimal tokens**: direct
+  treasury deposit claims verify chain/token/receipt/Transfer/sender/recipient/amount/
+  exact log identity through endpoint quorum; wrong chain/token/sender/recipient/log,
+  multi-log transactions and duplicate claims are rejected/idempotent; credited
+  deposits are monitored to deep finality and a reorg preserves user liability with
+  a durable `DEPOSIT_REORG` incident and route freeze (no duplicate liability).
+- **Real custody withdrawal**: EIP-712 intent → atomic reserve → serialized treasury
+  nonce → signed raw bytes persisted before broadcast
+  (`keccakOfPersistedRawTx === txHash`) → quorum confirmation/finality → balanced
+  ledger completion; restart reads PostgreSQL only. Ambiguous accepted-then-dropped
+  broadcasts recover the exact bytes/hash with a single transfer and no new nonce,
+  debit or replacement; gas starvation blocks without erasing the obligation and
+  resumes after replenishment; withdrawal reorg restores the owed obligation exactly
+  once; RPC disagreement and treasury shortfall create durable incidents and freeze
+  new risk while monitoring continues; operator resolution rechecks incidents,
+  ledger invariants, quorum and gas in one transaction.
+- **Production admission**: with compiled verified evidence and safe configuration,
+  the production image applies reviewed migrations and serves `/health` 200 with
+  `/ready` 200; unsafe configurations (SQLite URL, missing CORS, missing custody
+  signing keys, custody secrets in the public API) fail closed with explicit codes.
+  The API never loads signing secrets.
+
+## Remaining limitations (non-blocking)
+
+- The npm audit graph retains CLI/build-only Prisma advisories as documented above;
+  they are absent from the shipped artifact. Any future npm-based deployment that
+  installs the Prisma CLI into the runtime would reintroduce them.
+- `persist-snapshot`/`snapshot-projection` remain as a defensive no-op guard even
+  though PostgreSQL commits are authoritative.
+- The optional derived-address sweeper is not wired; the direct-treasury deposit path
+  is fully independent of it.
+- Docs/READMEs outside the packages updated here may still describe historical
+  architecture details.
+
+All mandatory architecture and acceptance requirements are implemented and
+verified; the production block was replaced only after the matrix above passed.
+
+POKERTOOLS_CONVERGENCE=PASS

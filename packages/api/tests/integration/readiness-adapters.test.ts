@@ -444,7 +444,9 @@ describe("readiness-adapters", () => {
     const convergence = report.checks.find((check) => check.name === "convergence");
     expect(custody?.state).toBe("BLOCKED");
     expect(custody?.detail).toBe("CUSTODY_EVIDENCE_MISSING");
-    expect(convergence?.detail).toBe("CONVERGENCE_INCOMPLETE");
+    // Release evidence may be accepted; missing custody evidence must still
+    // keep the platform not-ready regardless of the convergence result.
+    expect(convergence?.detail).toMatch(/CONVERGENCE_(ACCEPTED|INCOMPLETE)/);
     expect(report.ready).toBe(false);
     expect(buildReadinessResponse(report).status).toBe("not_ready");
   });
