@@ -19,4 +19,5 @@ export * from "./streams";
 export * from "./finance";
 export * from "./operations";
 export * from "./tournament";
+export * from "./competition";
 export * from "./rest";
