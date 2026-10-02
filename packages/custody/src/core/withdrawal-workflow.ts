@@ -32,6 +32,14 @@
  *    `TREASURY_SHORTFALL`.
  */
 import type { AssetStatus, EvmAddress, TxHash } from "@pokertools/types";
+import {
+  encodeFunctionData,
+  erc20Abi,
+  keccak256,
+  parseTransaction,
+  recoverTransactionAddress,
+  type TransactionSerialized,
+} from "viem";
 import type {
   AssetRegistry,
   Clock,
@@ -409,6 +417,16 @@ export class WithdrawalWorkflow {
       }
 
       // Re-check gas quorum immediately before signing.
+      if (
+        fresh.chainId !== freshAsset.chainId ||
+        fresh.treasuryAddress?.toLowerCase() !== freshAsset.treasuryAddress.toLowerCase() ||
+        fresh.tokenAddress?.toLowerCase() !== freshAsset.tokenAddress.toLowerCase()
+      ) {
+        await this.openIncident("CUSTODY_FAILURE", "CRITICAL", fresh, {
+          reason: "reserved_route_changed",
+        });
+        return null;
+      }
       const gas = await this.quorum.nativeBalance(freshAsset, freshAsset.treasuryAddress);
       if (!this.quorumAgreed(gas)) {
         await this.openIncident("RPC_DISAGREEMENT", "CRITICAL", fresh, {
@@ -456,14 +474,37 @@ export class WithdrawalWorkflow {
       // Validate the signed provenance against the reserved intent before any
       // bytes are committed.
       const provenance = signed.provenance;
+      const expectedCallData = encodeFunctionData({
+        abi: erc20Abi,
+        functionName: "transfer",
+        args: [fresh.destination as `0x${string}`, BigInt(fresh.amountAtomic)],
+      });
+      let bytesMatch = false;
+      try {
+        const transaction = parseTransaction(signed.rawTransaction);
+        const sender = await recoverTransactionAddress({
+          serializedTransaction: signed.rawTransaction as TransactionSerialized,
+        });
+        bytesMatch =
+          keccak256(signed.rawTransaction) === signed.hash &&
+          transaction.chainId === freshAsset.chainId &&
+          transaction.to?.toLowerCase() === freshAsset.tokenAddress.toLowerCase() &&
+          (transaction.value ?? 0n) === 0n &&
+          transaction.nonce === nonce &&
+          transaction.data === expectedCallData &&
+          sender.toLowerCase() === freshAsset.treasuryAddress.toLowerCase();
+      } catch {
+        // Malformed or unsigned bytes are never persisted or broadcast.
+      }
       const provenanceOk =
+        bytesMatch &&
         provenance.chainId === freshAsset.chainId &&
         provenance.to.toLowerCase() === freshAsset.tokenAddress.toLowerCase() &&
         provenance.valueAtomic === "0" &&
         provenance.nonce === nonce &&
         provenance.destination.toLowerCase() === fresh.destination.toLowerCase() &&
         provenance.amountAtomic === fresh.amountAtomic &&
-        provenance.callData === signed.provenance.callData;
+        provenance.callData === expectedCallData;
       if (!provenanceOk) {
         await this.openIncident("CUSTODY_FAILURE", "CRITICAL", fresh, {
           reason: "signed_provenance_mismatch",
@@ -763,16 +804,20 @@ export class WithdrawalWorkflow {
       if (completed) record = completed;
     }
 
-    if (confirmations >= asset.deepFinality && record.state === "CONFIRMED") {
-      await this.store.transition({
+    if (
+      confirmations >= asset.deepFinality &&
+      record.state === "CONFIRMED" &&
+      record.confirmedJournalId !== null
+    ) {
+      const finalized = await this.store.transition({
         intentId: record.intentId,
         from: ["CONFIRMED"],
         to: "FINALIZED",
       });
       return {
         intentId: record.intentId,
-        action: "finalized",
-        state: "FINALIZED",
+        action: finalized ? "finalized" : "none",
+        state: finalized?.state ?? null,
         txHash: record.txHash,
       };
     }
@@ -973,6 +1018,22 @@ export class WithdrawalWorkflow {
     const asset = await this.assets.get(assetId);
     if (!asset) throw new Error(`Unknown asset: ${assetId}`);
 
+    const height = await this.quorum.blockNumber(asset);
+    const block =
+      this.quorumAgreed(height) && height.value !== null
+        ? await this.quorum.block(asset, height.value)
+        : null;
+    if (!block || !this.quorumAgreed(block) || block.value === null) {
+      await this.incidents.open({
+        kind: "RPC_DISAGREEMENT",
+        severity: "CRITICAL",
+        assetId,
+        chainId: asset.chainId,
+        detail: { reason: "reconciliation_block_quorum" },
+      });
+      throw new Error(`Reconciliation block quorum unavailable for ${assetId}`);
+    }
+
     const balance = await this.quorum.erc20BalanceOf(asset, asset.treasuryAddress);
     if (!this.quorumAgreed(balance) || balance.value === null) {
       await this.incidents.open({
@@ -999,6 +1060,8 @@ export class WithdrawalWorkflow {
       treasuryAddress: asset.treasuryAddress,
       custodyAtomic,
       expectedAtomic,
+      blockNumber: block.value.number.toString(),
+      blockHash: block.value.hash,
       observations: balance.observations.map((observation) => ({
         rpcUrl: observation.rpcUrl,
         valueAtomic: observation.value.toString(),

@@ -22,9 +22,9 @@ Some suites need infrastructure and are not part of `npm test`:
 
 | Command                                               | Prerequisites                                                                 |
 | :---------------------------------------------------- | :---------------------------------------------------------------------------- |
-| `npm run test:canonical -w @pokertools/api`           | Built workspace; Redis + test SQLite database (`db:ensure:test`).             |
+| `npm run test:canonical -w @pokertools/api`           | Built workspace; Docker provisions disposable PostgreSQL + Redis.             |
 | `npm run test:postgres:migrations -w @pokertools/api` | Docker — the test provisions its own disposable PostgreSQL container.         |
-| `npm run test:postgres:ledger -w @pokertools/api`     | Docker — provisions a disposable PostgreSQL container; skips if unavailable.  |
+| `npm run test:postgres:ledger -w @pokertools/api`     | Docker — provisions disposable PostgreSQL; missing Docker fails closed.       |
 | `npm run contracts:test -w @pokertools/custody`       | Foundry (`forge`) and git submodules (`forge-std`, `openzeppelin-contracts`). |
 | `npm run e2e:docker`                                  | Docker + built images.                                                        |
 
@@ -100,11 +100,15 @@ the actual built runtime image (no application mocks):
 
 ```bash
 npm run e2e:docker
+npm run build:production:acceptance
 npm run test:production -w @pokertools/api
-node scripts/test-runtime-dependencies.mjs ghcr.io/aaurelions/pokertools:e2e
+node scripts/test-runtime-dependencies.mjs ghcr.io/aaurelions/pokertools:production-acceptance
 ```
 
 `POKERTOOLS_PRODUCTION_IMAGE` selects another already-built image. The test
+defaults to the production-acceptance PostgreSQL image, never the deliberately
+SQLite-provider Docker E2E image. Use the same image for runtime inspection.
+The test
 verifies configuration rejection, fresh migrations/startup/readiness, no implicit
 asset seed, live migration-drift blocking and liveness/readiness separation.
 Funded assets, quorum, custody and reconciliation still require two-chain E2E.

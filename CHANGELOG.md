@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Durable game jobs use BullMQ-safe IDs, enforce PostgreSQL-owned payloads/deadlines, and retain recoverable obligations until handler completion is acknowledged. Redis loss no longer strands dispatched settlement, archive or timeout jobs.
+- Custody validates the actual signed transaction and reserved route, scopes nonce lookup to its treasury, and cannot finalize before the settlement journal completes. Frozen routes remain observable after restart without authorizing new signing.
+- Treasury reconciliation records canonical block provenance; asset- and chain-wide incident resolution rechecks live backing against the locked ledger before unfreezing. Cached deposit freezes clear only after durable operator resolution and fresh endpoint validation.
+- WebSocket table membership authorization is enforced in tests as well as production; production admission defaults to a separately built PostgreSQL image.
+
 ### Changed
 
 - PostgreSQL manifest migrations are the sole deployment authority; SQLite is a disposable local-test adapter without a migration history.

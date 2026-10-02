@@ -10,15 +10,14 @@
  *   - the real viem ports: `ViemTreasurySigner`, `ViemQuorumReader`,
  *     `ViemTreasuryBroadcaster` against the live Anvil chain.
  *
- * The accounting port is the real `AtomicLedger`-backed implementation in
- * `prisma-accounting.ts`. Every value movement is a real ERC-20 transaction and
+ * Accounting and quorum use the same finance-core adapters as custody runtime.
+ * Every value movement is a real ERC-20 transaction and
  * every liability change is a real balanced journal posting.
  *
  * A fresh harness over the same `prisma`/`databaseUrl` is a genuine process
  * restart: it reads only PostgreSQL and creates new store objects. The harness
- * exposes broadcaster/quorum decorators that inject the exact fault the
- * acceptance scenario requires (accepted-but-dropped response, reorged-away
- * receipt, missing-receipt reorg) without touching the workflow implementation.
+ * exposes a broadcaster decorator for accepted-but-dropped response injection;
+ * missing receipts are interpreted by the production quorum adapter itself.
  */
 import type { Address, Hex } from "viem";
 import type { AssetStatus } from "@pokertools/types";
@@ -29,7 +28,6 @@ import {
   PrismaWithdrawalStore,
 } from "../../../../custody/src/core/prisma-store.js";
 import {
-  ViemQuorumReader,
   ViemTreasuryBroadcaster,
   ViemTreasurySigner,
   staticAccountResolver,
@@ -40,14 +38,15 @@ import {
 } from "../../../../custody/src/core/withdrawal-workflow.js";
 import type {
   Clock,
-  QuorumResult,
   RpcQuorumReader,
-  ReceiptObservation,
   TreasuryAccounting,
   TreasuryAsset,
   TreasuryBroadcaster,
 } from "../../../../custody/src/core/types.js";
-import { createPrismaTreasuryAccounting } from "./prisma-accounting.js";
+import {
+  createCustodyAccounting,
+  createAssetBackedCustodyQuorumReader,
+} from "../../../../api/src/finance-core.js";
 
 export const TEST_CLOCK: Clock = { now: () => Date.now() };
 
@@ -104,11 +103,14 @@ export function buildCustodyHarness(options: CustodyHarnessOptions): CustodyHarn
   const store = new PrismaWithdrawalStore(options.prisma, options.databaseUrl);
   const incidents = new PrismaIncidentStore(options.prisma);
   const assets = new PrismaAssetRegistry(options.prisma);
-  const accounting = options.accounting ?? createPrismaTreasuryAccounting(options.prisma);
+  const accounting = options.accounting ?? createCustodyAccounting({ prisma: options.prisma });
 
   const quorum =
     options.quorum ??
-    new ViemQuorumReader({ threshold: options.quorumThreshold ?? 1, retryCount: 0 });
+    createAssetBackedCustodyQuorumReader(options.prisma, {
+      quorum: options.quorumThreshold ?? 2,
+      minFanout: options.minQuorum ?? 2,
+    });
   const signer = new ViemTreasurySigner(
     staticAccountResolver(new Map([[options.chainId, options.treasuryPrivateKey]]))
   );
@@ -125,7 +127,7 @@ export function buildCustodyHarness(options: CustodyHarnessOptions): CustodyHarn
     clock: TEST_CLOCK,
     logger: QUIET_LOGGER,
     config: {
-      minQuorum: options.minQuorum ?? options.quorumThreshold ?? 1,
+      minQuorum: options.minQuorum ?? options.quorumThreshold ?? 2,
       ...options.config,
     },
   });
@@ -145,45 +147,6 @@ export function acceptedButDroppedBroadcaster(
     async broadcast(asset: TreasuryAsset, rawTransaction: Hex) {
       await real.broadcast(asset, rawTransaction);
       throw new Error(message);
-    },
-  };
-}
-
-/**
- * Quorum decorator that treats a genuinely missing receipt as `{ value: null }`
- * (an explicit reorg signal) instead of a transport/quorum failure. Only
- * "not found"-style errors are converted; other errors pass through untouched.
- */
-export function reorgAwareQuorum(real: RpcQuorumReader): RpcQuorumReader {
-  return {
-    nativeBalance: (asset, address) => real.nativeBalance(asset, address),
-    erc20BalanceOf: (asset, owner) => real.erc20BalanceOf(asset, owner),
-    transactionCount: (asset, address, tag) => real.transactionCount(asset, address, tag),
-    block: (asset, blockNumber) => real.block(asset, blockNumber),
-    blockNumber: (asset) => real.blockNumber(asset),
-    async transactionReceipt(
-      asset: TreasuryAsset,
-      hash: string
-    ): Promise<QuorumResult<ReceiptObservation | null>> {
-      const result = await real.transactionReceipt(asset, hash);
-      if (!result.agreed && result.observations.length === 0 && result.errors.length > 0) {
-        const allMissing = result.errors.every((error) =>
-          /could not be found|not found|no receipt/i.test(error.message)
-        );
-        if (allMissing) {
-          // A quorum that agrees the receipt is absent must still carry one
-          // observation per queried endpoint: the workflow treats an empty
-          // observation set as a transport failure, and a genuine missing
-          // receipt as a reorg signal.
-          return {
-            agreed: true,
-            value: null,
-            observations: result.errors.map((error) => ({ rpcUrl: error.rpcUrl, value: null })),
-            errors: [],
-          };
-        }
-      }
-      return result;
     },
   };
 }

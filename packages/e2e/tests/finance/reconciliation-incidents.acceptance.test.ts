@@ -13,20 +13,19 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { Address } from "viem";
 import { parseUnits } from "viem";
-import { AtomicLedger } from "../../../api/src/finance-core.js";
 import { buildCustodyHarness, type CustodyHarness } from "./helpers/custody-harness.js";
-import { ViemQuorumReader } from "../../../custody/src/core/viem-ports.js";
-import type { TreasuryAsset } from "../../../custody/src/core/types.js";
 import {
   attachTwoChainAnvil,
   CHAIN_A_ID,
   deployMockUsdc6,
   findTransferLogs,
   getAccount,
+  getNativeBalance,
   mine,
   mintToken,
   revertSnapshot,
   snapshot,
+  setNativeBalance,
   transferToken,
   type DeployedToken,
   type LocalChain,
@@ -135,8 +134,8 @@ describe("treasury reconciliation incident acceptance (real Prisma custody + API
         "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as const,
       confirmations: 1,
       deepFinality: 3,
-      quorumThreshold: 1,
-      minQuorum: 1,
+      quorumThreshold: 2,
+      minQuorum: 2,
     } as const;
   }
 
@@ -200,39 +199,68 @@ describe("treasury reconciliation incident acceptance (real Prisma custody + API
       });
       expect(reconciliation?.status).toBe("MATCHED");
       expect(reconciliation?.differenceAtomic).toBe("0");
-
-      // The route reads an injected readiness re-check; wire a real one that
-      // enforces the ledger invariant and a live native-gas quorum.
-      const ledger = new AtomicLedger(prisma);
-      const treasuryAsset: TreasuryAsset = {
-        assetId,
-        chainId: CHAIN_A_ID,
-        tokenAddress: token.address,
-        treasuryAddress: TREASURY,
-        rpcUrls: proxies.proxies.map((proxy) => proxy.url),
-        minGasAtomic: "0",
-        confirmations: 1,
-        deepFinality: 3,
-        status: "ACTIVE",
-      };
-      app.financialIncidentReadinessCheck = async (
-        tx: never,
-        incident: { assetId: string | null }
-      ) => {
-        if (incident.assetId) await ledger.assertAssetBalanced(tx as never, incident.assetId);
-        const reader = new ViemQuorumReader({ threshold: 2, retryCount: 0 });
-        const balance = await reader.nativeBalance(treasuryAsset, TREASURY);
-        if (!balance.agreed || (balance.value ?? 0n) < BigInt(treasuryAsset.minGasAtomic)) {
-          throw new Error("native gas readiness check failed");
-        }
-      };
-
-      const resolved = await resolveIncident(app, operator, shortfall.incident!.incidentId, {
-        note: "backing restored and independently verified",
-        observedAtomic: balanced.custodyAtomic,
-        expectedAtomic: balanced.expectedAtomic,
+      expect(reconciliation?.blockNumber).not.toBeNull();
+      const canonical = await chain.publicClient.getBlock({
+        blockNumber: BigInt(reconciliation!.blockNumber!),
       });
-      expect(resolved.status).toBeLessThan(300);
+      expect((reconciliation?.evidence as { blockHash: string }).blockHash).toBe(canonical.hash);
+
+      // A recently MATCHED row must not authorize unfreeze after backing changes.
+      await transferToken(
+        chain,
+        token.address,
+        TREASURY_INDEX,
+        stranger.address,
+        parseUnits("1", 6)
+      );
+      const denied = await resolveIncident(app, operator, shortfall.incident!.incidentId, {
+        note: "recent evidence is not live backing",
+      });
+      expect(denied.status).toBe(503);
+      expect((denied.body as { code: string }).code).toBe("RECONCILIATION_UNVERIFIED");
+      expect(
+        (
+          await prisma.financialIncident.findUnique({
+            where: { id: shortfall.incident!.incidentId },
+          })
+        )?.status
+      ).toBe("OPEN");
+      expect((await prisma.asset.findUnique({ where: { id: assetId } }))?.status).toBe("FROZEN");
+      await transferToken(chain, token.address, 8, TREASURY, parseUnits("1", 6));
+      const nativeGas = await getNativeBalance(chain, TREASURY);
+      await prisma.asset.update({ where: { id: assetId }, data: { minGasAtomic: "1" } });
+      try {
+        await setNativeBalance(chain, TREASURY, 0n);
+        const gasDenied = await resolveIncident(app, operator, shortfall.incident!.incidentId, {
+          note: "real gas starvation",
+        });
+        expect(gasDenied.status, gasDenied.raw).toBe(503);
+        expect((gasDenied.body as { code: string }).code).toBe("NATIVE_GAS_UNVERIFIED");
+        expect(
+          (
+            await prisma.financialIncident.findUniqueOrThrow({
+              where: { id: shortfall.incident!.incidentId },
+            })
+          ).status
+        ).toBe("OPEN");
+      } finally {
+        await setNativeBalance(chain, TREASURY, nativeGas);
+      }
+
+      const beforeResolution = await prisma.financialIncident.findUniqueOrThrow({
+        where: { id: shortfall.incident!.incidentId },
+      });
+      const resolutions = await Promise.all(
+        ["resolver-a", "resolver-b"].map((note) =>
+          resolveIncident(app, operator, shortfall.incident!.incidentId, {
+            note,
+            observedAtomic: balanced.custodyAtomic,
+            expectedAtomic: balanced.expectedAtomic,
+          })
+        )
+      );
+      expect(resolutions.map((response) => response.status).sort()).toEqual([200, 409]);
+      const resolved = resolutions.find((response) => response.status === 200)!;
       expect((resolved.body as { status: string }).status).toBe("RESOLVED");
 
       const closed = await prisma.financialIncident.findUnique({
@@ -240,6 +268,7 @@ describe("treasury reconciliation incident acceptance (real Prisma custody + API
       });
       expect(closed?.status).toBe("RESOLVED");
       expect(closed?.operatorId).toBe(operator.principalId);
+      expect(closed?.version).toBe(beforeResolution.version + 1);
 
       const assetRow = await prisma.asset.findUnique({ where: { id: assetId } });
       expect(assetRow?.status).toBe("ACTIVE");
@@ -249,18 +278,22 @@ describe("treasury reconciliation incident acceptance (real Prisma custody + API
   });
 
   it("fails closed with an RPC disagreement incident when custody quorum is unavailable", async () => {
-    const real = new ViemQuorumReader({ threshold: 2, retryCount: 0 });
-    const disagreeing = {
-      ...real,
-      async erc20BalanceOf(asset: TreasuryAsset, owner: string) {
-        const result = await real.erc20BalanceOf(asset, owner);
-        return { ...result, agreed: false, value: null };
-      },
-    };
-    const h = harness({ quorum: disagreeing as never });
-
-    await expect(h.workflow.reconcileAsset(assetId)).rejects.toThrow(/quorum/i);
-    const open = await h.incidents.listOpen({ kind: "RPC_DISAGREEMENT" });
-    expect(open.length).toBeGreaterThanOrEqual(1);
+    const h = harness();
+    proxies.proxies[1].state.ethCallResultOverride = `0x${"00".repeat(32)}`;
+    try {
+      await expect(h.workflow.reconcileAsset(assetId)).rejects.toThrow(/quorum/i);
+      const open = await h.incidents.listOpen({ kind: "RPC_DISAGREEMENT" });
+      expect(
+        open.some((incident) => incident.assetId === assetId || incident.chainId === CHAIN_A_ID)
+      ).toBe(true);
+      expect((await prisma.asset.findUnique({ where: { id: assetId } }))?.status).toBe("FROZEN");
+    } finally {
+      proxies.proxies[1].state.ethCallResultOverride = undefined;
+    }
+    expect((await h.workflow.reconcileAsset(assetId)).mismatch).toBe(false);
+    // Observation recovery does not authorize new signing or unfreeze a route.
+    expect((await prisma.asset.findUniqueOrThrow({ where: { id: assetId } })).status).toBe(
+      "FROZEN"
+    );
   });
 });

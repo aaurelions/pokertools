@@ -16,6 +16,7 @@ import {
 } from "./harness.js";
 import { flushRedis, killRedis, restartRedis } from "./infra.js";
 import { verifyEventChain } from "../../../src/services/game-events.js";
+import { recoverGameOutbox } from "../../../src/services/game-outbox.js";
 
 /**
  * Durable recovery acceptance.
@@ -147,9 +148,59 @@ describe("canonical durable recovery acceptance", () => {
     expect(next.version).toBe(before.version + 1);
   });
 
+  it("commits before a real publish failure and re-drives the failed PostgreSQL intent", async () => {
+    const client = new CanonicalClient(ctx.baseUrl, playerA);
+    const before = await client.observation(tableId);
+    // Fail exactly PUBLISH in disposable Redis; database/locks/auth remain real.
+    await app.redis.call("ACL", "SETUSER", "default", "-publish");
+    let committed: { version: number; eventSeq: number };
+    try {
+      committed = await playOneAction();
+      const row = await app.prisma.gameOutbox.findUniqueOrThrow({
+        where: { dedupeKey: `pubsub:${tableId}:${committed.version}` },
+      });
+      expect(row.status).toBe("FAILED");
+      expect(
+        (await app.prisma.table.findUniqueOrThrow({ where: { id: tableId } })).stateVersion
+      ).toBe(before.version + 1);
+      expect((await client.observation(tableId)).version).toBe(committed.version);
+    } finally {
+      await app.redis.call("ACL", "SETUSER", "default", "+publish");
+    }
+    const subscriber = app.redis.duplicate();
+    try {
+      await subscriber.subscribe(`pubsub:table:${tableId}`);
+      const delivery = new Promise<{ version: number }>((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error("durable publish was not recovered")),
+          5000
+        );
+        subscriber.on("message", (_channel, message) => {
+          const payload = JSON.parse(message) as { version: number };
+          if (payload.version === committed!.version) {
+            clearTimeout(timer);
+            resolve(payload);
+          }
+        });
+      });
+      await recoverGameOutbox(app.prisma, app.jobQueues, app.redis);
+      expect((await delivery).version).toBe(committed!.version);
+      expect(
+        (
+          await app.prisma.gameOutbox.findUniqueOrThrow({
+            where: { dedupeKey: `pubsub:${tableId}:${committed!.version}` },
+          })
+        ).status
+      ).toBe("DISPATCHED");
+    } finally {
+      await subscriber.quit();
+    }
+  });
+
   it("recovers committed state from PostgreSQL after an API process restart", async () => {
     const before = await new CanonicalClient(ctx.baseUrl, playerA).observation(tableId);
     await ctx.close();
+    await flushRedis(acceptanceEnv().redisUrl);
 
     const restarted = await bootApp();
     app = restarted.app;
@@ -158,6 +209,6 @@ describe("canonical durable recovery acceptance", () => {
     const recovered = await new CanonicalClient(restarted.baseUrl, playerA).observation(tableId);
     expect(recovered.version).toBe(before.version);
     expect(recovered.eventSeq).toBe(before.eventSeq);
-    expect(recovered.state.handId).toBe(before.state.handId);
+    expect(recovered.state).toEqual(before.state);
   });
 });

@@ -255,20 +255,18 @@ export class PrismaWithdrawalStore implements WithdrawalStore {
   }
 
   async maxPersistedTreasuryNonce(chainId: number, treasuryAddress: string): Promise<number> {
-    // Addresses are persisted lowercase; compare case-insensitively in JS so
-    // the query works identically on PostgreSQL and the SQLite test client
-    // (`mode: "insensitive"` is PostgreSQL-only).
+    // Reservation normalizes addresses. Filter the treasury BEFORE limiting;
+    // another treasury's high nonces must never hide this treasury's maximum.
     const rows = await this.prisma.withdrawalIntentRecord.findMany({
       where: {
         chainId,
-        treasuryAddress: { not: null },
+        treasuryAddress: treasuryAddress.toLowerCase(),
         broadcastNonce: { not: null },
       },
       orderBy: { broadcastNonce: "desc" },
-      take: 50,
+      take: 1,
     });
-    const target = treasuryAddress.toLowerCase();
-    const row = rows.find((candidate) => candidate.treasuryAddress?.toLowerCase() === target);
+    const row = rows[0];
     return row?.broadcastNonce === null || row?.broadcastNonce === undefined
       ? -1
       : toSafeNumber(row.broadcastNonce, "WithdrawalIntentRecord.broadcastNonce");

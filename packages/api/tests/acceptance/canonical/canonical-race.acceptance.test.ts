@@ -56,11 +56,15 @@ describe("canonical timeout/action race acceptance", () => {
   beforeAll(async () => {
     ctx = await bootApp();
     app = ctx.app;
-    worker = spawn("npx", ["tsx", "tests/acceptance/canonical/timeout-worker-main.ts"], {
-      cwd: PACKAGE_DIR,
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    worker = spawn(
+      process.execPath,
+      ["--import", "tsx", "tests/acceptance/canonical/timeout-worker-main.ts"],
+      {
+        cwd: PACKAGE_DIR,
+        env: process.env,
+        stdio: ["ignore", "pipe", "pipe"],
+      }
+    );
     await waitForOutput(worker, "canonical-timeout-worker:started");
 
     playerA = await loginWallet(ctx.baseUrl);
@@ -97,6 +101,26 @@ describe("canonical timeout/action race acceptance", () => {
     expect(turn.turnId).not.toBeNull();
     const baselineVersion = turn.version;
     const action = turn.legalActions.find((candidate) => candidate.family === "FOLD")!;
+    const deadline = await app.prisma.gameOutbox.findFirstOrThrow({
+      where: {
+        tableId,
+        kind: "player-timeout",
+        dedupeKey: `timeout:${tableId}:${turn.state.actionTo}:${baselineVersion}`,
+      },
+    });
+    expect(deadline.status, deadline.lastError ?? "timeout was not dispatched").toBe("DISPATCHED");
+    const queued = await app.jobQueues["player-timeout"].getJob(deadline.id);
+    expect(queued).not.toBeUndefined();
+    // Redis is transport, not action identity authority. Even corrupt job data
+    // must execute only the PostgreSQL-bound turn (or its stale-version no-op).
+    await queued!.updateData({
+      tableId: "wrong-table",
+      playerId: "wrong-player",
+      expectedVersion: -1,
+    });
+    const completed = waitForOutput(worker, `canonical-timeout-worker:completed:${deadline.id}`);
+    // Synchronize against the persisted deadline, not an arbitrary startup sleep.
+    await delay(Math.max(0, deadline.availableAt.getTime() - Date.now()));
 
     const raced = await client.act(tableId, {
       requestId: crypto.randomUUID(),
@@ -107,24 +131,65 @@ describe("canonical timeout/action race acceptance", () => {
     // Either the client won (200) or the timeout worker won first (409).
     expect([200, 409]).toContain(raced.status);
 
-    // Let the scheduled timeout fire well past its delay.
-    await delay(2500);
+    await completed;
 
     const events = await app.prisma.gameEvent.findMany({
       where: { tableId },
       orderBy: { eventSeq: "asc" },
     });
+    expect(events[0].eventSeq).toBe(1);
     // A single accepted action may emit more than one event at the same
     // version; the invariant is that the turn advanced by exactly one version
     // (one of client action / timeout applied, never both) and no version was
     // skipped or repeated.
-    expect(events.map((event) => event.eventSeq)).toEqual(
-      [...events.map((event) => event.eventSeq)].sort((left, right) => left - right)
-    );
+    for (let index = 1; index < events.length; index++)
+      expect(events[index].eventSeq).toBe(events[index - 1].eventSeq + 1);
     expect(events.every((event) => event.version <= baselineVersion + 1)).toBe(true);
     expect(events.some((event) => event.version === baselineVersion + 1)).toBe(true);
 
     const after = await client.observation(tableId);
     expect(after.version).toBe(baselineVersion + 1);
   }, 30_000);
+
+  it("restores a lost dispatched deadline from PostgreSQL and makes the original client turn stale", async () => {
+    // Start a new table so the prior race's outcome cannot pre-create this turn.
+    const recoveredTable = await createTable(ctx.baseUrl, playerA.token, {
+      name: "lost-timeout",
+      smallBlind: 1,
+      bigBlind: 2,
+      maxPlayers: 2,
+    });
+    try {
+      await seatPrincipal(ctx.baseUrl, playerA, recoveredTable, 0, 500);
+      await seatPrincipal(ctx.baseUrl, playerB, recoveredTable, 1, 500);
+      const started = await startHand(ctx.baseUrl, recoveredTable, [playerA, playerB]);
+      const actorId = started.observation.state.players[started.observation.state.actionTo!]?.id;
+      const client = new CanonicalClient(ctx.baseUrl, actorId === playerA.id ? playerA : playerB);
+      const turn = await client.observation(recoveredTable);
+      const action = turn.legalActions.find((candidate) => candidate.family === "FOLD")!;
+      const deadline = await app.prisma.gameOutbox.findFirstOrThrow({
+        where: { tableId: recoveredTable, kind: "player-timeout", status: "DISPATCHED" },
+        orderBy: { createdAt: "desc" },
+      });
+      const job = await app.jobQueues["player-timeout"].getJob(deadline.id);
+      expect(job).toBeDefined();
+      // Actual Redis loss of a delivered queue job; the recovery sweep must
+      // rebuild it from the original PostgreSQL deadline and version fence.
+      await job!.remove();
+      const completed = waitForOutput(worker, `canonical-timeout-worker:completed:${deadline.id}`);
+      await completed;
+      const after = await client.observation(recoveredTable);
+      expect(after.version).toBe(turn.version + 1);
+      const stale = await client.act(recoveredTable, {
+        requestId: crypto.randomUUID(),
+        turnId: turn.turnId!,
+        expectedVersion: turn.version,
+        actionId: action.actionId,
+      });
+      expect(stale.status).toBe(409);
+      expect((await client.observation(recoveredTable)).version).toBe(after.version);
+    } finally {
+      await cleanupFixtures(app, { tableIds: [recoveredTable] });
+    }
+  });
 });

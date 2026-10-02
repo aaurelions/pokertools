@@ -148,6 +148,8 @@ describe("built SDK in a real browser (loopback API)", () => {
         expect(pageErrors).toEqual([]);
 
         const steps = outcome.steps;
+        expect(app.hasRoute({ method: "POST", url: "/user/test-credit" })).toBe(false);
+        expect(app.hasRoute({ method: "POST", url: "/tables/:id/test-state" })).toBe(false);
         // Wallet auth SIWE boundary.
         expect(steps.siwe.wrongSignerStatus).toBe(401);
         expect(steps.siwe.replayStatus).toBe(401);
@@ -164,6 +166,8 @@ describe("built SDK in a real browser (loopback API)", () => {
         expect(steps.wsJoin.connected).toBe(true);
         expect(steps.wsJoin.deckEmpty).toBe(true);
         expect(steps.wsJoin.previousStatesEmpty).toBe(true);
+        expect(steps.wsJoin.nonViewerHandsMasked).toBe(true);
+        expect(steps.wsJoin.viewingPlayerId).toBe(steps.wsJoin.expectedViewerId);
 
         if (steps.blocked) {
           throw new Error(
@@ -178,13 +182,19 @@ describe("built SDK in a real browser (loopback API)", () => {
           expect(steps.masking.observation.deckEmpty).toBe(true);
           expect(steps.masking.observation.previousStatesEmpty).toBe(true);
           expect(steps.masking.observation.nonViewerHandsMasked).toBe(true);
+          expect(steps.deal.sdkError).toBeNull();
+          expect(steps.liveUpdate.sdkError).toBeNull();
+          expect(steps.transportRetry.dropped).toBe(true);
+          expect(steps.transportRetry.exactReplay).toBe(true);
+          const durableRequests = await app.prisma.gameActionRequest.findMany({
+            where: { requestId: steps.transportRetry.requestId },
+          });
+          expect(durableRequests).toHaveLength(1);
 
           // Action live update over the authenticated socket.
           expect(Number.isInteger(steps.liveUpdate.actorIndex)).toBe(true);
           expect(steps.liveUpdate.actorIndex).toBeGreaterThanOrEqual(0);
-          expect(steps.liveUpdate.pushedVersion).toBeGreaterThanOrEqual(
-            steps.liveUpdate.actionVersion
-          );
+          expect(steps.liveUpdate.pushedVersion).toBe(steps.liveUpdate.actionVersion);
 
           // Disconnect / reconnect / resync.
           expect(steps.reconnectResync.disconnectedWhileAway).toBe(true);
@@ -208,7 +218,7 @@ describe("built SDK in a real browser (loopback API)", () => {
           expect(canonical.turnObserved).toBe(true);
           expect(canonical.legalActionFamilies.length).toBeGreaterThan(0);
           expect(canonical.spoofStatus).toBe(400);
-          expect([400, 409]).toContain(canonical.staleStatus);
+          expect(canonical.staleStatus).toBe(409);
           expect(canonical.replayIdempotent).toBe(true);
         } else {
           throw new Error(`canonical contract failed: ${JSON.stringify(canonical)}`);

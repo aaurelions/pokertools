@@ -54,6 +54,8 @@ export interface CustodyReconciliationEvidence {
   treasuryAddress: string;
   custodyAtomic: string;
   expectedAtomic: string;
+  blockNumber: string;
+  blockHash: string;
   observations: Array<{ rpcUrl: string; valueAtomic: string }>;
   observedAt: number;
   mismatch: boolean;
@@ -201,10 +203,12 @@ export function createCustodyAccounting(
         chainId: evidence.chainId,
         observedAtomic: evidence.custodyAtomic,
         ledgerAtomic: evidence.expectedAtomic,
+        blockNumber: evidence.blockNumber,
         evidence: {
           treasuryAddress: evidence.treasuryAddress,
           observations: evidence.observations,
           observedAt: evidence.observedAt,
+          blockHash: evidence.blockHash,
           mismatch: evidence.mismatch,
         },
       });

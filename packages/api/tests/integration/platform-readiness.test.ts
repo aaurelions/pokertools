@@ -291,27 +291,38 @@ describe("PlatformReadinessService", () => {
     expect(check(report, "reconciliation").detail).toBe("RECONCILIATION_MISSING");
   });
 
-  it("fails closed on a stale pending outbox row", async () => {
-    await applyMigration(BASE_FILE, BASE_HASH);
-    const table = await prisma.table.create({
-      data: { name: "readiness-outbox", mode: "CASH", config: {} },
-    });
-    await prisma.gameOutbox.create({
-      data: {
-        tableId: table.id,
-        kind: "PUBLISH_EVENT",
-        dedupeKey: `readiness-${table.id}`,
-        payload: {},
-        status: "PENDING",
-        availableAt: new Date(Date.now() - 60 * 60 * 1000),
-      },
-    });
+  it.each(["PENDING", "DISPATCHED"])(
+    "fails closed on a stale unacknowledged %s queue obligation",
+    async (status) => {
+      await applyMigration(BASE_FILE, BASE_HASH);
+      const table = await prisma.table.create({
+        data: { name: "readiness-outbox", mode: "CASH", config: {} },
+      });
+      const obligation = await prisma.gameOutbox.create({
+        data: {
+          tableId: table.id,
+          kind: "settle-hand",
+          dedupeKey: `readiness-${table.id}`,
+          payload: {},
+          status,
+          availableAt: new Date(Date.now() - 60 * 60 * 1000),
+        },
+      });
 
-    const report = await makeService({ outboxMaxPendingAgeMs: 60_000 }).evaluate();
+      const report = await makeService({ outboxMaxPendingAgeMs: 60_000 }).evaluate();
 
-    expect(check(report, "gameAuthority").state).toBe("NOT_READY");
-    expect(check(report, "gameAuthority").detail).toBe("OUTBOX_STALE_PENDING");
-  });
+      expect(check(report, "gameAuthority").state).toBe("NOT_READY");
+      expect(check(report, "gameAuthority").detail).toBe("OUTBOX_STALE_PENDING");
+      await prisma.gameOutbox.update({
+        where: { id: obligation.id },
+        data: { status: "COMPLETED" },
+      });
+      expect(
+        check(await makeService({ outboxMaxPendingAgeMs: 60_000 }).evaluate(), "gameAuthority")
+          .state
+      ).toBe("READY");
+    }
+  );
 
   it("fails closed on a failed outbox row", async () => {
     await applyMigration(BASE_FILE, BASE_HASH);

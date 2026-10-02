@@ -1,4 +1,6 @@
 import { keccak256 } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import { ANVIL_PUBLIC_PRIVATE_KEY } from "../../../api/tests/fixtures/anvil-public-key.js";
 import type {
   AssetStatus,
   BlockObservation,
@@ -20,7 +22,8 @@ import type {
 
 export const CHAIN_ID = 31337;
 export const TOKEN = "0x00000000000000000000000000000000000000aa";
-export const TREASURY = "0x00000000000000000000000000000000000000bb";
+const treasuryAccount = privateKeyToAccount(ANVIL_PUBLIC_PRIVATE_KEY);
+export const TREASURY = treasuryAccount.address.toLowerCase();
 export const DESTINATION = "0x00000000000000000000000000000000000000cc";
 export const OTHER_DESTINATION = "0x00000000000000000000000000000000000000dd";
 export const ASSET_ID = `eip155:${CHAIN_ID}/erc20:${TOKEN}`;
@@ -135,10 +138,17 @@ export class FakeSigner implements TreasurySigner {
         64,
         "0"
       )}${BigInt(request.amountAtomic).toString(16).padStart(64, "0")}` as `0x${string}`;
-    const rawTransaction =
-      `0x${(BigInt(request.nonce) + 1n).toString(16).padStart(64, "0").slice(0, 64)}${"0".repeat(
-        64
-      )}` as `0x${string}`;
+    const rawTransaction = await treasuryAccount.signTransaction({
+      chainId: request.chainId,
+      to: request.tokenAddress as `0x${string}`,
+      data: callData,
+      value: 0n,
+      nonce: request.nonce,
+      gas: 100_000n,
+      maxFeePerGas: 1n,
+      maxPriorityFeePerGas: 1n,
+      type: "eip1559",
+    });
 
     const provenance: SignedTransactionProvenance = {
       chainId: request.chainId,

@@ -16,7 +16,7 @@
 
 import { PokerClient, PokerSocket, createSiweMessage } from "@pokertools/sdk";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { CanonicalActionReceiptSchema, SeatObservationSchema } from "@pokertools/types";
+import { CanonicalActionResultSchema, SeatObservationSchema } from "@pokertools/types";
 
 const CHAIN_ID = 31337;
 const PLAYER_BUY_IN = 1000;
@@ -106,6 +106,25 @@ function describeError(error: unknown): string {
   return String(error);
 }
 
+// Lose exactly one REAL committed HTTP response at the client transport
+// boundary. No API result is fabricated: the SDK must retry the same request
+// through the live server's durable request-id replay path.
+let droppedActionBody: string | null = null;
+let retriedActionBody: string | null = null;
+async function acceptanceFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const response = await fetch(input, init);
+  if (String(input).endsWith("/action") && init?.method === "POST" && response.ok) {
+    const body = String(init.body);
+    if (droppedActionBody === null) {
+      await response.text();
+      droppedActionBody = body;
+      throw new TypeError("accepted action response lost at transport boundary");
+    }
+    if (retriedActionBody === null) retriedActionBody = body;
+  }
+  return response;
+}
+
 /**
  * Authenticate one ephemeral wallet through the SIWE boundary. When
  * `testBoundary` is set, also probes the negative cases (wrong signer must not
@@ -116,7 +135,11 @@ async function authenticate(
   wallet: EphemeralWallet,
   testBoundary: boolean
 ): Promise<{ client: PokerClient; userId: string; boundary: Record<string, JsonValue> }> {
-  const client = new PokerClient({ baseUrl, retry: { count: 0 } });
+  const client = new PokerClient({
+    baseUrl,
+    retry: { count: 1, delay: 0 },
+    fetch: acceptanceFetch,
+  });
   const nonce = await client.getNonce();
   const message = createSiweMessage({
     address: wallet.address as `0x${string}`,
@@ -177,6 +200,7 @@ function inspectMasking(state: MaskedStateLike): Record<string, JsonValue> {
     version: state.version,
     deckEmpty: Array.isArray(state.deck) && state.deck.length === 0,
     previousStatesEmpty: !state.previousStates || state.previousStates.length === 0,
+    viewingPlayerId: state.viewingPlayerId,
     nonViewerHandsMasked: state.players.every(
       (player) => !player || isMaskedHand(player.hand, state.viewingPlayerId, player.id)
     ),
@@ -192,10 +216,8 @@ function inspectObservationMasking(observation: ObservationLike): Record<string,
  * Submit a server-issued legal action for `family`.
  *
  * The SDK's public `getObservation` supplies the authoritative legal actions.
- * The canonical submit is issued through the SDK's public `action` method; if
- * the SDK rejects the response shape (the wire format is still landing) the
- * harness verifies whether the server actually applied the mutation and
- * continues, recording the SDK error for the report.
+ * The canonical submit and its parsed receipt must succeed through the public
+ * SDK. A committed server mutation is not a substitute for a working SDK.
  */
 async function submitFamily(
   client: PokerClient,
@@ -226,21 +248,23 @@ async function submitFamily(
     ...(amount !== undefined ? { amount } : {}),
   };
 
-  let sdkReceipt: JsonValue = null;
-  let sdkError: string | null = null;
-  try {
-    sdkReceipt = toJson(await client.action(tableId, canonical));
-  } catch (error) {
-    sdkError = describeError(error);
+  const result = await client.action(tableId, canonical);
+  const receipt = result.receipt;
+  const sdkReceipt = toJson(result);
+  const after = (await client.getObservation(tableId)) as unknown as ObservationLike;
+  const afterVersion = after.version;
+  if (
+    receipt.requestId !== canonical.requestId ||
+    receipt.version !== afterVersion ||
+    afterVersion !== before.version + 1
+  ) {
+    throw new Error("SDK action receipt did not match the committed canonical action");
   }
-
-  const after = (await client.getObservation(tableId).catch(() => null)) as ObservationLike | null;
-  const afterVersion = after?.version ?? before.version;
   return {
-    applied: sdkReceipt !== null || afterVersion !== before.version,
+    applied: true,
     beforeVersion: before.version,
     afterVersion,
-    sdkError,
+    sdkError: null,
     sdkReceipt,
   };
 }
@@ -358,12 +382,7 @@ async function runCanonicalProbe(
     };
   }
 
-  // The wire contract is still settling: accept a bare receipt or an
-  // outcome/receipt envelope, and report the observed shape either way.
-  const envelope = (submitted.body ?? {}) as Record<string, unknown>;
-  const receiptCandidate = envelope.receipt !== undefined ? envelope.receipt : envelope;
-  const receipt = CanonicalActionReceiptSchema.safeParse(receiptCandidate);
-  const observationReturned = SeatObservationSchema.safeParse(submitted.body).success;
+  const result = CanonicalActionResultSchema.safeParse(submitted.body);
 
   const spoofed = await request(`${baseUrl}/tables/${tableId}/action`, {
     method: "POST",
@@ -384,28 +403,26 @@ async function runCanonicalProbe(
     headers: authHeaders(token),
     body: JSON.stringify(submitBody),
   });
-  const replayEnvelope = (replay.body ?? {}) as Record<string, unknown>;
-  const replayReceipt = CanonicalActionReceiptSchema.safeParse(
-    replayEnvelope.receipt !== undefined ? replayEnvelope.receipt : replayEnvelope
-  );
-
-  const receiptValid = receipt.success;
+  const replayResult = CanonicalActionResultSchema.safeParse(replay.body);
+  const receiptValid = result.success;
   const replayIdempotent =
-    replayReceipt.success && receiptValid && replayReceipt.data.version === receipt.data.version;
+    replay.ok &&
+    replayResult.success &&
+    result.success &&
+    JSON.stringify(replayResult.data) === JSON.stringify(result.data);
 
   return {
     status:
-      submitted.ok && receiptValid && replayIdempotent && spoofed.status === 400
+      submitted.ok &&
+      receiptValid &&
+      replayIdempotent &&
+      spoofed.status === 400 &&
+      stale.status === 409
         ? "READY"
         : "FAILED",
     observationStatus: observationResponse.status,
     submitStatus: submitted.status,
-    wireShape:
-      envelope.receipt !== undefined
-        ? "receipt-envelope"
-        : observationReturned
-          ? "observation"
-          : "bare",
+    wireShape: result.success ? "receipt-envelope" : "invalid",
     receiptValid,
     replayIdempotent,
     legalActionFamilies: observed.legalActions.map((action) => action.family),
@@ -502,6 +519,7 @@ async function play(): Promise<Record<string, JsonValue>> {
       const snapshotObservation = (await socket.join(tableId)) as unknown as ObservationLike;
       steps.wsJoin = {
         connected: socket.isConnected(),
+        expectedViewerId: userIds[1],
         ...inspectObservationMasking(snapshotObservation),
       };
     }
@@ -524,6 +542,11 @@ async function play(): Promise<Record<string, JsonValue>> {
           version: dealtObservation.version,
           sdkError: dealt.result.sdkError,
           offeredFamilies: dealtObservation.legalActions.map((action) => action.family),
+        };
+        steps.transportRetry = {
+          dropped: droppedActionBody !== null,
+          exactReplay: retriedActionBody === droppedActionBody,
+          requestId: droppedActionBody === null ? null : JSON.parse(droppedActionBody).requestId,
         };
         steps.masking = {
           engine: inspectMasking(viewerState),

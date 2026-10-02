@@ -81,6 +81,41 @@ function setup() {
 }
 
 describe("WithdrawalWorkflow persist-before-broadcast", () => {
+  it.each(["bytes", "hash"])(
+    "rejects dishonest signer %s even with correct declared provenance",
+    async (mismatch) => {
+      const h = setup();
+      const sign = h.signer.signTransfer.bind(h.signer);
+      h.signer.signTransfer = async (request) => {
+        const honest = await sign(request);
+        if (mismatch === "hash") return { ...honest, hash: keccak256("0xdeadbeef") };
+        const wrong = await sign({ ...request, destination: OTHER_DESTINATION });
+        return { ...wrong, provenance: honest.provenance };
+      };
+      await h.workflow.acceptIntent(newIntent());
+      await h.workflow.processIntent("int_1");
+      expect((await h.store.get("int_1"))?.signedRawTx).toBeNull();
+      expect(h.broadcaster.broadcasts).toHaveLength(0);
+      expect(
+        (await h.incidents.listOpen({ kind: "CUSTODY_FAILURE" })).map(
+          (incident) => incident.detail.reason
+        )
+      ).toContain("signed_provenance_mismatch");
+    }
+  );
+
+  it("does not sign a reservation after its treasury route changes", async () => {
+    const h = setup();
+    await h.workflow.acceptIntent(newIntent({ treasuryAddress: OTHER_DESTINATION }));
+    await h.workflow.processIntent("int_1");
+    expect(h.signer.calls).toHaveLength(0);
+    expect((await h.store.get("int_1"))?.state).toBe("RESERVED");
+    expect(
+      (await h.incidents.listOpen({ kind: "CUSTODY_FAILURE" })).map(
+        (incident) => incident.detail.reason
+      )
+    ).toContain("reserved_route_changed");
+  });
   it("durably persists nonce, call data, exact bytes and hash before broadcasting", async () => {
     const h = setup();
     await h.workflow.acceptIntent(newIntent());
@@ -230,6 +265,29 @@ describe("WithdrawalWorkflow ambiguous broadcast recovery", () => {
 });
 
 describe("WithdrawalWorkflow confirmation and finality", () => {
+  it("cannot finalize while settlement fails, and retries the same journal obligation", async () => {
+    const h = setup();
+    await h.workflow.acceptIntent(newIntent());
+    await h.workflow.processIntent("int_1");
+    h.quorum.receipt = successReceipt(100, `0x${"22".repeat(32)}`);
+    h.quorum.blockHeight = 110;
+    await h.workflow.processIntent("int_1");
+    const complete = h.accounting.completeWithdrawal.bind(h.accounting);
+    h.accounting.completeWithdrawal = async () => {
+      throw new Error("temporary journal failure");
+    };
+    await h.workflow.processIntent("int_1");
+    await h.workflow.processIntent("int_1");
+    expect((await h.store.get("int_1"))?.state).toBe("CONFIRMED");
+    expect((await h.store.get("int_1"))?.confirmedJournalId).toBeNull();
+    expect(h.accounting.entries).toHaveLength(0);
+    h.accounting.completeWithdrawal = complete;
+    await h.workflow.processIntent("int_1");
+    expect((await h.store.get("int_1"))?.state).toBe("FINALIZED");
+    expect(
+      h.accounting.entries.filter((entry) => entry.kind === "WITHDRAWAL_CONFIRMED")
+    ).toHaveLength(1);
+  });
   it("confirms on quorum receipt at confirmations and finalizes at deepFinality, exactly once", async () => {
     const h = setup();
     await h.workflow.acceptIntent(newIntent());

@@ -41,6 +41,40 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
     await runCleanup(ctx.cleanup);
   });
 
+  it("denies unseated private-table joins and missing tables, then authorizes a seated member", async () => {
+    const [owner, viewer] = ctx.users;
+    const tableId = await createTable(ctx.app, owner.token, {
+      name: "Private membership gate",
+      mode: "CASH",
+      smallBlind: 1,
+      bigBlind: 2,
+    });
+    const ws = new WebSocket(wsUrl, ["pokertools", `jwt.${viewer.token}`]);
+    const messages: any[] = [];
+    ws.on("message", (data) => messages.push(JSON.parse(data.toString())));
+    try {
+      await new Promise((resolve, reject) => {
+        ws.once("open", resolve);
+        ws.once("error", reject);
+      });
+      ws.send(JSON.stringify({ type: "JOIN", tableId, requestId: "denied-member" }));
+      await waitFor(() => messages.some((message) => message.code === "JOIN_NOT_AUTHORIZED"), 5000);
+      expect(observations(messages)).toHaveLength(0);
+      expect(messages.find((message) => message.code === "JOIN_NOT_AUTHORIZED").requestId).toBe(
+        "denied-member"
+      );
+      ws.send(JSON.stringify({ type: "JOIN", tableId: "missing-table", requestId: "missing" }));
+      await waitFor(() => messages.some((message) => message.code === "TABLE_NOT_FOUND"), 5000);
+      await buyIn(ctx.app, viewer.token, tableId, 100, 0);
+      ws.send(JSON.stringify({ type: "JOIN", tableId, requestId: "seated-member" }));
+      await waitFor(() => observations(messages).length > 0, 5000);
+      expect(observations(messages)[0].observation.state.viewingPlayerId).toBe(viewer.id);
+    } finally {
+      ws.close();
+      await cleanupTestTable(ctx.app, tableId);
+    }
+  });
+
   it("should receive full canonical observations via WebSocket", async () => {
     const [player1, player2, player3] = ctx.users;
 
@@ -49,6 +83,7 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
     // =========================================================================
     ctx.tableId = await createTable(ctx.app, player1.token, {
       name: "WebSocket Test",
+      allowSpectators: true,
       mode: "CASH",
       smallBlind: 5,
       bigBlind: 10,
@@ -232,6 +267,7 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
     // Create two tables
     const table1 = await createTable(ctx.app, player1.token, {
       name: "Multi-Table Test 1",
+      allowSpectators: true,
       mode: "CASH",
       smallBlind: 5,
       bigBlind: 10,
@@ -239,6 +275,7 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
 
     const table2 = await createTable(ctx.app, player1.token, {
       name: "Multi-Table Test 2",
+      allowSpectators: true,
       mode: "CASH",
       smallBlind: 10,
       bigBlind: 20,
@@ -303,6 +340,7 @@ describe("WebSocket - Real-time Updates Integration Test", () => {
 
     const testTableId = await createTable(ctx.app, player1.token, {
       name: "Full Projection Protocol Test",
+      allowSpectators: true,
       mode: "CASH",
       smallBlind: 5,
       bigBlind: 10,

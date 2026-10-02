@@ -23,12 +23,9 @@ import {
   recoverWithdrawalSigner,
   signWithdrawalIntent,
 } from "./helpers/eip712.js";
-import {
-  acceptedButDroppedBroadcaster,
-  buildCustodyHarness,
-  reorgAwareQuorum,
-} from "./helpers/custody-harness.js";
-import { ViemQuorumReader, ViemTreasuryBroadcaster } from "../../../custody/src/core/viem-ports.js";
+import { acceptedButDroppedBroadcaster, buildCustodyHarness } from "./helpers/custody-harness.js";
+import { ViemTreasuryBroadcaster } from "../../../custody/src/core/viem-ports.js";
+import { CustodyWorker } from "../../../custody/src/workers/custody-worker.js";
 import {
   attachTwoChainAnvil,
   CHAIN_A_ID,
@@ -188,7 +185,7 @@ describe("withdrawal custody acceptance (real API + Prisma stores + real Anvil)"
       treasuryPrivateKey: TREASURY_KEY,
       confirmations: 1,
       deepFinality: 3,
-      quorumThreshold: 1,
+      quorumThreshold: 2,
     } as const;
   }
 
@@ -224,7 +221,6 @@ describe("withdrawal custody acceptance (real API + Prisma stores + real Anvil)"
     });
     expect(reserveAccount?.balanceAtomic).toBe(amount.toString());
 
-    const base = buildCustodyHarness(baseOptions());
     const realBroadcaster = new ViemTreasuryBroadcaster();
     const spy = { broadcasts: 0, persistedBeforeBroadcast: false };
     const harness = buildCustodyHarness({
@@ -241,11 +237,20 @@ describe("withdrawal custody acceptance (real API + Prisma stores + real Anvil)"
         },
       },
     });
-    void base;
-
-    const broadcast = await harness.workflow.processIntent(intent.intentId);
-    expect(broadcast.action).toBe("signed_broadcast");
-    expect(broadcast.state).toBe("BROADCAST");
+    const worker = new CustodyWorker(
+      harness.workflow,
+      harness.assets,
+      {
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+        debug: () => undefined,
+      },
+      { intervalMs: 1000, reconcileIntervalMs: 60_000 }
+    );
+    const pickup = await worker.tick();
+    expect(pickup.signed).toBe(1);
+    expect(pickup.broadcast).toBe(1);
     expect(spy.persistedBeforeBroadcast).toBe(true);
     expect(spy.broadcasts).toBe(1);
 
@@ -272,11 +277,7 @@ describe("withdrawal custody acceptance (real API + Prisma stores + real Anvil)"
     await mine(chain, 1);
     await settle();
     const confirmed = await harness.workflow.processIntent(intent.intentId);
-    expect(["pending_confirmation", "confirmed"]).toContain(confirmed.action);
-
-    await settle();
-    const afterConfirm = await harness.workflow.processIntent(intent.intentId);
-    expect(["confirmed", "finalized"]).toContain(afterConfirm.action);
+    expect(confirmed.action).toBe("confirmed");
 
     const completed = await harness.store.get(intent.intentId);
     expect(completed?.confirmedJournalId).toBeTruthy();
@@ -312,37 +313,61 @@ describe("withdrawal custody acceptance (real API + Prisma stores + real Anvil)"
       ...baseOptions(),
       broadcaster: acceptedButDroppedBroadcaster(),
     });
-    const ambiguous = await flaky.workflow.processIntent(intent.intentId);
-    expect(ambiguous.action).toBe("ambiguous");
-    expect(ambiguous.state).toBe("AMBIGUOUS");
+    await chain.testClient.setAutomine(false);
+    try {
+      const ambiguous = await flaky.workflow.processIntent(intent.intentId);
+      expect(ambiguous.action).toBe("ambiguous");
+      expect(ambiguous.state).toBe("AMBIGUOUS");
 
-    const persisted = await flaky.store.get(intent.intentId);
-    const exactBytes = persisted!.signedRawTx!;
-    const expectedHash = keccak256(exactBytes);
-    expect(persisted!.txHash).toBe(expectedHash);
+      const persisted = await flaky.store.get(intent.intentId);
+      const exactBytes = persisted!.signedRawTx!;
+      const expectedHash = keccak256(exactBytes);
+      expect(persisted!.txHash).toBe(expectedHash);
 
-    const onChain = await chain.publicClient.waitForTransactionReceipt({ hash: expectedHash });
-    expect(
-      findTransferLogs(onChain, token.address, { to: intent.destination, value: amount })
-    ).toHaveLength(1);
+      const accepted = await chain.publicClient.getTransaction({ hash: expectedHash });
+      expect(accepted.nonce).toBe(persisted!.treasuryNonce);
+      expect(accepted.blockHash).toBeNull();
+      const pendingNonce = await chain.publicClient.getTransactionCount({
+        address: TREASURY,
+        blockTag: "pending",
+      });
 
-    // Restart over the SAME PostgreSQL with a healthy RPC/broadcaster.
-    const restarted = buildCustodyHarness({
-      ...baseOptions(),
-      quorum: reorgAwareQuorum(new ViemQuorumReader({ threshold: 1, retryCount: 0 })),
-    });
-    await mine(chain, 1);
-    await settle();
-    const recovered = await restarted.workflow.processIntent(intent.intentId);
-    expect(["pending_confirmation", "confirmed", "finalized"]).toContain(recovered.action);
+      // Restart over the SAME PostgreSQL with a healthy RPC/broadcaster.
+      const retries: string[] = [];
+      const real = new ViemTreasuryBroadcaster();
+      const restarted = buildCustodyHarness({
+        ...baseOptions(),
+        broadcaster: {
+          async broadcast(asset, raw) {
+            retries.push(raw);
+            return real.broadcast(asset, raw);
+          },
+        },
+      });
+      const recovered = await restarted.workflow.processIntent(intent.intentId);
+      // Anvil rejects a second submission of an already-known pending tx. That
+      // remains ambiguous until inclusion; the retry must still use exact bytes.
+      expect(recovered.action).toBe("ambiguous");
+      expect(recovered.state).toBe("AMBIGUOUS");
+      expect(retries).toEqual([exactBytes]);
+      expect(
+        await chain.publicClient.getTransactionCount({ address: TREASURY, blockTag: "pending" })
+      ).toBe(pendingNonce);
 
-    const after = await restarted.store.get(intent.intentId);
-    expect(after?.signedRawTx).toBe(exactBytes);
-    expect(after?.txHash).toBe(expectedHash);
-    const receipt = await chain.publicClient.waitForTransactionReceipt({ hash: expectedHash });
-    expect(
-      findTransferLogs(receipt, token.address, { to: intent.destination, value: amount })
-    ).toHaveLength(1);
+      const after = await restarted.store.get(intent.intentId);
+      expect(after?.signedRawTx).toBe(exactBytes);
+      expect(after?.txHash).toBe(expectedHash);
+      expect(after?.treasuryNonce).toBe(persisted?.treasuryNonce);
+      await chain.testClient.setAutomine(true);
+      await mine(chain, 1);
+      const receipt = await chain.publicClient.waitForTransactionReceipt({ hash: expectedHash });
+      expect(
+        findTransferLogs(receipt, token.address, { to: intent.destination, value: amount })
+      ).toHaveLength(1);
+      expect(await readTokenBalance(chain, token.address, intent.destination)).toBe(amount);
+    } finally {
+      await chain.testClient.setAutomine(true);
+    }
   });
 
   it("blocks signing on native-gas starvation, preserves the obligation, then signs after replenish", async () => {
@@ -398,15 +423,55 @@ describe("withdrawal custody acceptance (real API + Prisma stores + real Anvil)"
     }
   });
 
+  it("allocates distinct treasury nonces concurrently through independent PostgreSQL stores", async () => {
+    const intents = [makeIntent(1_000_000n), makeIntent(1_000_000n)];
+    for (const intent of intents) await reserveViaApi(intent);
+    const workers = intents.map(() => buildCustodyHarness(baseOptions()));
+    const outcomes = await Promise.all(
+      workers.map((worker, index) => worker.workflow.processIntent(intents[index].intentId))
+    );
+    expect(outcomes.map((outcome) => outcome.action)).toEqual([
+      "signed_broadcast",
+      "signed_broadcast",
+    ]);
+    const records = await Promise.all(
+      intents.map((intent) =>
+        prisma.withdrawalIntentRecord.findUniqueOrThrow({ where: { id: intent.intentId } })
+      )
+    );
+    const nonces = records
+      .map((record) => Number(record.broadcastNonce))
+      .sort((left, right) => left - right);
+    expect(nonces[1]).toBe(nonces[0] + 1);
+    expect(new Set(records.map((record) => record.txHash)).size).toBe(2);
+    for (let index = 0; index < records.length; index++) {
+      const record = records[index];
+      expect(keccak256(record.signedRawTx as `0x${string}`)).toBe(record.txHash);
+      const transaction = await chain.publicClient.getTransaction({
+        hash: record.txHash as `0x${string}`,
+      });
+      expect(transaction.nonce).toBe(Number(record.broadcastNonce));
+      const receipt = await chain.publicClient.waitForTransactionReceipt({
+        hash: record.txHash as `0x${string}`,
+      });
+      expect(
+        findTransferLogs(receipt, token.address, {
+          to: intents[index].destination,
+          value: 1_000_000n,
+        })
+      ).toHaveLength(1);
+      expect(await readTokenBalance(chain, token.address, intents[index].destination)).toBe(
+        1_000_000n
+      );
+    }
+  });
+
   it("records a WITHDRAWAL_REORG obligation when a confirmed withdrawal receipt genuinely disappears", async () => {
     const amount = parseUnits("2", 6);
     const intent = makeIntent(amount);
     await reserveViaApi(intent);
 
-    const harness = buildCustodyHarness({
-      ...baseOptions(),
-      quorum: reorgAwareQuorum(new ViemQuorumReader({ threshold: 1, retryCount: 0 })),
-    });
+    const harness = buildCustodyHarness(baseOptions());
 
     const snap = await snapshot(chain);
     const broadcast = await harness.workflow.processIntent(intent.intentId);
@@ -425,15 +490,21 @@ describe("withdrawal custody acceptance (real API + Prisma stores + real Anvil)"
     expect(persisted?.confirmedJournalId).toBeTruthy();
     const priorBlockHash = persisted!.receiptBlockHash;
     expect(priorBlockHash).not.toBeNull();
+    await mine(chain, 3);
+    await settle();
+    expect((await harness.workflow.processIntent(intent.intentId)).action).toBe("finalized");
+    expect((await harness.store.get(intent.intentId))?.state).toBe("FINALIZED");
 
     // Genuine missing receipt: revert the inclusion block and do NOT rebroadcast.
     await revertSnapshot(chain, snap);
     await mine(chain, 1);
     await settle();
 
-    const reorged = await harness.workflow.processIntent(intent.intentId);
-    expect(reorged.action).toBe("reorged");
-    expect(reorged.state).toBe("REORGED");
+    // The production scanning pass monitors finalized withdrawals too; direct
+    // processIntent is intentionally a no-op for a terminal finalized record.
+    const reorged = await harness.workflow.runOnce();
+    expect(reorged.reorged).toBe(1);
+    expect((await harness.store.get(intent.intentId))?.state).toBe("REORGED");
 
     const incident = await harness.incidents.listOpen({ kind: "WITHDRAWAL_REORG" });
     expect(incident.length).toBe(1);
@@ -447,6 +518,15 @@ describe("withdrawal custody acceptance (real API + Prisma stores + real Anvil)"
     const byClass = new Map(postings.map((p) => [p.account.class, p.amountAtomic]));
     expect(byClass.get("INCIDENT_OBLIGATION")).toBe(amount.toString());
     expect(byClass.get("TREASURY_RESERVE")).toBe(`-${amount.toString()}`);
+    const journalCount = await prisma.journalTransaction.count({ where: { assetId } });
+    const restarted = buildCustodyHarness(baseOptions());
+    const retried = await restarted.workflow.processIntent(intent.intentId);
+    expect(retried.action).toBe("rebroadcast");
+    expect((await harness.store.get(intent.intentId))?.state).toBe("REORGED");
+    expect(await prisma.journalTransaction.count({ where: { assetId } })).toBe(journalCount);
+    expect((await harness.store.get(intent.intentId))?.reorgJournalId).toBe(
+      reorgRecord?.reorgJournalId
+    );
 
     const assetState = await harness.assets.get(assetId);
     expect(assetState?.status).toBe("FROZEN");

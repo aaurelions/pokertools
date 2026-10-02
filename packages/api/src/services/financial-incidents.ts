@@ -259,6 +259,13 @@ export class FinancialIncidentService {
 
           if (incident.assetId) {
             await this.ledger.assertAssetBalanced(tx, incident.assetId);
+          } else if (incident.chainId !== null) {
+            const assets = await tx.asset.findMany({
+              where: { chainId: incident.chainId },
+              select: { id: true },
+              orderBy: { id: "asc" },
+            });
+            for (const asset of assets) await this.ledger.assertAssetBalanced(tx, asset.id);
           }
 
           // Route ACTIVE commit: only reachable after every health recheck above

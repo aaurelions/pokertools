@@ -279,19 +279,40 @@ export interface AssetBackedCustodyQuorumReaderOptions {
 }
 
 /**
- * Lazily build (once) a `ChainRegistry` from the enabled assets' RPC endpoints
+ * Lazily build a `ChainRegistry` per persisted asset route, including frozen
+ * routes so restarts can still monitor signed obligations and reconciliation.
  * and expose it through the custody quorum port. Registry construction
  * failures fail closed per read (`agreed: false`) rather than throwing into a
- * signing path.
+ * signing path. The workflow separately rejects new signing on frozen routes.
  */
 export function createAssetBackedCustodyQuorumReader(
   prisma: Pick<PrismaClient, "asset" | "financialIncident">,
   options: AssetBackedCustodyQuorumReaderOptions = {}
 ): CustodyQuorumReader {
-  let registryPromise: Promise<ChainRegistryLike> | null = null;
+  // Synthetic redacted observation labels must never claim a stronger vote
+  // floor than the registry actually enforces. Higher floors need an explicit
+  // matching threshold; the default majority over >=2 endpoints guarantees 2.
+  if ((options.minFanout ?? 2) > (options.quorum ?? 2)) {
+    throw new RangeError("Custody minimum observations exceed the configured RPC quorum");
+  }
+  const registries = new Map<string, ReturnType<typeof buildChainRegistryFromAssets>>();
 
-  const getRegistry = (): Promise<ChainRegistryLike> => {
-    registryPromise ??= buildChainRegistryFromAssets(prisma, {
+  const getRegistry = async (asset: CustodyAssetLike): Promise<ChainRegistryLike> => {
+    let registry = registries.get(asset.assetId);
+    if (registry && (await registry).isFrozen(asset.chainId)) {
+      // This port only observes. Durable Asset.status still blocks new signing;
+      // fresh validated reads must remain possible for existing obligations and
+      // the reconciliation needed for operator resolution.
+      if (registries.get(asset.assetId) === registry) {
+        registries.delete(asset.assetId);
+        registry = undefined;
+      } else {
+        registry = registries.get(asset.assetId);
+      }
+    }
+    registry ??= buildChainRegistryFromAssets(prisma, {
+      assetId: asset.assetId,
+      observeFrozen: true,
       logger: options.logger,
       ...(options.quorum !== undefined ? { quorum: options.quorum } : {}),
       ...(options.resolveHost ? { resolveHost: options.resolveHost } : {}),
@@ -299,7 +320,13 @@ export function createAssetBackedCustodyQuorumReader(
       incidentSink: createPrismaIncidentSink(prisma),
       onFreeze: createPrismaChainFreezeHandler(prisma),
     });
-    return registryPromise;
+    registries.set(asset.assetId, registry);
+    try {
+      return await registry;
+    } catch (error) {
+      if (registries.get(asset.assetId) === registry) registries.delete(asset.assetId);
+      throw error;
+    }
   };
 
   // A read fails closed when the registry could not be constructed. The
@@ -322,10 +349,13 @@ export function createAssetBackedCustodyQuorumReader(
       { minFanout: options.minFanout ?? 2 }
     );
 
-  const withRegistry = async <T>(read: (reader: CustodyQuorumReader) => Promise<T>): Promise<T> => {
+  const withRegistry = async <T>(
+    asset: CustodyAssetLike,
+    read: (reader: CustodyQuorumReader) => Promise<T>
+  ): Promise<T> => {
     let reader: CustodyQuorumReader;
     try {
-      reader = createCustodyQuorumReader(await getRegistry(), {
+      reader = createCustodyQuorumReader(await getRegistry(asset), {
         minFanout: options.minFanout,
       });
     } catch (error) {
@@ -336,14 +366,16 @@ export function createAssetBackedCustodyQuorumReader(
 
   return {
     nativeBalance: (asset, address) =>
-      withRegistry((reader) => reader.nativeBalance(asset, address)),
-    erc20BalanceOf: (asset, owner) => withRegistry((reader) => reader.erc20BalanceOf(asset, owner)),
+      withRegistry(asset, (reader) => reader.nativeBalance(asset, address)),
+    erc20BalanceOf: (asset, owner) =>
+      withRegistry(asset, (reader) => reader.erc20BalanceOf(asset, owner)),
     transactionCount: (asset, address, blockTag) =>
-      withRegistry((reader) => reader.transactionCount(asset, address, blockTag)),
+      withRegistry(asset, (reader) => reader.transactionCount(asset, address, blockTag)),
     transactionReceipt: (asset, hash) =>
-      withRegistry((reader) => reader.transactionReceipt(asset, hash)),
-    block: (asset, blockNumber) => withRegistry((reader) => reader.block(asset, blockNumber)),
-    blockNumber: (asset) => withRegistry((reader) => reader.blockNumber(asset)),
+      withRegistry(asset, (reader) => reader.transactionReceipt(asset, hash)),
+    block: (asset, blockNumber) =>
+      withRegistry(asset, (reader) => reader.block(asset, blockNumber)),
+    blockNumber: (asset) => withRegistry(asset, (reader) => reader.blockNumber(asset)),
   };
 }
 

@@ -133,13 +133,13 @@ export class InMemoryWithdrawalStore implements WithdrawalStore {
     for (const record of this.records.values()) {
       if (
         record.chainId === chainId &&
+        record.treasuryAddress?.toLowerCase() === treasuryAddress.toLowerCase() &&
         record.treasuryNonce !== null &&
         record.treasuryNonce > max
       ) {
         max = record.treasuryNonce;
       }
     }
-    void treasuryAddress;
     return max;
   }
 

@@ -46,6 +46,8 @@ describe("Timeout Worker - Redlock & Version Guard Integration Test", () => {
     });
 
     try {
+      await buyIn(ctx.app, player1.token, tableId, 500, 0);
+      await buyIn(ctx.app, player2.token, tableId, 500, 1);
       const ws = new WebSocket(wsUrl, ["pokertools", `jwt.${player1.token}`]);
       await new Promise((resolve) => ws.once("open", resolve));
 
@@ -54,9 +56,6 @@ describe("Timeout Worker - Redlock & Version Guard Integration Test", () => {
 
       ws.send(JSON.stringify({ type: "JOIN", tableId }));
       await waitFor(() => messages.some((m) => m.type === "OBSERVATION"), 7000);
-
-      await buyIn(ctx.app, player1.token, tableId, 500, 0);
-      await buyIn(ctx.app, player2.token, tableId, 500, 1);
 
       messages.length = 0;
       await executeAction(ctx.app, player1.token, tableId, { type: "DEAL" });

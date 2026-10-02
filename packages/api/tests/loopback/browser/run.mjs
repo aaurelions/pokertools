@@ -29,7 +29,7 @@ const env = {
   ...process.env,
   NODE_ENV: "test",
   POKERTOOLS_LOOPBACK_TEST: "true",
-  ENABLE_TEST_ROUTES: "true",
+  ENABLE_TEST_ROUTES: "false",
 };
 
 if (!process.argv.includes("--no-ensure-db")) {

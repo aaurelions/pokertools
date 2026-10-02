@@ -134,8 +134,20 @@ it("preserves all-in contenders, merges 4 -> 2 -> 1 and settles through the API"
     );
     const settled = await request("POST", `/tournaments/${tournamentId}/settle`);
     expect(settled.prize).toBe(800);
+    const accountsAfterSettlement = await ctx.app.prisma.chipAccount.findMany({
+      orderBy: { id: "asc" },
+    });
+    const postingsAfterSettlement = await ctx.app.prisma.chipLedgerEntry.findMany({
+      orderBy: { id: "asc" },
+    });
     const repeated = await request("POST", `/tournaments/${tournamentId}/settle`);
     expect(repeated.winnerUserId).toBe(settled.winnerUserId);
+    expect(await ctx.app.prisma.chipAccount.findMany({ orderBy: { id: "asc" } })).toEqual(
+      accountsAfterSettlement
+    );
+    expect(await ctx.app.prisma.chipLedgerEntry.findMany({ orderBy: { id: "asc" } })).toEqual(
+      postingsAfterSettlement
+    );
     for (const id of tableIds) {
       const before = await ctx.app.prisma.table.findUniqueOrThrow({ where: { id } });
       expect(before.status).toBe("CLOSED");

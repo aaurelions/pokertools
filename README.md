@@ -49,8 +49,9 @@ npm run test:loopback -w @pokertools/api
 npm run test:browser -w @pokertools/api
 npm run e2e:finance
 npm run e2e:docker
-npm run test:production -w @pokertools/api # uses the image built by Docker E2E
-node scripts/test-runtime-dependencies.mjs ghcr.io/aaurelions/pokertools:e2e
+npm run build:production:acceptance # PostgreSQL image, separate from SQLite Docker E2E
+npm run test:production -w @pokertools/api
+node scripts/test-runtime-dependencies.mjs ghcr.io/aaurelions/pokertools:production-acceptance
 ```
 
 See [testing](docs/guide/testing.md) for prerequisites and coverage gates.

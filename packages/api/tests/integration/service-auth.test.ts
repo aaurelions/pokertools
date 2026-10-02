@@ -117,6 +117,7 @@ describe("Service principal auth + scoped authorization", () => {
 
     tableA = await createTable(app, admin.token, {
       name: "svc-table-a",
+      allowSpectators: true,
       mode: "CASH",
       smallBlind: 1,
       bigBlind: 2,

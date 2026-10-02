@@ -300,7 +300,7 @@ describe("Worker Jobs - Async Processing Integration Test", () => {
     await cleanupTestTable(ctx.app, tableId);
   }, 15000);
 
-  it("should handle timeout worker for inactive players", async () => {
+  it("does not offer internal TIMEOUT as a client legal action", async () => {
     const [player1, player2] = ctx.users;
 
     const tableId = await createTable(ctx.app, player1.token, {
@@ -322,26 +322,17 @@ describe("Worker Jobs - Async Processing Integration Test", () => {
 
     expect(actionToSeat).toBeDefined();
 
-    // Instead of waiting for timeout (which could be long),
-    // manually trigger timeout action
-    try {
-      await executeAction(ctx.app, player1.token, tableId, {
+    // The real worker race is exercised by canonical acceptance. This helper
+    // must refuse to manufacture an internal action from a public observation.
+    await expect(
+      executeAction(ctx.app, player1.token, tableId, {
         type: "TIMEOUT",
         seat: actionToSeat,
-      });
-
-      state = await getTableState(ctx.app, player1.token, tableId);
-
-      // Action should have moved to next player
-      expect(state.actionTo).not.toBe(actionToSeat);
-
-      console.log(
-        `✅ Timeout processed - action moved from seat ${actionToSeat} to ${state.actionTo}`
-      );
-    } catch (error: any) {
-      // Timeout action might not be implemented or require special permissions
-      console.log(`ℹ️  Timeout action not available or requires configuration: ${error.message}`);
-    }
+      })
+    ).rejects.toThrow(/TIMEOUT/);
+    const after = await getTableState(ctx.app, player1.token, tableId);
+    expect(after.version).toBe(state.version);
+    expect(after.actionTo).toBe(actionToSeat);
 
     await cleanupTestTable(ctx.app, tableId);
   }, 10000);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createCustodyQuorumReader,
+  createAssetBackedCustodyQuorumReader,
   type CustodyChainRegistryLike,
 } from "../../src/services/custody-chain-reader.js";
 import {
@@ -67,6 +68,14 @@ function makeReader(overrides: Partial<CustodyChainRegistryLike> = {}) {
 }
 
 describe("createCustodyQuorumReader", () => {
+  it("cannot manufacture a custody observation floor stronger than the actual RPC threshold", () => {
+    expect(() =>
+      createAssetBackedCustodyQuorumReader({} as never, { quorum: 2, minFanout: 3 })
+    ).toThrow("minimum observations exceed");
+    expect(() =>
+      createAssetBackedCustodyQuorumReader({} as never, { quorum: 1, minFanout: 2 })
+    ).toThrow("minimum observations exceed");
+  });
   it("maps a receipt with decoded ERC-20 transfers and independent observations", async () => {
     const reader = makeReader();
     const result = await reader.transactionReceipt(ASSET, TX);

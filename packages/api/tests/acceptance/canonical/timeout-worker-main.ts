@@ -8,15 +8,17 @@
  * types, so this process never touches the shared SQLite client.
  */
 
-import { Worker, type ConnectionOptions } from "bullmq";
+import type { ConnectionOptions } from "bullmq";
 import { Redis } from "ioredis";
 import Redlock from "redlock";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { ActionType } from "@pokertools/types";
 import { config } from "../../../src/config.js";
 import { createJobQueues } from "../../../src/plugins/queue.js";
 import { GameManager } from "../../../src/services/game-manager.js";
 import { PrismaClient } from "../../../.runtime/generated/prisma/index.js";
+import { createPlayerTimeoutWorker } from "../../../src/workers/timeout-handler.js";
+import { recoverGameOutbox } from "../../../src/services/game-outbox.js";
+import { registerHooks } from "node:module";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required for the timeout worker");
@@ -32,28 +34,45 @@ const redlock = new Redlock([redis as unknown as Redlock.CompatibleRedisClient],
 const queues = createJobQueues(redis as unknown as ConnectionOptions);
 const manager = new GameManager(redis, redlock, queues, prisma);
 
-const worker = new Worker(
-  "player-timeout",
-  async (job) => {
-    const { tableId, playerId, expectedVersion } = job.data as {
-      tableId: string;
-      playerId: string;
-      expectedVersion: number;
-    };
-    if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
-      throw new Error("Timeout job requires a non-negative expectedVersion");
-    }
-    const table = await prisma.table.findUnique({
-      where: { id: tableId },
-      select: { status: true },
-    });
-    if (!table || table.status === "CLOSED") return;
-    await manager.processAction(tableId, { type: ActionType.TIMEOUT, playerId }, playerId, {
-      expectedVersion,
-    });
-  },
-  { connection: redis as never }
+const worker = createPlayerTimeoutWorker(prisma, manager, redis);
+await worker.waitUntilReady();
+if (process.env.POKERTOOLS_ACCEPTANCE_HAND_WORKERS === "true") {
+  // Production worker modules use the same schema with this suite's private PG
+  // generated client. No handler, ledger, queue or infrastructure is replaced.
+  const sharedClient = new URL("../../../generated/prisma/index.js", import.meta.url).href;
+  const privateClient = new URL("../../../.runtime/generated/prisma/index.js", import.meta.url)
+    .href;
+  registerHooks({
+    resolve(specifier, context, nextResolve) {
+      const resolved = nextResolve(specifier, context);
+      return resolved.url.split("?")[0] === sharedClient
+        ? { url: privateClient, shortCircuit: true }
+        : resolved;
+    },
+  });
+  for (const path of [
+    "../../../src/workers/settle-hand.js",
+    "../../../src/workers/archive-hand.js",
+  ]) {
+    const { default: handWorker } = await import(path);
+    handWorker.on("completed", (job: { id: string }) =>
+      console.log(`canonical-hand-worker:completed:${job.id}`)
+    );
+    handWorker.on("failed", (job: { id: string }, error: Error) =>
+      console.log(`canonical-hand-worker:failed:${job.id}:${error.message}`)
+    );
+    await handWorker.waitUntilReady();
+  }
+}
+await recoverGameOutbox(prisma, queues, redis);
+setInterval(
+  () =>
+    void recoverGameOutbox(prisma, queues, redis).catch((error: Error) => {
+      console.error("outbox recovery failed:", error.message);
+    }),
+  100
 );
+worker.on("completed", (job) => console.log(`canonical-timeout-worker:completed:${job.id}`));
 
 worker.on("failed", (job, error) => {
   console.error(`timeout job ${job?.id} failed:`, error.message);

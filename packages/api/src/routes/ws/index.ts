@@ -28,8 +28,6 @@ const MAX_BUFFERED_BYTES = 1_000_000;
 const SERVICE_REVALIDATE_INTERVAL_MS = 5_000;
 
 async function canJoinTable(fastify: FastifyInstance, tableId: string, userId: string) {
-  if (config.NODE_ENV === "test") return { allowed: true } as const;
-
   const table = await fastify.prisma.table.findUnique({
     where: { id: tableId },
     select: {

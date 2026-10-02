@@ -272,6 +272,9 @@ export interface ReconciliationEvidence {
   /** Accounting-expected atomic balance across account classes (signed net,
    * excluding the TREASURY_RESERVE external counterparty). */
   expectedAtomic: string;
+  /** Quorum-observed canonical block backing the reconciliation pass. */
+  blockNumber: string;
+  blockHash: string;
   /** Per-RPC observations backing the custody balance. */
   observations: Array<{ rpcUrl: string; valueAtomic: string }>;
   observedAt: number;

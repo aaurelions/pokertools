@@ -1081,7 +1081,7 @@ export class GameManager {
         intents.push({
           kind: "next-hand",
           dedupeKey: `next-hand:${handId}`,
-          payload: { tableId },
+          payload: { tableId, expectedVersion: newVersion },
           availableAt: new Date(Date.now() + appConfig.AUTO_DEAL_DELAY_MS),
         });
       }

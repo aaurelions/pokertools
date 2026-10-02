@@ -8,6 +8,7 @@ import { createJobQueues } from "../plugins/queue.js";
 import { GameManager } from "../services/game-manager.js";
 import { loadAuthoritativeTable } from "../services/game-repository.js";
 import { ActionType } from "@pokertools/types";
+import { durableOutboxProcessor } from "../services/game-outbox.js";
 
 const prisma = createPrismaClient();
 const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
@@ -32,45 +33,48 @@ const manager = new GameManager(redis, redlock, queues, prisma);
  */
 const worker = new Worker(
   "next-hand",
-  async (job) => {
-    const { tableId } = job.data as { tableId: string };
-
-    let lock;
-    try {
-      lock = await redlock.lock([`lock:table:${tableId}`], config.NEXT_HAND_LOCK_TTL_MS);
-    } catch (err) {
-      throw new Error(`Unable to acquire auto-deal lock for table ${tableId}`, { cause: err });
-    }
-
-    try {
-      const record = await loadAuthoritativeTable(prisma, tableId);
-      if (!record || !record.snapshot || record.status === "CLOSED") return;
-
-      const snapshot = record.snapshot;
-      // Already started next hand (manual DEAL happened) or hand not settled.
-      if (snapshot.street !== "SHOWDOWN" || !snapshot.winners) {
-        return;
+  durableOutboxProcessor(
+    prisma,
+    "next-hand",
+    async ({ tableId, expectedVersion }: { tableId: string; expectedVersion: number }) => {
+      let lock;
+      try {
+        lock = await redlock.lock([`lock:table:${tableId}`], config.NEXT_HAND_LOCK_TTL_MS);
+      } catch (err) {
+        throw new Error(`Unable to acquire auto-deal lock for table ${tableId}`, { cause: err });
       }
 
-      const activePlayers = snapshot.players.filter((p) => p !== null && p.stack > 0);
-      if (activePlayers.length < 2) {
-        await prisma.table.updateMany({
-          where: { id: tableId, status: { not: "CLOSED" } },
-          data: { status: "WAITING" },
+      try {
+        const record = await loadAuthoritativeTable(prisma, tableId);
+        if (!record || !record.snapshot || record.status === "CLOSED") return;
+        if (expectedVersion !== record.stateVersion) return;
+
+        const snapshot = record.snapshot;
+        // Already started next hand (manual DEAL happened) or hand not settled.
+        if (snapshot.street !== "SHOWDOWN" || !snapshot.winners) {
+          return;
+        }
+
+        const activePlayers = snapshot.players.filter((p) => p !== null && p.stack > 0);
+        if (activePlayers.length < 2) {
+          await prisma.table.updateMany({
+            where: { id: tableId, status: { not: "CLOSED" } },
+            data: { status: "WAITING" },
+          });
+          return;
+        }
+
+        await manager.processAction(tableId, { type: ActionType.DEAL }, "", {
+          skipLock: true,
+          expectedVersion: record.stateVersion,
         });
-        return;
+
+        console.log(`✅ Auto-dealt next hand for table ${tableId}`);
+      } finally {
+        await lock.unlock();
       }
-
-      await manager.processAction(tableId, { type: ActionType.DEAL }, "", {
-        skipLock: true,
-        expectedVersion: record.stateVersion,
-      });
-
-      console.log(`✅ Auto-dealt next hand for table ${tableId}`);
-    } finally {
-      await lock.unlock();
     }
-  },
+  ),
   { connection: redis }
 );
 

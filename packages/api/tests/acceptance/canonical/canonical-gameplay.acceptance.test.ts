@@ -1,6 +1,7 @@
 /// <reference types="vitest/globals" />
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
+import { PokerClient } from "@pokertools/sdk";
 import {
   CanonicalClient,
   apiRequest,
@@ -103,8 +104,21 @@ describe("canonical gameplay acceptance", () => {
     const [a, b] = [await newService(), await newService()];
     await seatAll(tableId, [a, b]);
 
-    const started = await startHand(ctx.baseUrl, tableId, [a, b]);
-    expect(started.observation.turnId).not.toBeNull();
+    // The same published SDK contract used by browser wallets also accepts
+    // real operator-issued opaque SERVICE credentials, over the live API.
+    const sdk = new PokerClient({ baseUrl: ctx.baseUrl, token: a.token, retry: { count: 0 } });
+    const observed = await sdk.getObservation(tableId);
+    expect(observed.state.viewingPlayerId).toBe(a.id);
+    const deal = observed.legalActions.find((action) => action.family === "DEAL")!;
+    expect(deal).toBeDefined();
+    const started = await sdk.action(tableId, {
+      requestId: crypto.randomUUID(),
+      turnId: observed.turnId,
+      expectedVersion: observed.version,
+      actionId: deal.actionId,
+    });
+    expect(started.receipt.version).toBe(observed.version + 1);
+    expect(started.observation.state.viewingPlayerId).toBe(a.id);
 
     const settled = await playHand(ctx.baseUrl, tableId, [a, b]);
     expect(settled.state.winners && settled.state.winners.length).toBeGreaterThan(0);
@@ -144,9 +158,25 @@ describe("canonical gameplay acceptance", () => {
     }
     await seatAll(tableId, principals);
 
+    await startHand(ctx.baseUrl, tableId, principals);
+    const row = await app.prisma.table.findUniqueOrThrow({ where: { id: tableId } });
+    const privateSnapshot = (typeof row.state === "string" ? JSON.parse(row.state) : row.state) as {
+      players: Array<{ hand: unknown[]; stack: number; totalInvestedThisHand: number }>;
+    };
+    expect(privateSnapshot.players).toHaveLength(10);
+    for (const player of privateSnapshot.players) expect(player.hand).toHaveLength(2);
+    expect(
+      privateSnapshot.players.reduce(
+        (sum, player) => sum + player.stack + player.totalInvestedThisHand,
+        0
+      )
+    ).toBe(10_000);
     const viewer = principals[3]!;
     const observation = await new CanonicalClient(ctx.baseUrl, viewer).observation(tableId);
     expect(observation.state.players.filter(Boolean)).toHaveLength(10);
+    expect(observation.state.players.find((player) => player?.id === viewer.id)?.hand).toHaveLength(
+      2
+    );
     for (const player of observation.state.players) {
       if (!player) continue;
       const visible = Array.isArray(player.hand)

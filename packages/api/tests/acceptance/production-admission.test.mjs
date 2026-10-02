@@ -6,7 +6,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
 
 const exec = promisify(execFile);
-const image = process.env.POKERTOOLS_PRODUCTION_IMAGE ?? "ghcr.io/aaurelions/pokertools:e2e";
+const image =
+  process.env.POKERTOOLS_PRODUCTION_IMAGE ?? "ghcr.io/aaurelions/pokertools:production-acceptance";
 
 async function docker(args) {
   try {
@@ -93,6 +94,57 @@ test(
         "-e",
         checks,
       ]);
+
+      // Also exercise the actual entrypoint, not only an imported gate. These
+      // cases must exit before migration/network access, even with no network.
+      for (const [name, value, code] of [
+        ["ENABLE_TEST_ROUTES", "true", "TEST_ROUTES_NOT_ALLOWED_IN_PRODUCTION"],
+        ["DATABASE_URL", "file:test.db", "PRODUCTION_REQUIRES_POSTGRESQL"],
+        ...[
+          "WALLET_XPRIV_ENCRYPTION_SECRET",
+          "WALLET_XPRIV_ENCRYPTION_SECRET_FILE",
+          "MASTER_MNEMONIC",
+          "MASTER_MNEMONIC_FILE",
+          "TREASURY_PRIVATE_KEY",
+          "TREASURY_PRIVATE_KEY_FILE",
+          "TREASURY_MNEMONIC",
+          "TREASURY_XPRIV",
+          "TREASURY_SIGNING_KEYS_JSON",
+          "TREASURY_SIGNING_KEYS_JSON_FILE",
+        ].map((name) => [name, "unsafe-test-material", "CUSTODY_SECRET_IN_PUBLIC_PROCESS"]),
+      ]) {
+        let rejected = false;
+        try {
+          await exec(
+            "docker",
+            [
+              "run",
+              "--rm",
+              "--network",
+              "none",
+              "-e",
+              "NODE_ENV=production",
+              "-e",
+              "DATABASE_URL=postgresql://unused",
+              "-e",
+              "REDIS_URL=redis://unused",
+              "-e",
+              `JWT_SECRET=${secret}`,
+              "-e",
+              `COOKIE_SECRET=${secret}`,
+              "-e",
+              "CORS_ORIGIN=https://example.com",
+              "-e",
+              `${name}=${value}`,
+              image,
+            ],
+            { timeout: 15_000 }
+          );
+        } catch (error) {
+          rejected = typeof error.stderr === "string" && error.stderr.includes(code);
+        }
+        assert(rejected, `Image entrypoint did not reject ${name} with ${code}`);
+      }
 
       await docker([
         "run",

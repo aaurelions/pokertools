@@ -5,7 +5,10 @@ import { resolve } from "path";
 // Load test environment variables
 if (process.env.NODE_ENV === "test") {
   config({ path: resolve(import.meta.dirname, ".env.test"), quiet: true });
-  process.env.ENABLE_TEST_ROUTES = "true";
+  process.env.ENABLE_TEST_ROUTES =
+    process.env.POKERTOOLS_LOOPBACK_TEST === "true"
+      ? "false"
+      : (process.env.ENABLE_TEST_ROUTES ?? "true");
 }
 
 export default defineConfig({

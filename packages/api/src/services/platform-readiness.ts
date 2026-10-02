@@ -652,7 +652,10 @@ export class PlatformReadinessService {
 
     const [stalePending, failedOutbox, exhausted] = await Promise.all([
       this.prisma.gameOutbox.count({
-        where: { status: "PENDING", availableAt: { lt: staleCutoff } },
+        where: {
+          OR: [{ status: "PENDING" }, { status: "DISPATCHED", kind: { not: "pubsub" } }],
+          availableAt: { lt: staleCutoff },
+        },
       }),
       this.prisma.gameOutbox.count({ where: { status: "FAILED" } }),
       this.prisma.gameOutbox.count({

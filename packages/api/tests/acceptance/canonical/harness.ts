@@ -509,32 +509,24 @@ export async function playHand(
   );
 }
 
-/** Clean up all principals and tables created by a suite. */
+/** Retire owned tables/credentials; global teardown disposes the private DB. */
 export async function cleanupFixtures(
   app: FastifyInstance,
   fixtures: { userIds?: string[]; tableIds?: string[] }
 ): Promise<void> {
   for (const tableId of fixtures.tableIds ?? []) {
-    await app.prisma.gameEvent.deleteMany({ where: { tableId } }).catch(() => undefined);
-    await app.prisma.gameActionRequest.deleteMany({ where: { tableId } }).catch(() => undefined);
-    await app.prisma.gameOutbox.deleteMany({ where: { tableId } }).catch(() => undefined);
-    await app.prisma.handHistory.deleteMany({ where: { tableId } }).catch(() => undefined);
-    await app.prisma.table.deleteMany({ where: { id: tableId } }).catch(() => undefined);
+    // Production audit rows are immutable, including in this disposable PG.
+    // Retire the owned table; global teardown disposes the whole database.
+    await app.prisma.table.updateMany({ where: { id: tableId }, data: { status: "CLOSED" } });
     await app.redis.del(`table:${tableId}`).catch(() => undefined);
   }
   for (const userId of fixtures.userIds ?? []) {
-    await app.prisma.serviceCredential.deleteMany({ where: { userId } }).catch(() => undefined);
-    await app.prisma.session.deleteMany({ where: { userId } }).catch(() => undefined);
-    // Canonical chip journal/accounts are keyed by principal with no FK to User.
-    await app.prisma.chipLedgerEntry
-      .deleteMany({ where: { account: { principalId: userId } } })
-      .catch(() => undefined);
-    await app.prisma.chipGrant
-      .deleteMany({ where: { principalId: userId } })
-      .catch(() => undefined);
-    await app.prisma.chipAccount
-      .deleteMany({ where: { principalId: userId } })
-      .catch(() => undefined);
-    await app.prisma.user.deleteMany({ where: { id: userId } }).catch(() => undefined);
+    // Never erase balances/history underneath a dispatched financial obligation.
+    // Later real workers may still settle the retired table before DB disposal.
+    await app.prisma.serviceCredential.updateMany({
+      where: { userId },
+      data: { revoked: true, revokedAt: new Date() },
+    });
+    await app.prisma.session.updateMany({ where: { userId }, data: { revoked: true } });
   }
 }

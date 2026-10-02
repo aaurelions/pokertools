@@ -11,7 +11,7 @@ import pino from "pino";
 import { config } from "../config.js";
 import { createPrismaClient } from "../utils/prisma-client.js";
 import { createJobQueues } from "../plugins/queue.js";
-import { dispatchPendingOutbox, requeueFailedOutbox } from "../services/game-outbox.js";
+import { recoverGameOutbox as recoverDurableGameOutbox } from "../services/game-outbox.js";
 import { bootstrapCanonicalDepositMonitor } from "./canonical-deposit-monitor.js";
 import settleHandWorker from "./settle-hand.js";
 import archiveHandWorker from "./archive-hand.js";
@@ -58,7 +58,7 @@ const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
 // Durable game outbox recovery
 //
 // Side-effect intents were committed with their game mutation. Dispatch is
-// best-effort; a crash or Redis outage leaves PENDING/FAILED rows that this
+// best-effort; a crash or Redis outage leaves unacknowledged rows that this
 // sweep re-drives. Recovery reads PostgreSQL only and never requires Redis to
 // have been available at commit time.
 // ============================================================================
@@ -66,16 +66,20 @@ const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
 const outboxPrisma = createPrismaClient();
 const outboxQueues = createJobQueues(redis);
 const OUTBOX_SWEEP_INTERVAL_MS = config.GAME_OUTBOX_SWEEP_INTERVAL_MS;
+let outboxRecoveryRunning = false;
 
 async function recoverGameOutbox(): Promise<void> {
+  if (outboxRecoveryRunning) return;
+  outboxRecoveryRunning = true;
   try {
-    await requeueFailedOutbox(outboxPrisma);
-    const result = await dispatchPendingOutbox(outboxPrisma, outboxQueues, redis);
+    const result = await recoverDurableGameOutbox(outboxPrisma, outboxQueues, redis);
     if (result.dispatched > 0 || result.failed > 0) {
       logger.info(result, "Recovered game outbox intents");
     }
   } catch (error) {
     logger.error({ error }, "Game outbox recovery failed");
+  } finally {
+    outboxRecoveryRunning = false;
   }
 }
 

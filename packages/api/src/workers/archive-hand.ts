@@ -3,6 +3,7 @@ import { PokerEngine } from "@pokertools/engine";
 import { Redis } from "ioredis";
 import { config } from "../config.js";
 import { createPrismaClient } from "../utils/prisma-client.js";
+import { durableOutboxProcessor } from "../services/game-outbox.js";
 
 const prisma = createPrismaClient();
 const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
@@ -14,25 +15,35 @@ const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
  */
 const worker = new Worker(
   "archive-hand",
-  async (job) => {
-    const { tableId, handId, snapshot } = job.data;
+  durableOutboxProcessor(
+    prisma,
+    "archive-hand",
+    async ({
+      tableId,
+      handId,
+      snapshot,
+    }: {
+      tableId: string;
+      handId: string;
+      snapshot: Parameters<typeof PokerEngine.restore>[0];
+    }) => {
+      const engine = PokerEngine.restore(snapshot);
+      const historyData = engine.history({ format: "json" });
 
-    const engine = PokerEngine.restore(snapshot);
-    const historyData = engine.history({ format: "json" });
+      await prisma.handHistory.upsert({
+        where: { id: handId },
+        update: {},
+        create: {
+          id: handId,
+          tableId,
+          data: historyData,
+          timestamp: new Date(),
+        },
+      });
 
-    await prisma.handHistory.upsert({
-      where: { id: handId },
-      update: {},
-      create: {
-        id: handId,
-        tableId,
-        data: historyData,
-        timestamp: new Date(),
-      },
-    });
-
-    console.log(`✅ Archived hand ${handId} for table ${tableId}`);
-  },
+      console.log(`✅ Archived hand ${handId} for table ${tableId}`);
+    }
+  ),
   { connection: redis }
 );
 

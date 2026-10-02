@@ -7,6 +7,7 @@ import { getHouseUserId } from "../utils/house-user.js";
 import { asRedlockClient } from "../utils/redis-compatibility.js";
 import { createPrismaClient } from "../utils/prisma-client.js";
 import { FinancialManager } from "../services/financial-manager.js";
+import { durableOutboxProcessor } from "../services/game-outbox.js";
 
 const prisma = createPrismaClient();
 const financialManager = new FinancialManager(prisma);
@@ -28,36 +29,48 @@ const logger = pino({ name: "settle-hand" });
  */
 const worker = new Worker(
   "settle-hand",
-  async (job) => {
-    const { tableId, handId, playerNetChanges, rakeTotal } = job.data;
-
-    const lockKey = `lock:table:${tableId}`;
-    let lock;
-    try {
-      lock = await redlock.lock([lockKey], config.SETTLE_HAND_LOCK_TTL_MS);
-    } catch {
-      throw new Error(`Unable to acquire settlement lock for table ${tableId}`);
-    }
-
-    try {
-      const houseUserId = await getHouseUserId(prisma);
-      const result = await financialManager.settleHand({
-        tableId,
-        handId,
-        playerNetChanges: playerNetChanges as Record<string, string>,
-        rakeTotal,
-        houseUserId,
-      });
-      if (result.replayed) {
-        logger.info({ handId }, "Hand settlement already applied (no-op)");
-        return;
+  durableOutboxProcessor(
+    prisma,
+    "settle-hand",
+    async ({
+      tableId,
+      handId,
+      playerNetChanges,
+      rakeTotal,
+    }: {
+      tableId: string;
+      handId: string;
+      playerNetChanges: Record<string, string>;
+      rakeTotal: string;
+    }) => {
+      const lockKey = `lock:table:${tableId}`;
+      let lock;
+      try {
+        lock = await redlock.lock([lockKey], config.SETTLE_HAND_LOCK_TTL_MS);
+      } catch {
+        throw new Error(`Unable to acquire settlement lock for table ${tableId}`);
       }
-    } finally {
-      await lock.unlock().catch(() => undefined);
-    }
 
-    logger.info({ handId, rakeTotal }, "Hand settled");
-  },
+      try {
+        const houseUserId = await getHouseUserId(prisma);
+        const result = await financialManager.settleHand({
+          tableId,
+          handId,
+          playerNetChanges: playerNetChanges as Record<string, string>,
+          rakeTotal,
+          houseUserId,
+        });
+        if (result.replayed) {
+          logger.info({ handId }, "Hand settlement already applied (no-op)");
+          return;
+        }
+      } finally {
+        await lock.unlock().catch(() => undefined);
+      }
+
+      logger.info({ handId, rakeTotal }, "Hand settled");
+    }
+  ),
   { connection: redis }
 );
 

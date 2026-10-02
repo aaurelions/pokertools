@@ -85,8 +85,12 @@ function fakePrisma() {
         const found = [...withdrawals.values()].filter((row) => matches(row, where));
         return found[0] ?? null;
       },
-      findMany: async ({ where }: { where: Row }) =>
-        [...withdrawals.values()].filter((row) => matches(row, where)),
+      findMany: async ({ where, take, orderBy }: { where: Row; take?: number; orderBy?: Row }) => {
+        const rows = [...withdrawals.values()].filter((row) => matches(row, where));
+        if (orderBy?.broadcastNonce === "desc")
+          rows.sort((a, b) => Number(b.broadcastNonce) - Number(a.broadcastNonce));
+        return take === undefined ? rows : rows.slice(0, take);
+      },
     },
     financialIncident: {
       findUnique: async ({ where }: { where: Row }) => incidents.get(where.id as string) ?? null,
@@ -145,6 +149,20 @@ function newRecord(overrides: Record<string, unknown> = {}) {
 }
 
 describe("PrismaWithdrawalStore", () => {
+  it("does not lose a treasury's maximum behind fifty higher nonces from another treasury", async () => {
+    const { client, withdrawals } = fakePrisma();
+    const store = new PrismaWithdrawalStore(client, "file:./test.db");
+    await store.create(newRecord());
+    withdrawals.get("int_1")!.broadcastNonce = 7n;
+    for (let index = 0; index < 51; index++) {
+      await store.create(
+        newRecord({ intentId: `other_${index}`, nonce: index + 2, treasuryAddress: DESTINATION })
+      );
+      withdrawals.get(`other_${index}`)!.broadcastNonce = BigInt(index + 100);
+    }
+    expect(await store.maxPersistedTreasuryNonce(CHAIN_ID, TREASURY.toUpperCase())).toBe(7);
+    expect(await store.maxPersistedTreasuryNonce(CHAIN_ID, DESTINATION)).toBe(150);
+  });
   it("maps the real column names (id/broadcastNonce) and enforces CAS transitions", async () => {
     const { client } = fakePrisma();
     const store = new PrismaWithdrawalStore(client, "file:./test.db");

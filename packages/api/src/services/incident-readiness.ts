@@ -102,7 +102,7 @@ export function createIncidentReadinessCheck(
     }
   }
 
-  return async (tx, incident) => {
+  const check: IncidentReadinessCheck = async (tx, incident) => {
     // Chain-level incident without a single asset: still require a validated
     // quorum for the chain and a healthy settlement height. Endpoints are
     // gathered from every asset on the chain regardless of freeze state.
@@ -110,7 +110,7 @@ export function createIncidentReadinessCheck(
       if (incident.chainId === null) return;
       const chainAssets = await tx.asset.findMany({
         where: { chainId: incident.chainId },
-        select: { rpcUrls: true },
+        select: { id: true, rpcUrls: true },
       });
       const urls = [
         ...new Set(chainAssets.flatMap((asset) => parseAssetRpcUrls(asset.rpcUrls))),
@@ -130,6 +130,9 @@ export function createIncidentReadinessCheck(
           "Chain settlement height is not quorum-verified"
         );
       }
+      // A route-wide unfreeze must recheck backing and gas for every asset,
+      // not merely prove that the chain's block-height RPC still responds.
+      for (const asset of chainAssets) await check(tx, { ...incident, assetId: asset.id });
       return;
     }
 
@@ -177,7 +180,22 @@ export function createIncidentReadinessCheck(
 
     try {
       await registry.getSettlementBlockNumber(asset.chainId);
-      await registry.getTokenBalance(asset.chainId, asset.tokenAddress, asset.treasuryAddress);
+      const custody = await registry.getTokenBalance(
+        asset.chainId,
+        asset.tokenAddress,
+        asset.treasuryAddress
+      );
+      const accounts = await tx.atomicAccount.findMany({
+        where: { assetId: asset.id, class: { not: "TREASURY_RESERVE" } },
+        select: { balanceAtomic: true },
+      });
+      const expected = accounts.reduce((sum, account) => sum + BigInt(account.balanceAtomic), 0n);
+      if (custody !== expected) {
+        throw new IncidentReadinessError(
+          "RECONCILIATION_UNVERIFIED",
+          "Live treasury backing no longer matches the ledger"
+        );
+      }
       const nativeGas = await registry.getBalance(asset.chainId, asset.treasuryAddress);
       let minimumGas: bigint;
       try {
@@ -202,4 +220,5 @@ export function createIncidentReadinessCheck(
       );
     }
   };
+  return check;
 }

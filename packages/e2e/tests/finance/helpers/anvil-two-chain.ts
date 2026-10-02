@@ -407,7 +407,7 @@ export function findTransferLogs(
   filter: TransferLogFilter = {}
 ): TransferLogMatch[] {
   const matches: TransferLogMatch[] = [];
-  receipt.logs.forEach((log: Log, index: number) => {
+  receipt.logs.forEach((log: Log) => {
     if (log.address.toLowerCase() !== token.toLowerCase()) return;
     let decoded: { eventName: string; args: { from: Address; to: Address; value: bigint } };
     try {
@@ -425,11 +425,12 @@ export function findTransferLogs(
     if (filter.from && from.toLowerCase() !== filter.from.toLowerCase()) return;
     if (filter.to && to.toLowerCase() !== filter.to.toLowerCase()) return;
     if (filter.value !== undefined && value !== filter.value) return;
-    if (filter.logIndex !== undefined && index !== filter.logIndex) return;
+    if (log.logIndex === null) throw new Error("Receipt log is missing its block-global logIndex");
+    if (filter.logIndex !== undefined && log.logIndex !== filter.logIndex) return;
     matches.push({
       txHash: log.transactionHash!,
       // viem exposes `logIndex` on receipt logs; absolute index within the block.
-      logIndex: log.logIndex ?? index,
+      logIndex: log.logIndex,
       blockNumber: log.blockNumber!,
       blockHash: log.blockHash!,
       from,

@@ -21,6 +21,8 @@ export interface RpcProxyState {
   blockHashOverride?: Map<string, Hex>;
   /** Simulate an unavailable endpoint for these methods. */
   failMethods?: Set<string>;
+  /** Return a conflicting eth_call value from this endpoint only. */
+  ethCallResultOverride?: Hex;
   /**
    * Forward the call upstream (the node really executes it) but return an
    * error to the caller. Models "accepted broadcast, dropped response".
@@ -68,6 +70,9 @@ function isBlockQuery(method: string): boolean {
 }
 
 function applyOverrides(call: JsonRpcCall, result: unknown, state: RpcProxyState): unknown {
+  if (call.method === "eth_call" && state.ethCallResultOverride !== undefined) {
+    return state.ethCallResultOverride;
+  }
   if (state.chainIdOverride !== undefined && call.method === "eth_chainId") {
     return toQuantity(state.chainIdOverride);
   }

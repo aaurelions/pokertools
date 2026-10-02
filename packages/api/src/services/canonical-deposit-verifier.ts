@@ -69,6 +69,10 @@ export function parseAssetRpcUrls(rpcUrls: unknown): string[] {
 }
 
 export interface BuildRegistryOptions {
+  /** Scope observations to one persisted asset route (custody monitoring). */
+  assetId?: string;
+  /** Frozen routes remain observable; callers must still forbid new signing. */
+  observeFrozen?: boolean;
   logger?: RegistryLogger;
   incidentSink?: ChainRegistryOptions["incidentSink"];
   onFreeze?: ChainRegistryOptions["onFreeze"];
@@ -87,7 +91,12 @@ export async function buildChainRegistryFromAssets(
   options: BuildRegistryOptions = {}
 ): Promise<ChainRegistry> {
   const assets = await prisma.asset.findMany({
-    where: { status: { in: ["ACTIVE", "DEGRADED"] } },
+    where: {
+      status: {
+        in: options.observeFrozen ? ["ACTIVE", "DEGRADED", "FROZEN"] : ["ACTIVE", "DEGRADED"],
+      },
+      ...(options.assetId ? { id: options.assetId } : {}),
+    },
     select: { id: true, chainId: true, rpcUrls: true },
   });
 
@@ -184,7 +193,7 @@ export function createPrismaChainFreezeHandler(
 export interface CanonicalDepositVerifierDeps {
   prisma: DepositVerifierPrisma;
   /** Resolves (and memoizes) the started registry. */
-  getRegistry: () => Promise<QuorumReader>;
+  getRegistry: (chainId: number) => Promise<QuorumReader>;
   logger?: RegistryLogger;
 }
 
@@ -205,7 +214,7 @@ export function createCanonicalDepositVerifier(
 
     // RPC/registry infrastructure failures are thrown so the route can map them
     // to 503; they are never interpreted as a negative on-chain result.
-    const registry = await deps.getRegistry();
+    const registry = await deps.getRegistry(asset.chainId);
     if (!registry.isChainAuthorized(asset.chainId)) return reject("CHAIN_NOT_AUTHORIZED");
 
     const txHash = input.txHash.toLowerCase();
@@ -257,18 +266,38 @@ export function createAssetBackedDepositVerifier(
 ): DepositClaimVerifier {
   let registryPromise: Promise<ChainRegistry> | null = null;
 
-  const getRegistry = (): Promise<ChainRegistry> => {
-    if (!registryPromise) {
-      registryPromise = buildChainRegistryFromAssets(options.prisma, {
-        logger: options.logger,
-        quorum: options.quorum,
-        resolveHost: options.resolveHost,
-        createClient: options.createClient,
-        incidentSink: createPrismaIncidentSink(options.prisma),
-        onFreeze: createPrismaChainFreezeHandler(options.prisma),
-      });
+  const buildRegistry = (): Promise<ChainRegistry> =>
+    buildChainRegistryFromAssets(options.prisma, {
+      logger: options.logger,
+      quorum: options.quorum,
+      resolveHost: options.resolveHost,
+      createClient: options.createClient,
+      incidentSink: createPrismaIncidentSink(options.prisma),
+      onFreeze: createPrismaChainFreezeHandler(options.prisma),
+    });
+  const getRegistry = async (chainId: number): Promise<ChainRegistry> => {
+    registryPromise ??= buildRegistry();
+    const current = registryPromise;
+    let registry: ChainRegistry;
+    try {
+      registry = await current;
+    } catch (error) {
+      if (registryPromise === current) registryPromise = null;
+      throw error;
     }
-    return registryPromise;
+    if (registry.isFrozen(chainId)) {
+      // The caller already read a non-frozen asset. A cached local freeze may
+      // be retired only after durable operator resolution of ALL blockers;
+      // rebuilding validates the live endpoints again, rather than blind thaw.
+      const blockers = await options.prisma.financialIncident.count({
+        where: { chainId, severity: "CRITICAL", status: { not: "RESOLVED" } },
+      });
+      if (blockers === 0) {
+        if (registryPromise === current) registryPromise = buildRegistry();
+        return registryPromise;
+      }
+    }
+    return registry;
   };
 
   return createCanonicalDepositVerifier({
