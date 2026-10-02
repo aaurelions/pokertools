@@ -2,7 +2,7 @@ import type { Prisma, PrismaClient } from "../../generated/prisma/index.js";
 import { ChipLedger, type ChipAccountRef, type ChipBalances } from "./chip-ledger.js";
 import { EconomicPolicyService } from "./economic-policy.js";
 import { AtomicLedger, runTransactionWithRetry } from "./atomic-ledger.js";
-import { ValidationError } from "../utils/errors.js";
+import { AppError, ValidationError } from "../utils/errors.js";
 
 /**
  * FinancialManager — economic integration for the engine.
@@ -659,6 +659,39 @@ export class FinancialManager {
     return { ownerId: `competition-prize:${competitionId}`, class: "TOURNAMENT_RESERVE" };
   }
 
+  /**
+   * Lock every referenced asset in canonical (sorted) order and re-assert
+   * ACTIVE under the durable lock.
+   *
+   * Admission paths call this before any journal so a freeze, config change or
+   * blocking incident committed after a plain pre-flight read cannot admit
+   * value (TOCTOU). Mirrors the withdrawal reservation pattern: asset-first
+   * lock ordering, then an authoritative re-read under the lock.
+   */
+  async lockAndRequireActiveAssets(
+    tx: Prisma.TransactionClient,
+    assetIds: string[]
+  ): Promise<void> {
+    const unique = [...new Set(assetIds)].sort();
+    for (const assetId of unique) {
+      const locked = await this.ledger.lockAsset(tx, assetId);
+      if (!locked) {
+        throw new AppError(
+          "Unknown asset for competition admission",
+          400,
+          "COMPETITION_ASSET_UNKNOWN"
+        );
+      }
+      const fresh = await tx.asset.findUnique({
+        where: { id: assetId },
+        select: { status: true },
+      });
+      if (!fresh || fresh.status !== "ACTIVE") {
+        throw new AppError("Competition asset is not ACTIVE", 409, "COMPETITION_ASSET_NOT_ACTIVE");
+      }
+    }
+  }
+
   private positiveAtomic(amountAtomic: string, label: string): bigint {
     let amount: bigint;
     try {
@@ -687,6 +720,8 @@ export class FinancialManager {
     }
   ): Promise<{ journalRequestId: string }> {
     const amount = this.positiveAtomic(input.amountAtomic, "competition entry");
+    // Freeze race: lock and re-assert ACTIVE before any journal is created.
+    await this.lockAndRequireActiveAssets(tx, [input.assetId]);
     const from = await this.ledger.ensureAccount(tx, {
       assetId: input.assetId,
       ownerId: input.payerId,
@@ -724,6 +759,8 @@ export class FinancialManager {
     }
   ): Promise<{ journalRequestId: string }> {
     const amount = this.positiveAtomic(input.amountAtomic, "competition prize");
+    // Freeze race: lock and re-assert ACTIVE before the reservation.
+    await this.lockAndRequireActiveAssets(tx, [input.assetId]);
     const from = await this.ledger.ensureAccount(tx, {
       assetId: input.assetId,
       ownerId: input.sponsorId,

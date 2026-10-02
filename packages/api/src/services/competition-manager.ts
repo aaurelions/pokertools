@@ -186,24 +186,6 @@ async function assertPaidAdmissionReady(fastify: FastifyInstance): Promise<void>
   }
 }
 
-/** Re-assert asset ACTIVE inside the admission transaction (freeze race). */
-async function assertActiveAssetInTx(
-  tx: Prisma.TransactionClient,
-  assetId: string,
-  label: string
-): Promise<void> {
-  const asset = await tx.asset.findUnique({
-    where: { id: assetId },
-    select: { status: true },
-  });
-  if (!asset) {
-    throw new AppError(`Unknown ${label} asset`, 400, "COMPETITION_ASSET_UNKNOWN");
-  }
-  if (asset.status !== "ACTIVE") {
-    throw new AppError(`${label} asset is not ACTIVE`, 409, "COMPETITION_ASSET_NOT_ACTIVE");
-  }
-}
-
 function isUniqueViolation(error: unknown): boolean {
   return (error as { code?: string } | null)?.code === "P2002";
 }
@@ -461,9 +443,12 @@ export async function createCompetition(
           prizeAmountAtomic !== null &&
           entryAssetId !== null
         ) {
-          // Freeze-race re-assertion inside the same transaction as the reserve.
-          await assertActiveAssetInTx(tx, entryAssetId, "entry");
-          await assertActiveAssetInTx(tx, prizeAssetId, "prize");
+          // Freeze race: lock and re-assert ACTIVE under the durable asset
+          // lock (sorted order) inside the same transaction as the reserve.
+          await fastify.financialManager.lockAndRequireActiveAssets(tx, [
+            entryAssetId,
+            prizeAssetId,
+          ]);
           const reservation = await fastify.financialManager.applyCompetitionPrizeReserve(tx, {
             competitionId: competition.id,
             sponsorId,
@@ -621,8 +606,6 @@ export async function optInCompetition(
   await assertPaidAdmissionReady(fastify);
 
   const journal = await fastify.prisma.$transaction(async (tx) => {
-    // Re-assert ACTIVE inside the charging transaction to close the freeze race.
-    await assertActiveAssetInTx(tx, competition.entryAssetId!, "entry");
     const result = await fastify.financialManager.applyCompetitionEntry(tx, {
       competitionId: competition.id,
       payerId: entrant.principalId,
@@ -737,8 +720,12 @@ export async function startCompetition(
             "COMPETITION_TERMS_INCOMPLETE"
           );
         }
-        await assertActiveAssetInTx(tx, fresh.entryAssetId, "entry");
-        await assertActiveAssetInTx(tx, fresh.prizeAssetId, "prize");
+        // Freeze race: lock and re-assert ACTIVE under the durable asset lock
+        // (sorted order) before any seat, deal or RUNNING transition.
+        await fastify.financialManager.lockAndRequireActiveAssets(tx, [
+          fresh.entryAssetId,
+          fresh.prizeAssetId,
+        ]);
         if (fresh.prizeStatus !== "RESERVED" || fresh.prizeReservationJournalId === null) {
           throw new AppError(
             "Sponsor prize is not reserved",
