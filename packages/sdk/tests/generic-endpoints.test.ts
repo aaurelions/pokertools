@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { CreateServiceCredentialRequest } from "@pokertools/types";
 import { PokerClient } from "../src/client";
 import { PokerSDKError } from "../src/types";
 
@@ -141,13 +142,35 @@ describe("PokerClient generic public endpoints", () => {
   describe("service credentials", () => {
     it("createServiceCredential posts the strict operator request and returns the one-time token", async () => {
       mockFetch.mockResolvedValueOnce(ok(createdCredential));
-      const request = {
+      const request: CreateServiceCredentialRequest = {
         name: "bot-1",
         scopes: ["table:observe", "table:chat"],
         tableId: "table-1",
-      } as const;
+      };
 
       await expect(client.createServiceCredential(request)).resolves.toEqual(createdCredential);
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.example.com/auth/service-credentials",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify(request),
+        })
+      );
+    });
+
+    it("createServiceCredential issues for an existing principal with the orchestration scope", async () => {
+      const request: CreateServiceCredentialRequest = {
+        principalId: "svc-principal-1",
+        name: "orchestrator",
+        scopes: ["competition:orchestrate"],
+      };
+      mockFetch.mockResolvedValueOnce(
+        ok({ ...createdCredential, name: "orchestrator", scopes: ["competition:orchestrate"] })
+      );
+
+      await expect(client.createServiceCredential(request)).resolves.toMatchObject({
+        scopes: ["competition:orchestrate"],
+      });
       expect(mockFetch).toHaveBeenCalledWith(
         "https://api.example.com/auth/service-credentials",
         expect.objectContaining({
@@ -207,6 +230,115 @@ describe("PokerClient generic public endpoints", () => {
       mockFetch.mockResolvedValueOnce(ok({ success: false }));
 
       await expect(client.revokeServiceCredential(credentialSummary.id)).rejects.toThrow();
+    });
+  });
+
+  describe("service principal administration", () => {
+    const provisioned = {
+      principalId: "svc-principal-1",
+      name: "agent-principal",
+      kind: "SERVICE",
+      delegatedToPrincipalId: "orchestrator-1",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    it("provisionServicePrincipal posts the strict request and returns the durable principal", async () => {
+      mockFetch.mockResolvedValueOnce(ok(provisioned));
+      const request = { name: "agent-principal", delegatedToPrincipalId: "orchestrator-1" };
+
+      await expect(client.provisionServicePrincipal(request)).resolves.toEqual(provisioned);
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.example.com/auth/service-principals",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify(request),
+        })
+      );
+    });
+
+    it("provisionServicePrincipal rejects unknown request fields before any network call", async () => {
+      await expect(
+        client.provisionServicePrincipal({ name: "agent-principal", isOperator: true } as never)
+      ).rejects.toThrow();
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it("provisionServicePrincipal rejects a projection that is not a SERVICE principal", async () => {
+      mockFetch.mockResolvedValueOnce(ok({ ...provisioned, kind: "WALLET" }));
+
+      await expect(client.provisionServicePrincipal({ name: "agent-principal" })).rejects.toThrow();
+    });
+
+    it("never retries the non-idempotent provision after a transport failure", async () => {
+      const retryClient = new PokerClient({
+        baseUrl: "https://api.example.com",
+        token: "test-token",
+        fetch: mockFetch as unknown as typeof fetch,
+        retry: { count: 2, delay: 0, backoff: 1 },
+      });
+      mockFetch.mockRejectedValueOnce(new Error("ECONNRESET"));
+
+      await expect(
+        retryClient.provisionServicePrincipal({ name: "agent-principal" })
+      ).rejects.toThrow();
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("rotateServiceCredential posts optional expiresAt and returns the one-time token", async () => {
+      const rotated = { ...createdCredential, token: "ptsvc_rotated_token" };
+      mockFetch.mockResolvedValueOnce(ok(rotated));
+      const request = { expiresAt: "2027-01-01T00:00:00.000Z" };
+
+      await expect(client.rotateServiceCredential(credentialSummary.id, request)).resolves.toEqual(
+        rotated
+      );
+      expect(mockFetch).toHaveBeenCalledWith(
+        `https://api.example.com/auth/service-credentials/${credentialSummary.id}/rotate`,
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify(request),
+        })
+      );
+    });
+
+    it("rotateServiceCredential defaults to an empty strict body", async () => {
+      mockFetch.mockResolvedValueOnce(ok(createdCredential));
+
+      await expect(client.rotateServiceCredential(credentialSummary.id)).resolves.toEqual(
+        createdCredential
+      );
+      expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({});
+    });
+
+    it("rotateServiceCredential rejects a malformed credential id before any network call", async () => {
+      await expect(client.rotateServiceCredential("not a credential id!")).rejects.toThrow();
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it("rotateServiceCredential rejects a malformed rotation body before any network call", async () => {
+      await expect(
+        client.rotateServiceCredential(credentialSummary.id, { expiresAt: "not-a-date" })
+      ).rejects.toThrow();
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it("rotateServiceCredential rejects a response that is not the created-credential contract", async () => {
+      mockFetch.mockResolvedValueOnce(ok({ success: true }));
+
+      await expect(client.rotateServiceCredential(credentialSummary.id)).rejects.toThrow();
+    });
+
+    it("never retries the non-idempotent rotation after a transport failure", async () => {
+      const retryClient = new PokerClient({
+        baseUrl: "https://api.example.com",
+        token: "test-token",
+        fetch: mockFetch as unknown as typeof fetch,
+        retry: { count: 2, delay: 0, backoff: 1 },
+      });
+      mockFetch.mockRejectedValueOnce(new Error("ECONNRESET"));
+
+      await expect(retryClient.rotateServiceCredential(credentialSummary.id)).rejects.toThrow();
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
   });
 

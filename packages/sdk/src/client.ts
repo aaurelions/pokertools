@@ -44,6 +44,9 @@ import type {
   CreateServiceCredentialRequest,
   CreatedServiceCredential,
   ServiceCredentialSummary,
+  ProvisionServicePrincipalRequest,
+  ProvisionedServicePrincipal,
+  RotateServiceCredentialRequest,
   Asset,
   Balance as AssetBalance,
   DepositClaim,
@@ -63,6 +66,9 @@ import {
   CredentialIdSchema,
   ListServiceCredentialsResponseSchema,
   RevokeServiceCredentialResponseSchema,
+  ProvisionServicePrincipalRequestSchema,
+  ProvisionedServicePrincipalSchema,
+  RotateServiceCredentialRequestSchema,
   GetTablesResponseSchema,
   GetTableStateResponseSchema,
   SeatObservationSchema,
@@ -229,6 +235,47 @@ export class PokerClient {
       `/auth/service-credentials/${encodeURIComponent(parsed)}/revoke`
     );
     RevokeServiceCredentialResponseSchema.parse(response);
+  }
+
+  /**
+   * Provision a durable SERVICE principal (`POST /auth/service-principals`,
+   * operator-only).
+   *
+   * This creates the stable principal identity only: no credential is minted
+   * and nothing is delegated unless `delegatedToPrincipalId` is supplied.
+   * The request has no server-recognized idempotency identity, so the
+   * transport never retries it automatically; a lost response must be
+   * reconciled (the principal id is server-assigned) before retrying.
+   */
+  async provisionServicePrincipal(
+    request: ProvisionServicePrincipalRequest
+  ): Promise<ProvisionedServicePrincipal> {
+    const parsed = ProvisionServicePrincipalRequestSchema.parse(request);
+    const response = await this.request<unknown>("POST", "/auth/service-principals", parsed);
+    return ProvisionedServicePrincipalSchema.parse(response);
+  }
+
+  /**
+   * Rotate an existing service credential in place
+   * (`POST /auth/service-credentials/:id/rotate`, operator-only).
+   *
+   * The durable principal is unchanged and the previous secret stops working.
+   * The returned plaintext `token` is available exactly once. Rotation has no
+   * server-recognized idempotency identity, so it is never retried
+   * automatically.
+   */
+  async rotateServiceCredential(
+    credentialId: CredentialId,
+    request: RotateServiceCredentialRequest = {}
+  ): Promise<CreatedServiceCredential> {
+    const parsedId = CredentialIdSchema.parse(credentialId);
+    const parsed = RotateServiceCredentialRequestSchema.parse(request);
+    const response = await this.request<unknown>(
+      "POST",
+      `/auth/service-credentials/${encodeURIComponent(parsedId)}/rotate`,
+      parsed
+    );
+    return CreatedServiceCredentialSchema.parse(response);
   }
 
   // ============================================================================
