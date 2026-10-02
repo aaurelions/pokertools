@@ -5,6 +5,7 @@ import type { FastifyInstance } from "fastify";
 import {
   initTestContext,
   runCleanup,
+  createTable,
   getObservation,
   executeAction,
   getTableState,
@@ -164,21 +165,23 @@ async function issueAgentCredential(
   orchestratorToken: string,
   competitionId: string,
   principalId: string,
-  credentialId?: string
-): Promise<{ token: string; credentialId: string; principalId: string }> {
-  const issued = await inject<{ token: string; credentialId: string; principalId: string }>(
-    app,
-    "POST",
-    `/competitions/${competitionId}/agent-credentials`,
-    {
-      token: orchestratorToken,
-      payload: {
-        principalId,
-        name: `agent-room-${crypto.randomBytes(3).toString("hex")}`,
-        ...(credentialId ? { credentialId } : {}),
-      },
-    }
-  );
+  credentialId?: string,
+  seat?: number
+): Promise<{ token: string; credentialId: string; principalId: string; seat: number | null }> {
+  const issued = await inject<{
+    token: string;
+    credentialId: string;
+    principalId: string;
+    seat: number | null;
+  }>(app, "POST", `/competitions/${competitionId}/agent-credentials`, {
+    token: orchestratorToken,
+    payload: {
+      principalId,
+      name: `agent-room-${crypto.randomBytes(3).toString("hex")}`,
+      ...(credentialId ? { credentialId } : {}),
+      ...(seat !== undefined ? { seat } : {}),
+    },
+  });
   if (issued.statusCode !== (credentialId ? 200 : 201)) {
     throw new Error(`agent credential failed: ${JSON.stringify(issued.body)}`);
   }
@@ -647,5 +650,98 @@ describe("competition capability", () => {
       token: rotated.token,
     });
     expect(newToken.statusCode).toBe(200);
+  });
+
+  it("issues table-only agent credentials by default and validates explicit seats", async () => {
+    const orchestrator = await createOrchestrator(ctx.app, operator.token);
+    servicePrincipalIds.push(orchestrator.principalId);
+    const agent = await provisionServicePrincipal(
+      ctx.app,
+      operator.token,
+      `agent-seat-${crypto.randomBytes(3).toString("hex")}`,
+      orchestrator.principalId
+    );
+    servicePrincipalIds.push(agent);
+
+    const created = await inject<{
+      competition: {
+        id: string;
+        tableId: string;
+        entrants: Array<{ principalId: string; seat: number }>;
+      };
+    }>(ctx.app, "POST", "/competitions", {
+      token: orchestrator.token,
+      payload: {
+        name: "Credential seat semantics",
+        mode: "NONFINANCIAL",
+        entrants: [entrant(payer.id, "WALLET"), entrant(agent, "SERVICE")],
+        smallBlind: 100,
+        bigBlind: 200,
+        idempotencyKey: crypto.randomUUID(),
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const competitionId = created.body.competition.id;
+    const tableId = created.body.competition.tableId;
+    createdCompetitionIds.push(competitionId);
+    createdTableIds.push(tableId);
+    const started = await inject(ctx.app, "POST", `/competitions/${competitionId}/start`, {
+      token: orchestrator.token,
+      payload: { idempotencyKey: crypto.randomUUID() },
+    });
+    expect(started.statusCode).toBe(200);
+    const agentSeat = created.body.competition.entrants.find(
+      (candidate) => candidate.principalId === agent
+    )!.seat;
+
+    // Omitted seat: table-only credential, no seat restriction.
+    const tableOnly = await issueAgentCredential(ctx.app, orchestrator.token, competitionId, agent);
+    expect(tableOnly.seat).toBeNull();
+    const tableOnlyObservation = await inject(ctx.app, "GET", `/tables/${tableId}/observation`, {
+      token: tableOnly.token,
+    });
+    expect(tableOnlyObservation.statusCode).toBe(200);
+
+    // Table-only is still narrowly bound: no other table access.
+    const otherTableId = await createTable(ctx.app, payer.token, {
+      name: "Other table",
+      mode: "CASH",
+      smallBlind: 10,
+      bigBlind: 20,
+      maxPlayers: 4,
+    });
+    createdTableIds.push(otherTableId);
+    const foreignTable = await inject(ctx.app, "GET", `/tables/${otherTableId}/observation`, {
+      token: tableOnly.token,
+    });
+    expect(foreignTable.statusCode).toBe(403);
+    expect((foreignTable.body as { error?: string }).error).toBe("TABLE_RESTRICTED");
+
+    // Explicit seat must equal the entrant's authoritative seat.
+    const seated = await issueAgentCredential(
+      ctx.app,
+      orchestrator.token,
+      competitionId,
+      agent,
+      undefined,
+      agentSeat
+    );
+    expect(seated.seat).toBe(agentSeat);
+    const wrongSeat = agentSeat === 0 ? 1 : 0;
+    const mismatch = await inject<{ error?: string }>(
+      ctx.app,
+      "POST",
+      `/competitions/${competitionId}/agent-credentials`,
+      {
+        token: orchestrator.token,
+        payload: {
+          principalId: agent,
+          name: "wrong-seat",
+          seat: wrongSeat,
+        },
+      }
+    );
+    expect(mismatch.statusCode).toBe(400);
+    expect(mismatch.body.error).toBe("COMPETITION_AGENT_CREDENTIAL_SEAT_MISMATCH");
   });
 });

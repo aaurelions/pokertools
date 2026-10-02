@@ -390,7 +390,11 @@ export type AgentTableScope = z.infer<typeof AgentTableScopeSchema>;
 /**
  * `POST /competitions/:id/agent-credentials` request. The principal must be a
  * SERVICE entrant of this competition; the issued credential is always bound to
- * the competition table (and optionally the entrant's authoritative seat).
+ * the competition table.
+ *
+ * `seat` is optional: omitting it issues a table-only credential (no seat
+ * restriction), which is the intended default. Supplying `seat` must match the
+ * entrant's authoritative assigned seat and narrows the credential to it.
  *
  * Without `credentialId` the route mints a fresh credential (safe to call again
  * after a restart; callers keep only the returned one-time token). With
@@ -402,6 +406,7 @@ export const IssueAgentCredentialRequestSchema = z.strictObject({
   name: z.string().min(1).max(64),
   /** Defaults to every table scope. */
   scopes: z.array(AgentTableScopeSchema).min(1).max(3).optional(),
+  /** Optional explicit seat restriction; must equal the entrant's seat. */
   seat: z.number().int().min(0).max(9).optional(),
   expiresAt: z.string().datetime().optional(),
   /** Rotate this credential in place instead of minting a new one. */

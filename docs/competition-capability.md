@@ -158,8 +158,10 @@ trap a reserved prize or block releasing value.
 The principal must be a SERVICE entrant of this competition delegated to the
 calling orchestrator. The issued credential is always bound to the competition
 table and only carries table scopes: it can observe, act and chat at its
-assigned table, and nothing else. Pass `credentialId` to rotate that credential
-in place; omit it to mint a fresh one (safe after a restart).
+assigned table, and nothing else. `seat` is optional and defaults to a
+table-only restriction (no seat); an explicit `seat` must match the entrant's
+authoritative assigned seat. Pass `credentialId` to rotate that credential in
+place; omit it to mint a fresh one (safe after a restart).
 
 ## Principal / credential model
 

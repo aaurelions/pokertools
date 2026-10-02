@@ -1043,6 +1043,16 @@ export async function issueAgentCredential(
       "COMPETITION_AGENT_CREDENTIAL_WALLET"
     );
   }
+  // A requested seat must be the entrant's authoritative seat. Omitted seats
+  // yield a table-only restriction: NLHE intentionally omits it, and the seat
+  // would otherwise become invalid the moment the agent is eliminated.
+  if (input.seat !== undefined && input.seat !== entrant.seat) {
+    throw new AppError(
+      "Requested seat does not match the entrant's authoritative seat",
+      400,
+      "COMPETITION_AGENT_CREDENTIAL_SEAT_MISMATCH"
+    );
+  }
   if (input.actor.kind === "SERVICE") {
     const delegated = await fastify.principalManager.isServicePrincipalDelegatedTo(
       entrant.principalId,
@@ -1062,7 +1072,7 @@ export async function issueAgentCredential(
     tableId: competition.tournament.tableId,
     name: input.name,
     scopes: input.scopes ?? ["table:observe", "table:act", "table:chat"],
-    seat: input.seat ?? entrant.seat,
+    seat: input.seat ?? null,
     expiresAt: input.expiresAt ? new Date(input.expiresAt) : undefined,
     credentialId: input.credentialId ?? null,
     createdById: input.actor.id,
