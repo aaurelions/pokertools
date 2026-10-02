@@ -275,7 +275,7 @@ describe("competition canonical action replay (PostgreSQL + Redis)", () => {
       await booted.app.prisma.gameEvent.count({ where: { tableId: competition.tableId } })
     ).toBe(eventsBefore);
 
-    // The SDK transport (the recovery path NLHE uses) must resolve the same
+    // The SDK transport (the external consumer recovery path) must resolve the same
     // durable receipt rather than surfacing the lifecycle error.
     const { PokerClient } = await import("@pokertools/sdk");
     const sdk = new PokerClient({ baseUrl: booted.baseUrl, token: payer.token });

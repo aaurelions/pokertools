@@ -1120,8 +1120,8 @@ export async function issueAgentCredential(
     );
   }
   // A requested seat must be the entrant's authoritative seat. Omitted seats
-  // yield a table-only restriction: NLHE intentionally omits it, and the seat
-  // would otherwise become invalid the moment the agent is eliminated.
+  // yield a table-only restriction, which stays valid for cached idempotent
+  // receipts after the principal is eliminated and its engine seat is gone.
   if (input.seat !== undefined && input.seat !== entrant.seat) {
     throw new AppError(
       "Requested seat does not match the entrant's authoritative seat",
