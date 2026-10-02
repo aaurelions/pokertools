@@ -1045,14 +1045,6 @@ export class GameManager {
     const state = engine.state;
     const intents: OutboxIntent[] = [];
 
-    // Snapshot is already committed synchronously inside the DB transaction; the
-    // intent carries only the version (no hidden engine data leaves the DB).
-    intents.push({
-      kind: "persist-snapshot",
-      dedupeKey: `snapshot:${tableId}:${newVersion}`,
-      payload: { tableId, version: newVersion },
-    });
-
     if (handCompleted) {
       const handId = `${tableId}_${state.handId}`;
       if (!state.config.blindStructure) {

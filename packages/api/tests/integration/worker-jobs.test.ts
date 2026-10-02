@@ -210,7 +210,7 @@ describe("Worker Jobs - Async Processing Integration Test", () => {
     await cleanupTestTable(ctx.app, tableId);
   }, 15000);
 
-  it("should process persist-snapshot worker for state backup", async () => {
+  it("commits snapshots synchronously without a write-behind worker", async () => {
     const [player1, player2] = ctx.users;
 
     const tableId = await createTable(ctx.app, player1.token, {
@@ -227,9 +227,6 @@ describe("Worker Jobs - Async Processing Integration Test", () => {
       type: "DEAL",
     });
 
-    // Wait for persist worker
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-
     // =========================================================================
     // STEP: Verify State Persisted to Database
     // =========================================================================
@@ -244,6 +241,8 @@ describe("Worker Jobs - Async Processing Integration Test", () => {
     const persistedState = JSON.parse(tableRecord!.state as string);
     expect(persistedState).toBeTruthy();
     expect(persistedState.players).toBeTruthy();
+    expect(persistedState._version).toBe(tableRecord!.stateVersion);
+    expect("persist-snapshot" in ctx.app.jobQueues).toBe(false);
 
     console.log(`✅ Table state persisted to database`);
     console.log(

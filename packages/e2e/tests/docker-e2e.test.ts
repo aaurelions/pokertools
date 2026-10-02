@@ -84,7 +84,6 @@ const TRANSFER_TOPIC =
 const E2E_SECRETS = {
   JWT_SECRET: "e2e-jwt-secret-not-for-production",
   COOKIE_SECRET: "e2e-cookie-secret-not-for-production",
-  WALLET_ENCRYPTION_SECRET: "e2e-wallet-encryption-secret-for-tests-only",
 };
 
 let capturedFailureDiagnostics = false;
@@ -471,7 +470,6 @@ beforeAll(async () => {
   // The host-side Prisma client reads the same SQLite file the API container
   // applies schema.sql to. This is a canonical-config fixture only: no user
   // balance is created here.
-  process.env.WALLET_ENCRYPTION_SECRET = E2E_SECRETS.WALLET_ENCRYPTION_SECRET;
   process.env.DATABASE_URL = `file:${E2E_RUNTIME_DIR}/e2e.db`;
 
   prisma = createPrismaClient();

@@ -7,7 +7,6 @@ import {
   getObservation,
   toCanonicalActionRequest,
 } from "../helpers/test-utils.js";
-import { persistSnapshotProjection } from "../../src/services/snapshot-projection.js";
 
 it("preserves all-in contenders, merges 4 -> 2 -> 1 and settles through the API", async () => {
   const ctx = await initTestContext(8, 1000);
@@ -141,7 +140,8 @@ it("preserves all-in contenders, merges 4 -> 2 -> 1 and settles through the API"
       const before = await ctx.app.prisma.table.findUniqueOrThrow({ where: { id } });
       expect(before.status).toBe("CLOSED");
       // Reproduce a late queued snapshot arriving after closure.
-      expect(await persistSnapshotProjection(ctx.app.prisma, id, { _version: 9999 })).toBe(false);
+      // No queued snapshot may replace a committed table or reopen its lifecycle.
+      expect("persist-snapshot" in ctx.app.jobQueues).toBe(false);
       expect(await ctx.app.prisma.table.findUniqueOrThrow({ where: { id } })).toEqual(before);
     }
   } finally {

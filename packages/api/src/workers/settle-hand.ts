@@ -23,8 +23,8 @@ const logger = pino({ name: "settle-hand" });
  *
  * Syncs engine state with the chip economy after each hand. Player net changes
  * are applied to their table reserve chip accounts and rake is credited to the
- * house operator chip account. No legacy cents/Account/LedgerEntry rows are
- * touched. Settlement is idempotent on `handId`: a repeated job is a no-op.
+ * house operator chip account. Settlement is idempotent on `handId`: a repeated
+ * job is a no-op. Asset-backed games use their snapshotted conversion policy.
  */
 const worker = new Worker(
   "settle-hand",

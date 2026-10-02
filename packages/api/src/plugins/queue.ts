@@ -6,7 +6,6 @@ const jobQueueNames = [
   "settle-hand",
   "archive-hand",
   "next-hand",
-  "persist-snapshot",
   "player-timeout",
   "tournament-blinds",
 ] as const;

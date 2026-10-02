@@ -8,8 +8,7 @@ import { ValidationError } from "../utils/errors.js";
  *
  * Engine chips are integer gameplay units. PLAY_CHIPS tables/tournaments settle
  * against the durable principal `ChipAccount` balance and append-only chip
- * journal. They do NOT touch legacy cents/`Account`/`LedgerEntry` rows and do
- * not assume any default currency or 1-chip = 1-cent rate.
+ * journal. No default currency or implicit chip-to-asset rate exists.
  *
  * An ASSET-backed table/tournament references a persisted EconomicPolicy. Every
  * asset movement is an AtomicLedger journal and is persisted as a

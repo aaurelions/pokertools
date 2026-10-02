@@ -95,6 +95,20 @@ Known low-coverage areas, kept counted on purpose so the number stays honest:
 
 ## Intentional skips
 
+Production admission uses a fresh private PostgreSQL/Redis Docker network and
+the actual built runtime image (no application mocks):
+
+```bash
+npm run e2e:docker
+npm run test:production -w @pokertools/api
+node scripts/test-runtime-dependencies.mjs ghcr.io/aaurelions/pokertools:e2e
+```
+
+`POKERTOOLS_PRODUCTION_IMAGE` selects another already-built image. The test
+verifies configuration rejection, fresh migrations/startup/readiness, no implicit
+asset seed, live migration-drift blocking and liveness/readiness separation.
+Funded assets, quorum, custody and reconciliation still require two-chain E2E.
+
 - `packages/evaluator/tests/frequency.test.ts` skips the exhaustive 7-card frequency pass by
   default to keep CI fast. Run it when changing evaluator core logic:
 

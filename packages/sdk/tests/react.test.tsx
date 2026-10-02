@@ -1,6 +1,6 @@
 import React, { useEffect } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, cleanup, act } from "@testing-library/react";
 
 const mocks = vi.hoisted(() => {
   const connectMock = vi.fn(() => Promise.resolve(undefined));
@@ -288,9 +288,11 @@ describe("React SDK hooks", () => {
     await waitFor(() => expect(mocks.joinMock).toHaveBeenCalledWith("table-1"));
     await waitFor(() => expect(mocks.socketInstances.length).toBeGreaterThan(0));
 
-    mocks.socketInstances[0].emit("observation", "table-1", {
-      version: 4,
-      state: { version: 4 },
+    act(() => {
+      mocks.socketInstances[0].emit("observation", "table-1", {
+        version: 4,
+        state: { version: 4 },
+      });
     });
     await waitFor(() => expect(screen.getByTestId("version").textContent).toBe("4"));
 

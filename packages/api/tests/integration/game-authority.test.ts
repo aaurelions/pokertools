@@ -39,14 +39,7 @@ function makeRedis(overrides: Partial<FakeRedis> = {}): FakeRedis {
 }
 
 function makeQueues(addImpl: () => Promise<unknown> = async () => ({})) {
-  const names = [
-    "settle-hand",
-    "archive-hand",
-    "next-hand",
-    "persist-snapshot",
-    "player-timeout",
-    "tournament-blinds",
-  ];
+  const names = ["settle-hand", "archive-hand", "next-hand", "player-timeout", "tournament-blinds"];
   return Object.fromEntries(
     names.map((name) => [name, { add: vi.fn(addImpl), close: vi.fn(async () => undefined) }])
   ) as Record<string, { add: ReturnType<typeof vi.fn> }>;

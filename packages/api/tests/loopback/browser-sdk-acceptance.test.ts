@@ -17,9 +17,8 @@ import { bundleHarness, loadPlaywright, startAssetServer } from "./browser/harne
  *
  * The canonical `GET /tables/:id/observation` + strict `POST action`
  * (`{requestId,turnId,expectedVersion,actionId,amount?}`) contract is
- * feature-probed. While that API/SDK migration is still landing the sub-check
- * reports BLOCKED with the observed HTTP status instead of fabricating a pass;
- * once the endpoint exists the full strict contract is exercised.
+ * exercised end to end. Missing dependencies, blocked gameplay or unavailable
+ * observation/action contracts fail acceptance rather than silently skipping.
  */
 
 const require = createRequire(import.meta.url);

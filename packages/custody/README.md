@@ -75,16 +75,16 @@ in-memory doubles in `tests/core/fakes.ts`.
 
 ## Configuration
 
-| Variable                        | Default       | Purpose                                                 |
-| :------------------------------ | :------------ | :------------------------------------------------------ |
-| `NODE_ENV`                      | `development` | `development` / `production` / `test`                   |
-| `DATABASE_URL`                  | — (required)  | Prisma datasource; PostgreSQL in production             |
-| `CUSTODY_WORKER_INTERVAL_MS`    | `5000`        | Withdrawal pass cadence                                 |
-| `CUSTODY_RECONCILE_INTERVAL_MS` | `300000`      | Reconciliation cadence                                  |
-| `CUSTODY_QUORUM_THRESHOLD`      | `2`           | Agreeing RPC observations required                      |
-| `CUSTODY_MIN_QUORUM`            | `2`           | Minimum participants for a quorum decision              |
-| `TREASURY_SIGNING_KEYS_JSON`    | `""`          | `{"<chainId>":"0x<32-byte key>"}`; empty = monitor only |
-| `LOG_LEVEL`                     | `info`        | pino level                                              |
+| Variable                        | Default       | Purpose                                                                                       |
+| :------------------------------ | :------------ | :-------------------------------------------------------------------------------------------- |
+| `NODE_ENV`                      | `development` | `development` / `production` / `test`                                                         |
+| `DATABASE_URL`                  | — (required)  | Prisma datasource; PostgreSQL in production                                                   |
+| `CUSTODY_WORKER_INTERVAL_MS`    | `5000`        | Withdrawal pass cadence                                                                       |
+| `CUSTODY_RECONCILE_INTERVAL_MS` | `300000`      | Reconciliation cadence                                                                        |
+| `CUSTODY_QUORUM_THRESHOLD`      | `2`           | Agreeing RPC observations required                                                            |
+| `CUSTODY_MIN_QUORUM`            | `2`           | Minimum participants for a quorum decision                                                    |
+| `TREASURY_SIGNING_KEYS_JSON`    | `""`          | `{"<chainId>":"0x<32-byte key>"}`; required in production, empty monitors in development/test |
+| `LOG_LEVEL`                     | `info`        | pino level                                                                                    |
 
 Production admission (`src/safety.ts`) requires a `postgresql://`/`postgres://`
 `DATABASE_URL` and a non-empty, well-formed `TREASURY_SIGNING_KEYS_JSON`.

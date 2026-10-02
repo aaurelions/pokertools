@@ -76,8 +76,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
   // GET /user/history - canonical chip journal history.
   //
   // Chips are integer gameplay units projected as decimal strings. This is the
-  // append-only `ChipLedgerEntry` journal, NOT the legacy cents `Account`/
-  // `LedgerEntry` path: there is no default currency and no implicit rate.
+  // append-only `ChipLedgerEntry` journal; no default currency or implicit rate.
   fastify.get("/history", { onRequest: [fastify.authenticate] }, async (request) => {
     const { userId } = request.user;
 
@@ -91,11 +90,5 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
     return { history };
   });
 
-  // NOTE: the legacy chip-denominated POST /user/withdraw and
-  // GET /user/withdrawals endpoints were removed. Public withdrawals now use
-  // the canonical, EIP-712-bound, multi-asset route:
-  //   POST /finance/withdrawals/intents
-  //   GET  /finance/withdrawals/:id
-  // The old paths performed an implicit cents -> token conversion and are not
-  // part of the canonical finance surface.
+  // Withdrawals belong to the asset-qualified EIP-712 finance routes, not chips.
 };

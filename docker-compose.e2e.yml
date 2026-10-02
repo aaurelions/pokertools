@@ -60,7 +60,6 @@ services:
       REDIS_URL: "redis://redis:6379"
       JWT_SECRET: "e2e-jwt-secret-not-for-production"
       COOKIE_SECRET: "e2e-cookie-secret-not-for-production"
-      WALLET_XPRIV_ENCRYPTION_SECRET: ""
     volumes:
       - ${POKERTOOLS_E2E_RUNTIME:-./pokertools-e2e-runtime}:/app/packages/api/.runtime
     extra_hosts:
@@ -110,7 +109,6 @@ services:
       REDIS_URL: "redis://redis:6379"
       JWT_SECRET: "e2e-jwt-secret-not-for-production"
       COOKIE_SECRET: "e2e-cookie-secret-not-for-production"
-      WALLET_XPRIV_ENCRYPTION_SECRET: ""
       LOG_LEVEL: info
     volumes:
       - ${POKERTOOLS_E2E_RUNTIME:-./pokertools-e2e-runtime}:/app/packages/api/.runtime

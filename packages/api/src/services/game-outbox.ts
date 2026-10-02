@@ -15,8 +15,7 @@ import type { JobQueues } from "../plugins/queue.js";
  * after a crash is logically idempotent (BullMQ also dedupes by `jobId`).
  */
 
-export type OutboxKind =
-  "settle-hand" | "archive-hand" | "next-hand" | "persist-snapshot" | "player-timeout" | "pubsub";
+export type OutboxKind = "settle-hand" | "archive-hand" | "next-hand" | "player-timeout" | "pubsub";
 
 export interface OutboxIntent {
   kind: OutboxKind;

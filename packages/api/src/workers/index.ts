@@ -16,7 +16,6 @@ import { bootstrapCanonicalDepositMonitor } from "./canonical-deposit-monitor.js
 import settleHandWorker from "./settle-hand.js";
 import archiveHandWorker from "./archive-hand.js";
 import nextHandWorker from "./next-hand.js";
-import persistSnapshotWorker from "./persist-snapshot.js";
 import timeoutWorker from "./timeout.js";
 import createTournamentBlindsWorker from "./tournament-blinds.js";
 import reconciliationWorker from "./reconciliation.js";
@@ -31,7 +30,6 @@ logger.info(
       "settle-hand",
       "archive-hand",
       "next-hand",
-      "persist-snapshot",
       "player-timeout",
       "tournament-blinds",
       "reconciliation",
@@ -45,7 +43,6 @@ export const workers = [
   settleHandWorker,
   archiveHandWorker,
   nextHandWorker,
-  persistSnapshotWorker,
   timeoutWorker,
   tournamentBlindsWorker,
   reconciliationWorker,

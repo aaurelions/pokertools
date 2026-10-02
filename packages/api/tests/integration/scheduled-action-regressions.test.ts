@@ -32,7 +32,8 @@ it("scheduled timeouts settle a completed hand and stale jobs have no side effec
   const state = await ctx.app.gameManager.getState(tableId, a.id);
   const player = state.players[state.actionTo!]!;
   const settlement = vi.spyOn(ctx.app.jobQueues["settle-hand"], "add");
-  const persistence = vi.spyOn(ctx.app.jobQueues["persist-snapshot"], "add");
+  const original = await ctx.app.prisma.table.findUniqueOrThrow({ where: { id: tableId } });
+  const outboxCount = await ctx.app.prisma.gameOutbox.count({ where: { tableId } });
   try {
     const stale = await ctx.app.gameManager.processAction(
       tableId,
@@ -41,7 +42,11 @@ it("scheduled timeouts settle a completed hand and stale jobs have no side effec
       { expectedVersion: state.version - 1 }
     );
     expect(stale.version).toBe(state.version);
-    expect(persistence).not.toHaveBeenCalled();
+    const unchanged = await ctx.app.prisma.table.findUniqueOrThrow({ where: { id: tableId } });
+    expect(unchanged.state).toEqual(original.state);
+    expect(unchanged.stateVersion).toBe(original.stateVersion);
+    expect(unchanged.eventSeq).toBe(original.eventSeq);
+    expect(await ctx.app.prisma.gameOutbox.count({ where: { tableId } })).toBe(outboxCount);
     expect(settlement).not.toHaveBeenCalled();
 
     const completed = await ctx.app.gameManager.processAction(
@@ -66,7 +71,6 @@ it("scheduled timeouts settle a completed hand and stale jobs have no side effec
     ).toBe(0n);
     expect(Object.values(payload.playerNetChanges).sort()).toEqual(["-5", "5"]);
     expect(payload.handId).toBe(`${tableId}_${completed.handId}`);
-    expect(persistence).toHaveBeenCalledTimes(1);
     const durable = await ctx.app.prisma.table.findUniqueOrThrow({ where: { id: tableId } });
     expect(JSON.parse(durable.state as string)._version).toBe(completed.version);
     await ctx.app.gameManager.processAction(
@@ -77,6 +81,5 @@ it("scheduled timeouts settle a completed hand and stale jobs have no side effec
     expect(settlement).toHaveBeenCalledTimes(1);
   } finally {
     settlement.mockRestore();
-    persistence.mockRestore();
   }
 });

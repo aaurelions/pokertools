@@ -34,14 +34,7 @@ function makeRedis() {
 }
 
 function makeQueues() {
-  const names = [
-    "settle-hand",
-    "archive-hand",
-    "next-hand",
-    "persist-snapshot",
-    "player-timeout",
-    "tournament-blinds",
-  ];
+  const names = ["settle-hand", "archive-hand", "next-hand", "player-timeout", "tournament-blinds"];
   return Object.fromEntries(
     names.map((name) => [
       name,

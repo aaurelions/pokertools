@@ -90,7 +90,6 @@ intent identity. An arbitrary header does not make every mutation retryable.
 | `settle-hand`       | prisma ledger settlement         | Applies awards − investments per player; rejects unbalanced batches  |
 | `archive-hand`      | prisma `handHistory.upsert`      | Persists `HandHistory` — stable `jobId` + upsert tolerate retries    |
 | `next-hand`         | engine DEAL via `GameManager`    | Auto-deals the next hand under the table lock                        |
-| `persist-snapshot`  | redis → prisma                   | Database fallback for table state                                    |
 | `player-timeout`    | engine TIMEOUT via `GameManager` | Folds/checks timed-out players; stale versions are rejected          |
 | `tournament-blinds` | blind scheduler                  | Advances blind levels for running tournaments (repeatable scheduler) |
 | `reconciliation`    | ledger reconciliation            | Periodic financial reconciliation (repeatable scheduler)             |

@@ -51,8 +51,6 @@ export function configureFinanceApiEnv(env: FinanceApiEnv): void {
   process.env.REDIS_URL = env.redisUrl;
   process.env.JWT_SECRET = process.env.JWT_SECRET ?? "test-jwt-secret-finance-acceptance";
   process.env.COOKIE_SECRET = process.env.COOKIE_SECRET ?? "test-cookie-secret-finance-acceptance";
-  process.env.WALLET_ENCRYPTION_SECRET =
-    process.env.WALLET_ENCRYPTION_SECRET ?? "test-wallet-encryption-finance-acceptance";
   process.env.ENABLE_TEST_ROUTES = "false";
   process.env.ALLOWED_SIWE_CHAIN_IDS = "31337,31338,1";
   process.env.LOG_LEVEL = "error";

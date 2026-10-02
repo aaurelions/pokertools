@@ -70,7 +70,7 @@ export interface ChipBalances {
   inPlay: bigint;
   /** Chips escrowed in tournaments (TOURNAMENT_RESERVE). */
   tournament: bigint;
-  /** Legacy-compatible pending-withdrawal bucket: always 0 for chips. */
+  /** Chips cannot be withdrawn on chain; only asset accounts carry that liability. */
   pendingWithdrawal: bigint;
 }
 

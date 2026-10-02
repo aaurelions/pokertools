@@ -80,9 +80,9 @@ forbidden names are guards, not supported configuration options.
 
 Root `.env.example` configures Compose API/workers/backup/Caddy only.
 `deploy/.env.custody.example` is copied to required `.env.custody`, supplied only
-to custody. See the [runbook](../../deploy/README.md) for `CADDY_DOMAIN`,
+to custody. See the [runbook](https://github.com/aaurelions/pokertools/blob/main/deploy/README.md) for `CADDY_DOMAIN`,
 `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `REDIS_PASSWORD`,
-`BACKUP_INTERVAL_SECONDS`, `BACKUP_RETENTION_DAYS` and volume policy. These are
+`BACKUP_INTERVAL`, `BACKUP_RETENTION_DAYS` and volume policy. These are
 container/tool settings, not silently consumed application secrets.
 
 Tests/benchmarks have explicitly isolated controls (`POKERTOOLS_LOOPBACK_TEST`,

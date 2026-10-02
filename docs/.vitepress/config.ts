@@ -51,7 +51,7 @@ export default defineConfig({
   lang: "en-US",
   title: "PokerTools",
   description:
-    "Enterprise-grade Texas Hold'em engine, evaluator, SDK, API and blockchain administration monorepo.",
+    "Texas Hold'em engine, evaluator, SDK, room API and isolated treasury custody worker.",
   base: "/pokertools/",
   cleanUrls: true,
   lastUpdated: true,

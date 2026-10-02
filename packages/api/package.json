@@ -39,6 +39,7 @@
     "test:stand-alone": "npm run infra:up && npm run test; npm run infra:down",
     "test:postgres:migrations": "node --test tests/acceptance/postgres-migrations.test.mjs",
     "test:postgres:ledger": "node --test tests/acceptance/atomic-ledger-pg.test.mjs",
+    "test:production": "node --test tests/acceptance/production-admission.test.mjs",
     "test:loopback": "NODE_ENV=test POKERTOOLS_LOOPBACK_TEST=true vitest run --config vitest.config.ts",
     "test:browser": "node tests/loopback/browser/run.mjs",
     "test:canonical": "NODE_ENV=test vitest run --config tests/acceptance/canonical/vitest.acceptance.config.ts",

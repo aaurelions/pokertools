@@ -14,38 +14,6 @@ description = "Pinned third-party Foundry submodules (not first-party source)"
 paths = ['''(^|/)packages/custody/contracts/lib/(forge-std|openzeppelin-contracts)/''']
 
 [[allowlists]]
-description = "Empty example setting followed by a public PBKDF2 iteration count"
-targetRules = ["generic-api-key"]
-condition = "AND"
-paths = ['''(^|/)\.env\.example$''']
-regexTarget = "match"
-regexes = ['''WALLET_XPRIV_ENCRYPTION_SECRET=\s+PBKDF2_ITERATIONS=600000''']
-
-[[allowlists]]
-description = "Literal source expressions referencing disposable E2E secret constants, not values"
-targetRules = ["generic-api-key"]
-condition = "AND"
-paths = ['''(^|/)packages/e2e/tests/docker-e2e\.test\.ts$''']
-regexTarget = "match"
-regexes = ['''process\.env\.WALLET_(XPRIV_)?ENCRYPTION_SECRET = E2E_SECRETS\.WALLET_(XPRIV_)?ENCRYPTION_SECRET;''']
-
-[[allowlists]]
-description = "Truncated example JWT (no complete signature or credential)"
-targetRules = ["generic-api-key"]
-condition = "AND"
-paths = ['''(^|/)packages/api/README\.md$''']
-regexTarget = "match"
-regexes = ['''token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.\.\."''']
-
-[[allowlists]]
-description = "Metrics curl uses an environment variable placeholder, not a credential"
-targetRules = ["curl-auth-header"]
-condition = "AND"
-paths = ['''(^|/)packages/api/README\.md$''']
-regexTarget = "match"
-regexes = ['''Authorization: Bearer \$METRICS_TOKEN"''']
-
-[[allowlists]]
 description = "Public Anvil account zero key, only in named isolated test fixtures"
 targetRules = ["generic-api-key", "evm-signing-key"]
 condition = "AND"

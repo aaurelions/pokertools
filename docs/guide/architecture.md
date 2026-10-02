@@ -97,7 +97,7 @@ relational baseline, financial constraints, then append-only audit constraints.
 Runners serialize with an advisory lock, commit SQL/tracking atomically and
 reject drift, unknown history or missing hashes. Repeat application is a no-op.
 Future migrations are immutable and append-only. See
-[migration policy](../../packages/api/prisma/postgres/README.md).
+[migration policy](https://github.com/aaurelions/pokertools/blob/main/packages/api/prisma/postgres/README.md).
 
 SQLite is only a disposable local-test adapter generated from the same model;
 it has no migration history and does not prove PostgreSQL financial/audit
@@ -117,4 +117,5 @@ automatic deletion policy. Session/nonce/idempotency expiry limits authorization
 and retry windows, not financial retention. Outbox delivery does not authorize
 deleting game audit trails. Retention changes require reviewed policy and backups.
 
-See [security](../../SECURITY.md) and [deployment](../../deploy/README.md).
+See [security](https://github.com/aaurelions/pokertools/blob/main/SECURITY.md)
+and [deployment](/deployment).

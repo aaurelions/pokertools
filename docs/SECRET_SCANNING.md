@@ -19,10 +19,9 @@ configuration, documentation or examples are excluded. The default scanner's
 dependency/binary skips still apply; generated release output is not exempted by
 our policy.
 
-Other exceptions require **both** an exact path and reviewed match: one empty
-example setting, a truncated example JWT, a shell environment-variable
-placeholder, two source expressions referencing disposable test settings, and
-the public Anvil account-zero key in named isolated fixtures. The Anvil key is
+Other exceptions require **both** an exact path and reviewed value: the public
+Anvil account-zero key and deterministic MockUSDC deployment address in named
+isolated fixtures. The Anvil key is
 public and must never hold valuable assets. An unrelated key in the same fixture
 is not allowed. Canary tests verify new secrets remain detectable in all these
 first-party categories, including logs.

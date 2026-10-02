@@ -170,8 +170,8 @@ export async function buildApp() {
         return;
       }
       request.principal = principal;
-      // Compatibility shim: routes that predate principals still read
-      // request.user.userId. Service identities have no session (empty jti).
+      // Route identity uses the principal ID for both credential kinds.
+      // SERVICE credentials have no wallet session (empty jti).
       request.user = { userId: principal.id, jti: "", address: undefined };
       return;
     }
