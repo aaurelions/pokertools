@@ -198,6 +198,11 @@ describe("PokerClient generic public endpoints", () => {
       );
     });
 
+    it("rejects a malformed credential id before any network call", async () => {
+      await expect(client.revokeServiceCredential("not a credential id!")).rejects.toThrow();
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
     it("rejects a revoke response that does not assert success", async () => {
       mockFetch.mockResolvedValueOnce(ok({ success: false }));
 

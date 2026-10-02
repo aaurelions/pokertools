@@ -8,6 +8,7 @@
 
 // Main exports
 export { PokerClient } from "./client";
+export { CompetitionClient } from "./competition-client";
 export { PokerSocket } from "./socket";
 
 // Auth helpers
@@ -102,6 +103,33 @@ export type {
   ServiceCredentialSummary,
   ListServiceCredentialsResponse,
   RevokeServiceCredentialResponse,
+  // Canonical generic competitions
+  Competition,
+  CompetitionMode,
+  CompetitionStatus,
+  CompetitionEntryState,
+  CompetitionPrizeStatus,
+  CompetitionAssetAmount,
+  CompetitionEntrant,
+  CompetitionEntrantSpec,
+  CompetitionEntryPayer,
+  CompetitionEntryTerms,
+  CompetitionPrizeTerms,
+  CompetitionTerms,
+  CompetitionPlacement,
+  CompetitionSeatAssignment,
+  AgentTableScope,
+  CreateCompetitionRequest,
+  CreateCompetitionResponse,
+  GetCompetitionResponse,
+  OptInCompetitionRequest,
+  OptInCompetitionResponse,
+  StartCompetitionRequest,
+  StartCompetitionResponse,
+  SettleCompetitionRequest,
+  SettleCompetitionResponse,
+  IssueAgentCredentialRequest,
+  IssuedAgentCredential,
   // Canonical finance (atomic decimal strings only)
   Asset,
   AssetStatus,

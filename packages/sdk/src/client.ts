@@ -60,6 +60,7 @@ import {
   ReplayFrameSchema,
   CreateServiceCredentialRequestSchema,
   CreatedServiceCredentialSchema,
+  CredentialIdSchema,
   ListServiceCredentialsResponseSchema,
   RevokeServiceCredentialResponseSchema,
   GetTablesResponseSchema,
@@ -84,58 +85,7 @@ import {
 } from "@pokertools/types";
 
 import { PokerSDKConfig, PokerSDKError } from "./types";
-
-/**
- * Default configuration values
- */
-const DEFAULT_CONFIG = {
-  timeout: 30000,
-  retry: {
-    count: 3,
-    delay: 1000,
-    backoff: 2,
-  },
-};
-
-/**
- * A body is safe to replay automatically only when it carries a stable
- * server-recognized identity field. Replays reuse the identical serialized
- * bytes, so a lost response never produces a second logical mutation.
- */
-function hasStableOperationId(body: unknown): boolean {
-  if (typeof body !== "object" || body === null) return false;
-  const record = body as Record<string, unknown>;
-
-  if (typeof record.idempotencyKey === "string" && record.idempotencyKey.length > 0) {
-    return true;
-  }
-  // Canonical action submission: requestId is the idempotency identity.
-  if (typeof record.requestId === "string" && record.requestId.length > 0) {
-    return true;
-  }
-  // EIP-712 withdrawal submission: the signed intent identity is canonical.
-  const intent = record.intent;
-  if (typeof intent === "object" && intent !== null) {
-    const i = intent as Record<string, unknown>;
-    if (
-      typeof i.intentId === "string" &&
-      i.intentId.length > 0 &&
-      typeof i.nonce === "number" &&
-      Number.isInteger(i.nonce)
-    ) {
-      return true;
-    }
-  }
-  // Exact deposit log identity (assetId, txHash, logIndex).
-  if (
-    typeof record.txHash === "string" &&
-    typeof record.logIndex === "number" &&
-    Number.isInteger(record.logIndex)
-  ) {
-    return true;
-  }
-  return false;
-}
+import { PokerHttpTransport } from "./transport";
 
 /**
  * PokerClient - Main HTTP client for PokerTools API
@@ -161,25 +111,10 @@ function hasStableOperationId(body: unknown): boolean {
  * ```
  */
 export class PokerClient {
-  private readonly baseUrl: string;
-  private readonly timeout: number;
-  private readonly retry: Required<NonNullable<PokerSDKConfig["retry"]>>;
-  private readonly fetchFn: typeof fetch;
-  private readonly debug: boolean;
-
-  private token: string | null;
+  private readonly transport: PokerHttpTransport;
 
   constructor(config: PokerSDKConfig) {
-    this.baseUrl = config.baseUrl.replace(/\/$/, "");
-    this.timeout = config.timeout ?? DEFAULT_CONFIG.timeout;
-    this.retry = {
-      count: config.retry?.count ?? DEFAULT_CONFIG.retry.count,
-      delay: config.retry?.delay ?? DEFAULT_CONFIG.retry.delay,
-      backoff: config.retry?.backoff ?? DEFAULT_CONFIG.retry.backoff,
-    };
-    this.fetchFn = config.fetch ?? globalThis.fetch.bind(globalThis);
-    this.debug = config.debug ?? false;
-    this.token = config.token ?? null;
+    this.transport = new PokerHttpTransport(config);
   }
 
   // ============================================================================
@@ -193,21 +128,21 @@ export class PokerClient {
    * tokens; the transport does not distinguish them.
    */
   setToken(token: string | null): void {
-    this.token = token;
+    this.transport.setToken(token);
   }
 
   /**
    * Get current token
    */
   getToken(): string | null {
-    return this.token;
+    return this.transport.getToken();
   }
 
   /**
    * Check if client is authenticated
    */
   isAuthenticated(): boolean {
-    return this.token !== null;
+    return this.transport.getToken() !== null;
   }
 
   // ============================================================================
@@ -229,7 +164,7 @@ export class PokerClient {
     const parsed = LoginRequestSchema.parse(request);
     const response = await this.request<unknown>("POST", "/auth/login", parsed);
     const result = LoginResponseSchema.parse(response);
-    this.token = result.token;
+    this.transport.setToken(result.token);
     return result;
   }
 
@@ -238,7 +173,7 @@ export class PokerClient {
    */
   async logout(): Promise<void> {
     await this.request("POST", "/auth/logout");
-    this.token = null;
+    this.transport.setToken(null);
   }
 
   /**
@@ -288,9 +223,10 @@ export class PokerClient {
    * both REST and WebSocket use of the credential.
    */
   async revokeServiceCredential(credentialId: CredentialId): Promise<void> {
+    const parsed = CredentialIdSchema.parse(credentialId);
     const response = await this.request<unknown>(
       "POST",
-      `/auth/service-credentials/${credentialId}/revoke`
+      `/auth/service-credentials/${encodeURIComponent(parsed)}/revoke`
     );
     RevokeServiceCredentialResponseSchema.parse(response);
   }
@@ -832,11 +768,12 @@ export class PokerClient {
   }
 
   /**
-   * Make HTTP request with retry logic
+   * Make HTTP request with retry logic.
    *
-   * `options.allowStatus` lists non-2xx status codes whose bodies are still
-   * typed responses (e.g. `/ready` returns 503 with the canonical readiness
-   * payload). Those statuses resolve instead of throwing and are never retried.
+   * Delegates to the shared {@link PokerHttpTransport}; `options.allowStatus`
+   * lists non-2xx status codes whose bodies are still typed responses (e.g.
+   * `/ready` returns 503 with the canonical readiness payload). Those statuses
+   * resolve instead of throwing and are never retried.
    */
   private async request<T>(
     method: string,
@@ -844,110 +781,6 @@ export class PokerClient {
     body?: unknown,
     options?: { allowStatus?: readonly number[] }
   ): Promise<T> {
-    const url = `${this.baseUrl}${path}`;
-    const headers: Record<string, string> = { Accept: "application/json" };
-    const serializedBody = body === undefined ? undefined : JSON.stringify(body);
-    if (serializedBody !== undefined) headers["Content-Type"] = "application/json";
-
-    if (this.token) {
-      headers.Authorization = `Bearer ${this.token}`;
-    }
-
-    // Reads are bounded by config. Mutations retry only when the body carries
-    // a stable requestId / idempotency identity, and the exact serialized bytes
-    // are replayed so a lost response cannot create a second mutation.
-    const canRetry = method === "GET" || hasStableOperationId(body);
-    const retryCount = canRetry ? this.retry.count : 0;
-    let lastError: Error | null = null;
-
-    for (let attempt = 0; attempt <= retryCount; attempt++) {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-      try {
-        if (this.debug) {
-          console.log(`[PokerSDK] ${method} ${path}`);
-        }
-
-        const response = await this.fetchFn(url, {
-          method,
-          headers,
-          body: serializedBody,
-          signal: controller.signal,
-        });
-
-        // Handle 304 Not Modified
-        if (response.status === 304) {
-          throw new PokerSDKError("Not Modified", "NOT_MODIFIED", 304);
-        }
-
-        // Handle non-2xx responses
-        if (!response.ok && !options?.allowStatus?.includes(response.status)) {
-          const errorData = (await response.json().catch(() => ({}))) as {
-            message?: string;
-            error?: string;
-            code?: string;
-          };
-
-          throw new PokerSDKError(
-            errorData.message ?? errorData.error ?? `HTTP ${response.status}`,
-            errorData.code ?? errorData.error ?? "HTTP_ERROR",
-            response.status,
-            errorData
-          );
-        }
-
-        if (response.status === 204 || response.status === 205) return undefined as T;
-        const data = (await response.json()) as T;
-
-        if (this.debug) {
-          console.log(`[PokerSDK] Response: ${response.status}`);
-        }
-
-        return data;
-      } catch (error) {
-        clearTimeout(timeoutId);
-        lastError = error as Error;
-        if (error instanceof PokerSDKError && error.statusCode === 304) throw error;
-
-        // Don't retry client errors (4xx) except rate limiting
-        if (error instanceof PokerSDKError) {
-          if (
-            error.statusCode &&
-            error.statusCode >= 400 &&
-            error.statusCode < 500 &&
-            error.statusCode !== 429
-          ) {
-            throw error;
-          }
-        }
-
-        // Don't retry on abort
-        if (controller.signal.aborted || (error instanceof Error && error.name === "AbortError")) {
-          throw new PokerSDKError("Request timeout", "TIMEOUT", undefined, {
-            timeout: this.timeout,
-          });
-        }
-
-        // Retry with backoff
-        if (attempt < retryCount) {
-          const delay = this.retry.delay * Math.pow(this.retry.backoff, attempt);
-          if (this.debug) {
-            console.log(`[PokerSDK] Retry ${attempt + 1}/${this.retry.count} in ${delay}ms`);
-          }
-          await this.sleep(delay);
-        }
-      } finally {
-        clearTimeout(timeoutId);
-      }
-    }
-
-    throw lastError ?? new PokerSDKError("Request failed", "REQUEST_FAILED");
-  }
-
-  /**
-   * Sleep helper
-   */
-  private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+    return this.transport.request<T>(method, path, body, options);
   }
 }
