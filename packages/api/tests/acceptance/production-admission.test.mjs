@@ -99,7 +99,7 @@ test(
       // cases must exit before migration/network access, even with no network.
       for (const [name, value, code] of [
         ["ENABLE_TEST_ROUTES", "true", "TEST_ROUTES_NOT_ALLOWED_IN_PRODUCTION"],
-        ["DATABASE_URL", "file:test.db", "PRODUCTION_REQUIRES_POSTGRESQL"],
+        ["DATABASE_URL", "file:test.db", "Production requires a PostgreSQL DATABASE_URL."],
         ...[
           "WALLET_XPRIV_ENCRYPTION_SECRET",
           "WALLET_XPRIV_ENCRYPTION_SECRET_FILE",
@@ -141,7 +141,11 @@ test(
             { timeout: 15_000 }
           );
         } catch (error) {
-          rejected = typeof error.stderr === "string" && error.stderr.includes(code);
+          const output = String(error.stdout ?? "") + String(error.stderr ?? "");
+          rejected =
+            error.code === 1 &&
+            output.includes(code) &&
+            !output.includes("Running PostgreSQL production migrations");
         }
         assert(rejected, `Image entrypoint did not reject ${name} with ${code}`);
       }
