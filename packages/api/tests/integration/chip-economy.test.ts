@@ -4,6 +4,7 @@ import { createPrismaClient } from "../../src/utils/prisma-client.js";
 import { FinancialManager } from "../../src/services/financial-manager.js";
 import { computeTournamentPayouts } from "../../src/utils/tournaments.js";
 import { InsufficientFundsError } from "../../src/utils/errors.js";
+import type { Prisma } from "../../generated/prisma/index.js";
 
 /**
  * PLAY_CHIPS core + exact ASSET policy integration.
@@ -15,6 +16,34 @@ import { InsufficientFundsError } from "../../src/utils/errors.js";
 
 const prisma = createPrismaClient();
 const financialManager = new FinancialManager(prisma);
+
+/**
+ * Bare tables created by this suite intentionally carry no engine snapshot
+ * (`config: {}`) because the chip economy is exercised directly against the
+ * database. They must never remain listable after the suite: `GET /tables`
+ * schema-validates every listed row, and a config without `smallBlind` /
+ * `bigBlind` fails that contract. Track the ids created by this run and mark
+ * them CLOSED in teardown. Closing (rather than deleting) preserves the chip
+ * and atomic journals that reference the table id.
+ */
+const createdTableIds = new Set<string>();
+
+/** Name prefixes owned exclusively by this suite, used to retire stale rows. */
+const SUITE_TABLE_NAME_PREFIXES = [
+  "econ_table_",
+  "econ_tournament_table_",
+  "asset_table_",
+  "asset_concurrent_table_",
+  "asset_settle_table_",
+  "asset_tournament_table_",
+  "inexact_table_",
+] as const;
+
+async function createTrackedTable(data: Prisma.TableCreateArgs["data"]) {
+  const table = await prisma.table.create({ data });
+  createdTableIds.add(table.id);
+  return table;
+}
 
 async function createPrincipal(): Promise<string> {
   const suffix = randomUUID();
@@ -28,9 +57,7 @@ async function createPrincipal(): Promise<string> {
 }
 
 async function createCashTable() {
-  return prisma.table.create({
-    data: { name: `econ_table_${randomUUID()}`, mode: "CASH", config: {} },
-  });
+  return createTrackedTable({ name: `econ_table_${randomUUID()}`, mode: "CASH", config: {} });
 }
 
 async function createTournament(
@@ -40,8 +67,10 @@ async function createTournament(
   payoutPercentages: number[] = [100]
 ) {
   const suffix = randomUUID();
-  const table = await prisma.table.create({
-    data: { name: `econ_tournament_table_${suffix}`, mode: "TOURNAMENT", config: {} },
+  const table = await createTrackedTable({
+    name: `econ_tournament_table_${suffix}`,
+    mode: "TOURNAMENT",
+    config: {},
   });
   return prisma.tournament.create({
     data: {
@@ -63,6 +92,20 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // Retire this run's tables plus any stale WAITING rows left by earlier runs
+  // of this suite. Strictly scoped to this suite's own table ids and name
+  // prefixes so unrelated tables are never touched.
+  const staleRows: Prisma.TableWhereInput[] = SUITE_TABLE_NAME_PREFIXES.map((prefix) => ({
+    status: "WAITING",
+    name: { startsWith: prefix },
+  }));
+  await prisma.table.updateMany({
+    where: {
+      OR: [{ id: { in: [...createdTableIds] } }, ...staleRows],
+    },
+    data: { status: "CLOSED" },
+  });
+
   await prisma.$disconnect();
 });
 
@@ -334,13 +377,11 @@ describe("ASSET-backed exact policy", () => {
   it("converts exactly into a per-principal reserve and persists the reference", async () => {
     const principal = await createPrincipal();
     const policy = await createActivePolicy(1n, ONE_CHIP);
-    const table = await prisma.table.create({
-      data: {
-        name: `asset_table_${randomUUID()}`,
-        mode: "CASH",
-        config: {},
-        economicPolicyId: policy.id,
-      },
+    const table = await createTrackedTable({
+      name: `asset_table_${randomUUID()}`,
+      mode: "CASH",
+      config: {},
+      economicPolicyId: policy.id,
     });
     await fundAtomic(principal, (3n * ONE_CHIP).toString());
 
@@ -379,13 +420,11 @@ describe("ASSET-backed exact policy", () => {
   it("rejects a policy that cannot represent one chip as an integer atomic amount", async () => {
     const principal = await createPrincipal();
     const policy = await createActivePolicy(3n, 1000n);
-    const table = await prisma.table.create({
-      data: {
-        name: `inexact_table_${randomUUID()}`,
-        mode: "CASH",
-        config: {},
-        economicPolicyId: policy.id,
-      },
+    const table = await createTrackedTable({
+      name: `inexact_table_${randomUUID()}`,
+      mode: "CASH",
+      config: {},
+      economicPolicyId: policy.id,
     });
     await fundAtomic(principal, "10000000");
 
@@ -402,13 +441,11 @@ describe("ASSET-backed exact policy", () => {
   it("does not duplicate conversions under concurrent replay", async () => {
     const principal = await createPrincipal();
     const policy = await createActivePolicy(1n, ONE_CHIP);
-    const table = await prisma.table.create({
-      data: {
-        name: `asset_concurrent_table_${randomUUID()}`,
-        mode: "CASH",
-        config: {},
-        economicPolicyId: policy.id,
-      },
+    const table = await createTrackedTable({
+      name: `asset_concurrent_table_${randomUUID()}`,
+      mode: "CASH",
+      config: {},
+      economicPolicyId: policy.id,
     });
     await fundAtomic(principal, (10n * ONE_CHIP).toString());
     const key = `concurrent-buy:${principal}`;
@@ -439,13 +476,11 @@ describe("ASSET-backed exact policy", () => {
     const loser = await createPrincipal();
     const house = await createPrincipal();
     const policy = await createActivePolicy(1n, ONE_CHIP);
-    const table = await prisma.table.create({
-      data: {
-        name: `asset_settle_table_${randomUUID()}`,
-        mode: "CASH",
-        config: {},
-        economicPolicyId: policy.id,
-      },
+    const table = await createTrackedTable({
+      name: `asset_settle_table_${randomUUID()}`,
+      mode: "CASH",
+      config: {},
+      economicPolicyId: policy.id,
     });
     await fundAtomic(winner, (1000n * ONE_CHIP).toString());
     await fundAtomic(loser, (1000n * ONE_CHIP).toString());
@@ -513,13 +548,11 @@ describe("ASSET-backed exact policy", () => {
     const winner = await createPrincipal();
     const loser = await createPrincipal();
     const policy = await createActivePolicy(1n, ONE_CHIP);
-    const table = await prisma.table.create({
-      data: {
-        name: `asset_tournament_table_${randomUUID()}`,
-        mode: "TOURNAMENT",
-        config: {},
-        economicPolicyId: policy.id,
-      },
+    const table = await createTrackedTable({
+      name: `asset_tournament_table_${randomUUID()}`,
+      mode: "TOURNAMENT",
+      config: {},
+      economicPolicyId: policy.id,
     });
     const tournament = await prisma.tournament.create({
       data: {

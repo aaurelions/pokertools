@@ -99,6 +99,13 @@ describe("Transactional seating / financial race regressions", () => {
   });
 
   afterAll(async () => {
+    // Bare ASSET tables created here deliberately have no engine config; a
+    // mid-test failure can leave them WAITING and therefore listable, where
+    // GET /tables schema-validates every row. Retire this suite's rows only.
+    await ctx.app.prisma.table.updateMany({
+      where: { status: "WAITING", name: { startsWith: "asset_seat_" } },
+      data: { status: "CLOSED" },
+    });
     await runCleanup(ctx.cleanup);
   });
 
