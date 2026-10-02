@@ -251,16 +251,10 @@ export class FinancialIncidentService {
           }
 
           // Route ACTIVE commit: only reachable after every health recheck above
-          // passed in the same transaction.
-          if (incident.assetId) {
-            const asset = await tx.asset.findUnique({
-              where: { id: incident.assetId },
-              select: { id: true, status: true },
-            });
-            if (asset && asset.status === "FROZEN") {
-              await tx.asset.update({ where: { id: asset.id }, data: { status: "ACTIVE" } });
-            }
-          }
+          // passed in the same transaction. Asset-scoped incidents unfreeze that
+          // asset; chain-scoped (route-wide) incidents unfreeze every frozen
+          // asset on the chain so the freeze cannot be stranded.
+          await this.unfreezeRoute(tx, incident);
 
           // Durable optimistic state-version transition: exactly one resolver
           // wins; a racing resolver aborts and retries against fresh state.
@@ -292,6 +286,37 @@ export class FinancialIncidentService {
       }
     }
     throw lastError;
+  }
+
+  /**
+   * Unfreeze the route an incident froze: the asset for an asset-scoped
+   * incident, or every frozen asset on the chain for a chain-scoped incident.
+   * Runs inside the resolution transaction after all health rechecks passed.
+   */
+  private async unfreezeRoute(
+    tx: Prisma.TransactionClient,
+    incident: FinancialIncident
+  ): Promise<void> {
+    if (incident.assetId) {
+      const asset = await tx.asset.findUnique({
+        where: { id: incident.assetId },
+        select: { id: true, status: true },
+      });
+      if (asset && asset.status === "FROZEN") {
+        await tx.asset.update({ where: { id: asset.id }, data: { status: "ACTIVE" } });
+      }
+      return;
+    }
+    if (incident.chainId !== null) {
+      const assets = await tx.asset.findMany({
+        where: { chainId: incident.chainId, status: "FROZEN" },
+        select: { id: true },
+        orderBy: { id: "asc" },
+      });
+      for (const asset of assets) {
+        await tx.asset.update({ where: { id: asset.id }, data: { status: "ACTIVE" } });
+      }
+    }
   }
 
   /**
@@ -339,8 +364,11 @@ export class FinancialIncidentService {
       : incident.chainId !== null
         ? (
             await tx.asset.findMany({
-              where: { chainId: incident.chainId, status: "ACTIVE" },
+              // Every asset on the chain, frozen or not: a route-wide freeze
+              // must prove reconciliation for the whole route before unfreezing.
+              where: { chainId: incident.chainId },
               select: { id: true },
+              orderBy: { id: "asc" },
             })
           ).map((asset) => asset.id)
         : [];

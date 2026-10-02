@@ -21,7 +21,7 @@ import {
   PrismaIncidentStore,
   PrismaWithdrawalStore,
 } from "./core/prisma-store.js";
-import type { PrismaClient } from "../../api/generated/prisma/index.js";
+import type { PrismaClient } from "@pokertools/api/database";
 import type { RpcQuorumReader, TreasuryAccounting } from "./core/types.js";
 import { SYSTEM_CLOCK } from "./core/types.js";
 import {

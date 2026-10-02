@@ -805,6 +805,58 @@ describe("Canonical atomic multi-asset finance", () => {
       expect(asset.status).toBe("ACTIVE");
     });
 
+    it("opens a critical incident and freezes the whole chain atomically, then resolves it", async () => {
+      const ledger = ledgerFor();
+      const incidents = new FinancialIncidentService(app.prisma, ledger);
+      const other = await createAsset();
+
+      const result = await incidents.openCriticalIncidentAndFreeze({
+        kind: "CUSTODY_FAILURE",
+        severity: "CRITICAL",
+        chainId: CHAIN_ID,
+        evidence: { reason: "route-wide freeze" },
+        freezeChainWide: true,
+      });
+      expect(result.frozenAssetIds).toContain(assetId);
+      expect(result.frozenAssetIds).toContain(other.id);
+      expect((await prisma.asset.findUniqueOrThrow({ where: { id: other.id } })).status).toBe(
+        "FROZEN"
+      );
+
+      // Resolution requires fresh reconciliation for every asset on the chain.
+      const chainAssets = await prisma.asset.findMany({
+        where: { chainId: CHAIN_ID },
+        select: { id: true },
+      });
+      for (const chainAsset of chainAssets) {
+        await incidents.recordReconciliation({
+          assetId: chainAsset.id,
+          chainId: CHAIN_ID,
+          observedAtomic: "0",
+          ledgerAtomic: "0",
+          blockNumber: "3",
+          evidence: { block: 3 },
+        });
+      }
+
+      const resolved = await incidents.resolve({
+        incidentId: result.incident.id,
+        operatorId: userId,
+        operatorEvidence: { checked: true },
+        readinessCheck: async () => undefined,
+      });
+      expect(resolved.status).toBe("RESOLVED");
+      expect((await prisma.asset.findUniqueOrThrow({ where: { id: assetId } })).status).toBe(
+        "ACTIVE"
+      );
+      expect((await prisma.asset.findUniqueOrThrow({ where: { id: other.id } })).status).toBe(
+        "ACTIVE"
+      );
+
+      await prisma.treasuryReconciliation.deleteMany({ where: { assetId: other.id } });
+      await prisma.asset.delete({ where: { id: other.id } }).catch(() => undefined);
+    });
+
     it("refuses resolution without a readiness check (no default success)", async () => {
       const incidents = new FinancialIncidentService(app.prisma, ledgerFor());
       const incident = await incidents.open({

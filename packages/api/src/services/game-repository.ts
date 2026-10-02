@@ -217,11 +217,21 @@ export async function listGameEvents(
   tableId: string,
   options: { fromEventSeq?: number; toEventSeq?: number; take?: number } = {}
 ) {
+  // Both bounds must be expressed in one `eventSeq` filter: spreading two
+  // separate filters would let the later key overwrite the earlier one and
+  // silently drop the lower bound.
+  const eventSeq =
+    options.fromEventSeq !== undefined || options.toEventSeq !== undefined
+      ? {
+          ...(options.fromEventSeq !== undefined ? { gte: options.fromEventSeq } : {}),
+          ...(options.toEventSeq !== undefined ? { lte: options.toEventSeq } : {}),
+        }
+      : undefined;
+
   return client.gameEvent.findMany({
     where: {
       tableId,
-      ...(options.fromEventSeq !== undefined ? { eventSeq: { gte: options.fromEventSeq } } : {}),
-      ...(options.toEventSeq !== undefined ? { eventSeq: { lte: options.toEventSeq } } : {}),
+      ...(eventSeq !== undefined ? { eventSeq } : {}),
     },
     orderBy: { eventSeq: "asc" },
     take: options.take ?? 500,

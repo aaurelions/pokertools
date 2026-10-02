@@ -17,7 +17,7 @@ import type {
   TxHash,
   WithdrawalStatus,
 } from "@pokertools/types";
-import type { IncidentKind } from "../../../api/generated/prisma/index.js";
+import type { IncidentKind } from "@pokertools/types";
 
 // ============================================================================
 // Lifecycle states

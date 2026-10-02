@@ -22,7 +22,7 @@ import type {
   Prisma,
   PrismaClient,
   WithdrawalIntentRecord,
-} from "../../../api/generated/prisma/index.js";
+} from "@pokertools/api/database";
 import { KeyedMutex } from "./in-memory-store.js";
 import type { AssetStatus } from "@pokertools/types";
 import type {

@@ -1,6 +1,6 @@
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "../../../api/generated/prisma/index.js";
+import { PrismaClient } from "@pokertools/api/database";
 
 type PrismaClientOptions = Omit<
   NonNullable<ConstructorParameters<typeof PrismaClient>[0]>,

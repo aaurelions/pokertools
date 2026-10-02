@@ -2,9 +2,13 @@ import {
   CanonicalActionRequestSchema,
   HealthResponseSchema,
   ReadinessResponseSchema,
+  IncidentKindSchema,
 } from "../src";
 
 describe("operational and action boundaries", () => {
+  test("the incident protocol represents ambiguous broadcasts retained by custody", () => {
+    expect(IncidentKindSchema.parse("AMBIGUOUS_BROADCAST")).toBe("AMBIGUOUS_BROADCAST");
+  });
   test("liveness makes no financial-readiness assertion", () => {
     expect(HealthResponseSchema.parse({ status: "ok", timestamp: 1 })).toEqual({
       status: "ok",

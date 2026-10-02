@@ -405,9 +405,13 @@ authoritative.
 
 - Implementation commit: **`b00de49337d58a741fb37d0daff7b0a9cd4a23f0`**
   (`feat!: converge on canonical next-major architecture`).
-- Evidence/admission commit: the commit containing this section (compiled
-  `CONVERGENCE_EVIDENCE` in `@pokertools/types` references the implementation
-  commit and every mandatory acceptance result).
+- Evidence/admission commit: `6f1ac07` (compiled `CONVERGENCE_EVIDENCE` in
+  `@pokertools/types` references the implementation commit and every mandatory
+  acceptance result).
+- Post-verification fix: the commit containing this line preserves the replay
+  event lower bound in `listGameEvents` (a compound `eventSeq` filter previously
+  let the upper bound overwrite the lower bound). Canonical acceptance was
+  re-run after the fix: 16/16.
 - Recoverable handoff checkpoints remain: `90d867e`, `820bf90`, `9f35a7d`,
   `f81a5cd`, `0b68c62`, `c21f779`. No history was reset or discarded.
 

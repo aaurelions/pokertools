@@ -14,7 +14,7 @@
  *
  * Nothing here reads or writes private key material to the database.
  */
-import type { PrismaClient } from "../../../api/generated/prisma/index.js";
+import type { PrismaClient } from "@pokertools/api/database";
 import type {
   AssetRegistry,
   Clock,
