@@ -11,6 +11,7 @@ import type { FinancialIncident, WithdrawalIntentRecord } from "../../../generat
 import { AtomicLedger } from "../../services/atomic-ledger.js";
 import { FinancialIntentService } from "../../services/financial-intents.js";
 import { FinancialIncidentService } from "../../services/financial-incidents.js";
+import { IncidentReadinessError } from "../../services/incident-readiness.js";
 import { registerDepositRoutes, toDepositClaimWire } from "./canonical-deposits.js";
 import { AuthorizationError, NotFoundError } from "../../utils/errors.js";
 
@@ -240,14 +241,21 @@ export const financeRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(503).send({ error: "READINESS_CHECK_UNAVAILABLE" });
       }
 
-      const resolved = await incidents.resolve({
-        incidentId: id,
-        operatorId: operator,
-        operatorEvidence: body.operatorEvidence as Record<string, unknown>,
-        readinessCheck,
-      });
+      try {
+        const resolved = await incidents.resolve({
+          incidentId: id,
+          operatorId: operator,
+          operatorEvidence: body.operatorEvidence as Record<string, unknown>,
+          readinessCheck,
+        });
 
-      return toIncidentWire(resolved);
+        return toIncidentWire(resolved);
+      } catch (error) {
+        if (error instanceof IncidentReadinessError) {
+          return reply.code(503).send({ code: error.code, error: error.message });
+        }
+        throw error;
+      }
     }
   );
 

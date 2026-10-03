@@ -30,8 +30,8 @@
  *    - settle disposes the reserved prize exactly once: PAID to a WALLET winner,
  *      RELEASED to the sponsor when the winner is SERVICE;
  *    - a durable crash/restart between the backing tournament settlement and
- *      the competition disposition is reproduced through the public tournament
- *      settle route, then the API process is closed and rebooted; the competition
+ *      the competition disposition is reproduced through the real internal
+ *      tournament lifecycle, then the API process is closed and rebooted; the competition
  *      settle then completes the single disposition from durable state only,
  *      under concurrent settle retries;
  *    - cancellation refunds the held entry to the payer and releases the prize
@@ -58,6 +58,7 @@ import type {
   SettleCompetitionResponse,
 } from "@pokertools/types";
 import { AtomicLedger } from "../../../api/src/services/atomic-ledger.js";
+import { settleTournament } from "../../../api/src/services/tournament-lifecycle.js";
 import { createAssetBackedCustodyQuorumReader } from "../../../api/src/finance-core.js";
 import { createPrismaClient } from "../../../api/src/utils/prisma-client.js";
 import { staticAccountResolver } from "../../../custody/src/core/viem-ports.js";
@@ -739,12 +740,18 @@ describe("competition ASSET acceptance (real API + fresh PostgreSQL/Redis + live
     const liveWinnerId = liveWinnerFromState(tableAfterPlay!);
     expect(liveWinnerId).not.toBeNull();
 
-    // Durable crash boundary: settle the BACKING tournament through the public
-    // tournament route (the sponsor is its ADMIN creator). This produces exactly
+    // The public tournament route must not bypass competition disposition.
+    await expect(
+      sponsor.client.settleTournament(competitionRow.tournamentId)
+    ).rejects.toMatchObject({
+      code: "COMPETITION_MANAGED_TOURNAMENT",
+    });
+    // Durable crash boundary: run the real backing tournament lifecycle, exactly
+    // as competition settlement does before its disposition transaction. This produces
     // the durable state a crash between the tournament settlement commit and the
     // competition disposition transaction leaves: tournament FINISHED,
     // competition still RUNNING with the prize reserved.
-    await sponsor.client.settleTournament(competitionRow.tournamentId);
+    await settleTournament(app, competitionRow.tournamentId, sponsor.principalId);
     const tournamentAfter = await prisma.tournament.findUniqueOrThrow({
       where: { id: competitionRow.tournamentId },
     });
