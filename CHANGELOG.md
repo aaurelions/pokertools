@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-03
+
 ### Added
 
 - Platform-derived `settlementReady` boolean on every competition projection: true only when the authoritative director state is complete (FINISHED, or exactly one ACTIVE entrant with chips and all others settled-eliminated at a completed-hand boundary), false during in-flight hands, unsettled all-ins and unreconciled eliminations — no local stack heuristics or exception polling needed.
@@ -649,6 +651,7 @@ Given a version number MAJOR.MINOR.PATCH:
 - [NPM: @pokertools/evaluator](https://www.npmjs.com/package/@pokertools/evaluator)
 - [NPM: @pokertools/types](https://www.npmjs.com/package/@pokertools/types)
 
+[2.0.0]: https://github.com/aaurelions/pokertools/compare/v1.0.20...v2.0.0
 [1.0.20]: https://github.com/aaurelions/pokertools/compare/v1.0.19...v1.0.20
 [1.0.19]: https://github.com/aaurelions/pokertools/compare/v1.0.18...v1.0.19
 [1.0.18]: https://github.com/aaurelions/pokertools/compare/v1.0.17...v1.0.18
