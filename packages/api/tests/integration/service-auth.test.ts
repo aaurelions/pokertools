@@ -962,6 +962,7 @@ describe("Service principal auth + scoped authorization", () => {
       url: "/auth/service-credentials",
       headers: { authorization: `Bearer ${admin.token}` },
     });
+    expect(listed.statusCode).toBe(200);
     const row = (
       JSON.parse(listed.body) as {
         credentials: Array<{ id: string; tableId: string | null; revoked: boolean }>;

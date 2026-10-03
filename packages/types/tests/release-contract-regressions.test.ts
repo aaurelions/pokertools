@@ -951,6 +951,14 @@ describe("service credentials: REST exclusivity and resource binding", () => {
       ServiceCredentialSummarySchema.safeParse({ ...summary, tableId: null }),
       "tableId"
     );
+    expect(
+      ServiceCredentialSummarySchema.safeParse({
+        ...summary,
+        tableId: null,
+        revoked: true,
+        revokedAt: ISO,
+      }).success
+    ).toBe(true);
     // A summary must never leak the plaintext token.
     expect(
       ServiceCredentialSummarySchema.safeParse({ ...summary, token: "ptsvc_leak" }).success

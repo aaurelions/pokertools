@@ -409,7 +409,7 @@ export class FinancialIntentService {
     blockNumber?: string | null;
     blockHash?: string | null;
     confirmations?: number;
-    provenance?: "DIRECT_TREASURY" | "SWEEP" | "MIGRATION";
+    provenance?: "DIRECT_TREASURY";
   }): Promise<DepositClaimRecord> {
     const assetId = AssetIdSchema.parse(params.assetId);
     const requestId = `deposit:${params.chainId}:${params.txHash}:${params.logIndex}`;

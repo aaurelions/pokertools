@@ -130,12 +130,18 @@ export type CreateServiceCredentialRequestWire = z.infer<
 /**
  * Shape invariant shared by every credential response: an orchestration
  * credential carries exactly `competition:orchestrate` and no resource binding,
- * while every other credential carries table scopes only and is bound to a
- * non-empty `tableId`. This mirrors the API's create/rotate guards so a
+ * while every active table credential is bound to a non-empty `tableId`.
+ * Revoked summaries may retain a historical unbound table grant.
+ * This mirrors the API's create/rotate guards so an active
  * response can never describe a wildcard or mixed-authority credential.
  */
 function refineServiceCredentialShape(
-  credential: { scopes: readonly ServiceScope[]; tableId: string | null; seat: number | null },
+  credential: {
+    scopes: readonly ServiceScope[];
+    tableId: string | null;
+    seat: number | null;
+    revoked?: boolean;
+  },
   ctx: z.RefinementCtx
 ): void {
   if (credential.scopes.includes("competition:orchestrate")) {
@@ -162,7 +168,7 @@ function refineServiceCredentialShape(
     }
     return;
   }
-  if (credential.tableId === null) {
+  if (credential.tableId === null && credential.revoked !== true) {
     ctx.addIssue({
       code: "custom",
       path: ["tableId"],
