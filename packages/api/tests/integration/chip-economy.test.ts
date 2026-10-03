@@ -291,7 +291,7 @@ describe("tournament chip escrow", () => {
     expect(await financialManager.getTournamentPool(tournament.id)).toBe(202n);
 
     const payouts = computeTournamentPayouts(202, [60, 40]);
-    expect(payouts.reduce((sum, amount) => sum + amount, 0)).toBe(202);
+    expect(payouts.reduce((sum, amount) => sum + amount, 0n)).toBe(202n);
     await prisma.$transaction(async (tx) => {
       await financialManager.payoutTournament(tx, first, tournament.id, payouts[0]!, {
         idempotencyKey: `payout:${tournament.id}:${first}`,
@@ -301,7 +301,7 @@ describe("tournament chip escrow", () => {
       });
     });
     // 60% of 202 = 121, 40% = 80, remainder 1 to first => 122 + 80 = 202.
-    expect(payouts).toEqual([122, 80]);
+    expect(payouts).toEqual([122n, 80n]);
     expect(await financialManager.getTournamentPool(tournament.id)).toBe(0n);
     expect((await financialManager.getChipBalances(first)).available).toBe(521n);
     expect((await financialManager.getChipBalances(second)).available).toBe(479n);

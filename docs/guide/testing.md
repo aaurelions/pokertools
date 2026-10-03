@@ -20,13 +20,14 @@ Run a single package's suite with `npm test -w @pokertools/<pkg>`.
 
 Some suites need infrastructure and are not part of `npm test`:
 
-| Command                                               | Prerequisites                                                                 |
-| :---------------------------------------------------- | :---------------------------------------------------------------------------- |
-| `npm run test:canonical -w @pokertools/api`           | Built workspace; Docker provisions disposable PostgreSQL + Redis.             |
-| `npm run test:postgres:migrations -w @pokertools/api` | Docker — the test provisions its own disposable PostgreSQL container.         |
-| `npm run test:postgres:ledger -w @pokertools/api`     | Docker — provisions disposable PostgreSQL; missing Docker fails closed.       |
-| `npm run contracts:test -w @pokertools/custody`       | Foundry (`forge`) and git submodules (`forge-std`, `openzeppelin-contracts`). |
-| `npm run e2e:docker`                                  | Docker + built images.                                                        |
+| Command                                               | Prerequisites                                                                               |
+| :---------------------------------------------------- | :------------------------------------------------------------------------------------------ |
+| `npm run test:canonical -w @pokertools/api`           | Built workspace; Docker provisions disposable PostgreSQL + Redis.                           |
+| `npm run test:postgres:migrations -w @pokertools/api` | Docker — the test provisions its own disposable PostgreSQL container.                       |
+| `npm run test:postgres:ledger -w @pokertools/api`     | Docker — provisions disposable PostgreSQL; missing Docker fails closed.                     |
+| `npm run contracts:test -w @pokertools/custody`       | Foundry (`forge`) and git submodules (`forge-std`, `openzeppelin-contracts`).               |
+| `npm run e2e:docker`                                  | Docker + built images.                                                                      |
+| `npm run e2e:finance`                                 | Docker, Foundry and built workspace; disposable PostgreSQL/Redis and two real Anvil chains. |
 
 CI checks out git submodules recursively so the custody contract tests can build.
 
@@ -113,8 +114,8 @@ verifies configuration rejection, fresh migrations/startup/readiness, no implici
 asset seed, live migration-drift blocking and liveness/readiness separation.
 Funded assets, quorum, custody and reconciliation still require two-chain E2E.
 
-- `packages/evaluator/tests/frequency.test.ts` skips the exhaustive 7-card frequency pass by
-  default to keep CI fast. Run it when changing evaluator core logic:
+- `packages/evaluator/tests/frequency.test.ts` skips the exhaustive 7-card frequency pass in
+  ordinary local runs. CI enables it; run it locally when changing evaluator core logic:
 
   ```bash
   ENABLE_HEAVY_TESTS=true npm test -w @pokertools/evaluator
@@ -122,9 +123,12 @@ Funded assets, quorum, custody and reconciliation still require two-chain E2E.
 
 ## CI wiring
 
-`.github/workflows/ci.yml` checks out submodules recursively, runs `npm run check:boundaries`,
-then `npm run test:coverage` (which enforces every coverage gate in one pass), followed by
-the PostgreSQL acceptance scripts and the benchmarks.
+`.github/workflows/ci.yml` checks out submodules recursively, audits production dependencies,
+scans secrets and verifies scanner canaries, checks package boundaries and public publish
+contents, then runs coverage (including exhaustive evaluator frequencies). PostgreSQL
+migration/model parity, ledger acceptance, canonical PostgreSQL/Redis/HTTP acceptance and
+real local-chain finance acceptance are separate required checks, not substitutes for unit
+coverage. Benchmarks report performance; they do not prove behavioral correctness.
 
 Coverage summary files (`coverage/coverage-summary.json`) are written per package and are
 git-ignored. Vitest configs set `reportOnFailure: true` so a coverage report is still
@@ -133,8 +137,9 @@ emitted when a test fails; thresholds still fail the run.
 ## Conventions
 
 - Add a regression test for every bug fix in the package that owns the logic.
-- Prefer deterministic tests (fake clocks, fake timers, injected ports) over integration
-  tests for financially sensitive paths.
+- Use deterministic unit tests (fake clocks, fake timers, injected ports) to isolate financial
+  branches. Money, persistence and concurrency guarantees also require real PostgreSQL,
+  public HTTP/SDK and chain/custody acceptance at their actual boundaries.
 - Do not run multiple API suites in parallel: they share one SQLite file and Redis DB. The
   API Vitest config pins `pool: "forks"`, `maxWorkers: 1` and `fileParallelism: false`.
 - When a threshold is intentionally changed, update both the package config and the table

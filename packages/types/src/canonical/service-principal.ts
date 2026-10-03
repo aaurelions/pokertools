@@ -22,6 +22,12 @@ import { PrincipalKindSchema } from "./principal";
  * an orchestration principal, and an orchestrator may only provision rosters
  * from, and issue agent credentials for, principals delegated to it. The
  * orchestrator can never mint a credential for an arbitrary SERVICE principal.
+ *
+ * An operator may revoke that delegation at any time. Revocation is durable and
+ * blocks all future roster/credential issuance for the principal, but it
+ * deliberately does not revoke the principal or its already-issued table
+ * credentials. Re-delegation/reassignment is not supported: a different
+ * orchestration owner requires a newly provisioned principal.
  */
 
 /** `POST /auth/service-principals` (operator-only). */
@@ -52,7 +58,16 @@ export const ProvisionedServicePrincipalSchema = z.strictObject({
 });
 export type ProvisionedServicePrincipal = z.infer<typeof ProvisionedServicePrincipalSchema>;
 
-/** `POST /auth/service-credentials/:id/rotate` (operator-only). */
+/**
+ * `POST /auth/service-credentials/:id/rotate` (operator-only).
+ *
+ * Rotation re-keys the credential in place: the durable principal and its
+ * scopes/table/seat restrictions are preserved (this route cannot change them).
+ * `expiresAt` must be in the future when supplied; omitting it preserves the
+ * current expiry. An already-expired credential requires a new future
+ * `expiresAt` to be rotated. Concurrent rotations race on the stored secret
+ * digest: exactly one wins, the losers get 409.
+ */
 export const RotateServiceCredentialRequestSchema = z.strictObject({
   expiresAt: z.string().datetime().optional(),
 });
@@ -66,6 +81,39 @@ export const ServicePrincipalDelegationSchema = z.strictObject({
   createdAt: z.string().datetime(),
 });
 export type ServicePrincipalDelegation = z.infer<typeof ServicePrincipalDelegationSchema>;
+
+/**
+ * `POST /auth/service-principals/:id/delegation/revoke` request (operator-only,
+ * ADMIN wallet). The delegation is identified by the path principal id; the
+ * body is an empty strict object so unknown fields are rejected.
+ *
+ * Revocation is durable and idempotent. It blocks the delegate from rostering
+ * the principal into new competitions or issuing further agent credentials for
+ * it. Policy: it never revokes the principal or any already-issued table
+ * credential — those keep working until they expire or are explicitly revoked.
+ * Re-delegation/reassignment is not supported; provision a new principal and
+ * delegation if a different orchestration principal must own it.
+ *
+ * Operator-only endpoints are intentionally asymmetric with the regular SDK
+ * client surface: embedding them is a deliberate operator integration choice,
+ * never a gameplay capability.
+ */
+export const RevokeServicePrincipalDelegationRequestSchema = z.strictObject({});
+export type RevokeServicePrincipalDelegationRequest = z.infer<
+  typeof RevokeServicePrincipalDelegationRequestSchema
+>;
+
+/** `POST /auth/service-principals/:id/delegation/revoke` response. */
+export const RevokeServicePrincipalDelegationResponseSchema = z.strictObject({
+  success: z.literal(true),
+  servicePrincipalId: PrincipalIdSchema,
+  delegatePrincipalId: PrincipalIdSchema,
+  /** First revocation time; stable across idempotent repeats. */
+  revokedAt: z.string().datetime(),
+});
+export type RevokeServicePrincipalDelegationResponse = z.infer<
+  typeof RevokeServicePrincipalDelegationResponseSchema
+>;
 
 /** Opaque credential reference returned to callers (never the plaintext). */
 export const ServiceCredentialRefSchema = z.strictObject({

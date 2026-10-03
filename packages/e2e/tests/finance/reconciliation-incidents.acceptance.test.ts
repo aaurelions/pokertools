@@ -24,6 +24,7 @@ import {
   mine,
   mintToken,
   revertSnapshot,
+  safeAddress,
   snapshot,
   setNativeBalance,
   transferToken,
@@ -95,7 +96,10 @@ describe("treasury reconciliation incident acceptance (real Prisma custody + API
     const amount = parseUnits("50", 6);
     await mintToken(chain, token.address, ALICE_ADDRESS as Address, amount);
     const receipt = await transferToken(chain, token.address, ALICE_INDEX, TREASURY, amount);
-    const [log] = findTransferLogs(receipt, token.address, { from: ALICE_ADDRESS, to: TREASURY });
+    const [log] = findTransferLogs(receipt, token.address, {
+      from: safeAddress(ALICE_ADDRESS, "alice address"),
+      to: TREASURY,
+    });
     await mine(chain, 1);
     await settle();
     const claim = await claimDeposit(app, alice, {

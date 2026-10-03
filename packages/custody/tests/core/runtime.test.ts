@@ -1,10 +1,9 @@
 /**
  * Canonical custody startup/security contracts.
  *
- * These translate the invariants that used to live in the removed Telegram /
- * derived-wallet payout tests, without reviving the unsafe code paths:
+ * These enforce the isolated signing and configuration boundary:
  *  - the signer is a per-chain treasury key resolved from JSON, not a mnemonic;
- *  - configuration loads with no mnemonic, xpriv or Telegram material;
+ *  - configuration loads with no mnemonic, xpriv or product credentials;
  *  - the API-side xpub derivation boundary (public keys cannot sign) is intact.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -24,7 +23,7 @@ afterEach(() => {
 });
 
 describe("canonical custody signing configuration", () => {
-  it("loads with only DATABASE_URL plus treasury signing JSON and no mnemonic/xpriv/Telegram", async () => {
+  it("loads with only DATABASE_URL plus treasury signing JSON and no mnemonic/xpriv", async () => {
     vi.stubEnv("NODE_ENV", "test");
     vi.stubEnv("DATABASE_URL", "file:./.runtime/workflow-test.db");
     vi.stubEnv("TREASURY_SIGNING_KEYS_JSON", JSON.stringify({ 31337: `0x${"11".repeat(32)}` }));
@@ -34,22 +33,18 @@ describe("canonical custody signing configuration", () => {
       "WALLET_ENCRYPTION_SECRET",
       "WALLET_XPRIV_ENCRYPTION_SECRET",
       "JWT_SECRET",
-      "TELEGRAM_BOT_TOKEN",
-      "TELEGRAM_ADMIN_CHAT_ID",
     ]) {
       vi.stubEnv(name, "");
     }
 
     const { config } = await import("../../src/config.js");
-    // Legacy mnemonic/Telegram/xpriv fields are removed from the canonical
-    // surface entirely: envalid's strict proxy throws when they are accessed.
+    // The configuration surface cannot expose mnemonic/xpriv material:
+    // envalid's strict proxy throws when these fields are accessed.
     for (const removed of [
       "MASTER_MNEMONIC",
       "MASTER_MNEMONIC_FILE",
       "WALLET_ENCRYPTION_SECRET",
       "WALLET_XPRIV_ENCRYPTION_SECRET",
-      "TELEGRAM_BOT_TOKEN",
-      "TELEGRAM_ADMIN_CHAT_ID",
     ]) {
       expect(() => (config as unknown as Record<string, unknown>)[removed]).toThrow();
     }

@@ -22,6 +22,7 @@ import {
   createWalletClient,
   decodeEventLog,
   defineChain,
+  getAddress,
   http,
   parseAbi,
   type Address,
@@ -30,6 +31,7 @@ import {
   type Log,
   type PublicClient,
   type TransactionReceipt,
+  type WalletClient,
 } from "viem";
 import { mnemonicToAccount, type HDAccount } from "viem/accounts";
 import { ANVIL_PUBLIC_PRIVATE_KEY } from "../../fixtures/anvil-public-key.js";
@@ -110,7 +112,47 @@ export function getAccount(index: number): HDAccount {
   return mnemonicToAccount(ANVIL_MNEMONIC, { addressIndex: index });
 }
 
-export function walletFor(chain: LocalChain, accountIndex: number) {
+// ---------------------------------------------------------------------------
+// Safe wire-string normalization
+// ---------------------------------------------------------------------------
+
+/** 0x-prefixed hex, including odd-length quantities (e.g. snapshot ids). */
+const HEX_STRING_PATTERN = /^0x[0-9a-fA-F]*$/;
+
+function isHexString(value: string): value is Hex {
+  return HEX_STRING_PATTERN.test(value);
+}
+
+/**
+ * Narrow a canonical wire hex string (transaction hash, block hash, snapshot
+ * id, ...) to viem's `Hex` after validating it. Throws on malformed input so a
+ * bad persisted/wire value is never silently handed to viem.
+ */
+export function safeHex(value: string, label = "hex value"): Hex {
+  if (!isHexString(value)) {
+    throw new Error(`Expected ${label} to be a 0x-prefixed hex string, received: ${value}`);
+  }
+  return value;
+}
+
+/**
+ * Normalize a canonical EVM address string to viem's `Address`. `getAddress`
+ * validates the input and returns the checksummed form; no unchecked cast.
+ */
+export function safeAddress(value: string, label = "address"): Address {
+  try {
+    return getAddress(value);
+  } catch (error) {
+    throw new Error(`Expected ${label} to be a valid EVM address, received: ${value}`, {
+      cause: error,
+    });
+  }
+}
+
+export function walletFor(
+  chain: LocalChain,
+  accountIndex: number
+): WalletClient<ReturnType<typeof http>, Chain, HDAccount> {
   const account = getAccount(accountIndex);
   return createWalletClient({ chain: chain.chain, transport: http(chain.rpcUrl), account });
 }

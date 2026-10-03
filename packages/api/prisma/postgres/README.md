@@ -1,32 +1,37 @@
 # PostgreSQL migrations
 
-This directory is the **only deployment migration authority**. Apply it with:
+This directory is the **only deployment migration authority**. The supported
+installation is a fresh empty database; apply the canonical baseline with:
 
 ```sh
 DATABASE_URL=postgresql://... npm run db:migrate -w @pokertools/api
 ```
 
-| File                           | Responsibility                                                                                            |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------- |
-| `001_initial_schema.sql`       | Generated relational baseline: native enums, tables, indexes and foreign keys from `prisma/schema.prisma` |
-| `002_financial_invariants.sql` | Decimal/domain checks, sealed immutable journal, deferred balancing and nonnegative liability constraints |
-| `003_audit_invariants.sql`     | Append-only game/tournament events and completed action requests                                          |
-| `migrations.json`              | Ordered SHA-256 manifest                                                                                  |
+| File                           | Responsibility                                                                                                                                                                          |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `001_initial_schema.sql`       | Fresh canonical relational baseline generated from `prisma/schema.prisma`: native enums, tables, indexes, foreign keys, 64-bit chip columns and the current competition/entry lifecycle |
+| `002_financial_invariants.sql` | Decimal/domain checks, sealed immutable journal, deferred balancing and nonnegative liability constraints                                                                               |
+| `003_audit_invariants.sql`     | Append-only game/tournament events and completed action requests                                                                                                                        |
+| `004_competitions.sql`         | Competition economic invariants: mode-consistent terms, canonical entry lifecycle, cancellation timestamp and table-scoped credential binding                                           |
+| `migrations.json`              | Ordered SHA-256 manifest                                                                                                                                                                |
 
-Fresh PostgreSQL installs apply all three files; repeating the command is a
-no-op. Runners serialize with a PostgreSQL advisory lock, and each migration
+Fresh PostgreSQL installs apply every file in the manifest; repeating the command
+is a no-op. Runners serialize with a PostgreSQL advisory lock, and each migration
 commits together with its tracking row. File/applied hash drift, unknown history,
 history gaps and unhashed tracking tables fail closed. Never stamp hashes onto
 unverified data or use `prisma db push` as a production fallback.
 
 ## Schema changes
 
-This baseline is immutable. Future changes update the relational model, add a
-higher-numbered SQL migration and append its SHA-256 manifest entry. Never edit
-an applied migration or regenerate `001` over a released baseline. Prisma's
-offline `migrate diff` may produce relational DDL for a **new** migration; review
-it alongside hand-written constraints not representable in Prisma. Test a fresh
-install, repeated application, integrity checks and upgrade from this baseline.
+`001`..`004` are the current canonical fresh-install baseline and are immutable:
+never edit an applied migration. The platform is versioned forward-only with no
+cross-version data compatibility promise — a database from an older baseline is
+reset, not upgraded. When the relational model changes, cut a new canonical
+baseline revision: regenerate `001` with Prisma's offline
+`migrate diff --from-empty` and fold the current hand-written invariants into
+`002`..`004`, then append their exact SHA-256 entries to the manifest. Review
+generated relational DDL alongside constraints not representable in Prisma.
+Test a fresh install, repeated application and integrity checks.
 
 `prisma/schema.prisma` generates provider-specific clients through
 `prisma.config.ts`. SQLite `schema.sql` is a reproducible disposable local-test

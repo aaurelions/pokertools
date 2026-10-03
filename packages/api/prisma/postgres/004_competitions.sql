@@ -1,164 +1,30 @@
 -- ============================================================================
--- 004_competitions — generic competition provisioning, explicit ASSET terms
--- and durable SERVICE principal credentials/delegation.
+-- 004_competitions — competition economic invariants, canonical entry
+-- lifecycle and durable SERVICE table-credential binding.
 --
--- Relational DDL is generated offline from prisma/schema.prisma
--- (prisma migrate diff) and reviewed; the CHECK constraints below are the
--- hand-written economic invariants Prisma cannot express:
+-- Relational DDL (enums, tables, indexes, foreign keys, the cancellation
+-- timestamp and the lifecycle journal columns) is generated from
+-- prisma/schema.prisma into 001_initial_schema.sql. This migration adds ONLY
+-- the hand-written invariants Prisma cannot express:
 --
 --   * Competition terms are mode-consistent: NONFINANCIAL carries no asset
 --     terms and no sponsor; ASSET carries complete, positive, canonical
 --     atomic entry/prize terms and an authorized sponsor reference.
 --   * SERVICE entrants are always zero-entry (never PENDING/PAID, no amount).
---   * A PAID entrant always carries the journal that committed its entry.
---   * ServiceCredential no longer forces one credential per principal:
---     a durable SERVICE principal may hold one table-scoped credential per
---     room. Rotating or adding credentials never changes principalId.
+--   * Cancellation is terminal and carries its timestamp exactly when the
+--     competition is CANCELLED.
+--   * The canonical entry lifecycle: PAID/REFUNDED always carry the exact
+--     reserve-credit entry journal, REFUNDED carries its refund journal, and
+--     only a PAID entry may carry the sponsor settlement journal.
+--   * A non-revoked table-scoped SERVICE credential must be bound to a
+--     non-empty tableId; revoked historical rows keep their metadata without
+--     any authority, and orchestration credentials are untouched.
 --
--- Immutable: never edit after release; add a higher-numbered migration.
+-- Fresh-install baseline: applied to an empty database after 001..003.
+-- Immutable: never edit after release.
 -- ============================================================================
 
--- CreateEnum
-CREATE TYPE "CompetitionMode" AS ENUM ('NONFINANCIAL', 'ASSET');
-
--- CreateEnum
-CREATE TYPE "CompetitionStatus" AS ENUM ('REGISTRATION', 'RUNNING', 'FINISHED', 'CANCELLED');
-
--- CreateEnum
-CREATE TYPE "CompetitionEntryState" AS ENUM ('NOT_REQUIRED', 'PENDING', 'PAID');
-
--- CreateEnum
-CREATE TYPE "CompetitionPrizeStatus" AS ENUM ('NOT_APPLICABLE', 'RESERVED', 'PAID', 'RELEASED');
-
--- DropIndex
--- One credential per principal is no longer required: an agent may hold one
--- table-scoped credential per room while retaining a stable principalId.
-DROP INDEX "ServiceCredential_userId_key";
-
--- CreateTable
-CREATE TABLE "ServicePrincipalDelegation" (
-    "id" TEXT NOT NULL,
-    "servicePrincipalId" TEXT NOT NULL,
-    "delegatePrincipalId" TEXT NOT NULL,
-    "revokedAt" TIMESTAMP(3),
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "ServicePrincipalDelegation_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "Competition" (
-    "id" TEXT NOT NULL,
-    "name" TEXT NOT NULL,
-    "mode" "CompetitionMode" NOT NULL,
-    "status" "CompetitionStatus" NOT NULL DEFAULT 'REGISTRATION',
-    "idempotencyKey" TEXT NOT NULL,
-    "requestHash" TEXT NOT NULL,
-    "organizerId" TEXT NOT NULL,
-    "tournamentId" TEXT NOT NULL,
-    "startingStack" INTEGER NOT NULL,
-    "smallBlind" INTEGER NOT NULL,
-    "bigBlind" INTEGER NOT NULL,
-    "entryAssetId" TEXT,
-    "entryAmountAtomic" TEXT,
-    "prizeAssetId" TEXT,
-    "prizeAmountAtomic" TEXT,
-    "sponsorId" TEXT,
-    "prizeStatus" "CompetitionPrizeStatus" NOT NULL DEFAULT 'NOT_APPLICABLE',
-    "prizeReservationJournalId" TEXT,
-    "prizeSettlementJournalId" TEXT,
-    "startedAt" TIMESTAMP(3),
-    "finishedAt" TIMESTAMP(3),
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "Competition_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "CompetitionEntrant" (
-    "id" TEXT NOT NULL,
-    "competitionId" TEXT NOT NULL,
-    "principalId" TEXT NOT NULL,
-    "kind" "PrincipalKind" NOT NULL,
-    "seat" INTEGER NOT NULL,
-    "entryState" "CompetitionEntryState" NOT NULL DEFAULT 'NOT_REQUIRED',
-    "entryAmountAtomic" TEXT,
-    "entryJournalId" TEXT,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "CompetitionEntrant_pkey" PRIMARY KEY ("id")
-);
-
--- CreateIndex
-CREATE UNIQUE INDEX "ServicePrincipalDelegation_servicePrincipalId_key" ON "ServicePrincipalDelegation"("servicePrincipalId");
-
--- CreateIndex
-CREATE INDEX "ServicePrincipalDelegation_delegatePrincipalId_idx" ON "ServicePrincipalDelegation"("delegatePrincipalId");
-
--- CreateIndex
-CREATE INDEX "ServicePrincipalDelegation_delegatePrincipalId_revokedAt_idx" ON "ServicePrincipalDelegation"("delegatePrincipalId", "revokedAt");
-
--- CreateIndex
-CREATE UNIQUE INDEX "Competition_organizerId_idempotencyKey_key" ON "Competition"("organizerId", "idempotencyKey");
-
--- CreateIndex
-CREATE UNIQUE INDEX "Competition_tournamentId_key" ON "Competition"("tournamentId");
-
--- CreateIndex
-CREATE UNIQUE INDEX "Competition_prizeReservationJournalId_key" ON "Competition"("prizeReservationJournalId");
-
--- CreateIndex
-CREATE UNIQUE INDEX "Competition_prizeSettlementJournalId_key" ON "Competition"("prizeSettlementJournalId");
-
--- CreateIndex
-CREATE INDEX "Competition_status_createdAt_idx" ON "Competition"("status", "createdAt");
-
--- CreateIndex
-CREATE INDEX "Competition_organizerId_idx" ON "Competition"("organizerId");
-
--- CreateIndex
-CREATE INDEX "Competition_sponsorId_idx" ON "Competition"("sponsorId");
-
--- CreateIndex
-CREATE UNIQUE INDEX "CompetitionEntrant_entryJournalId_key" ON "CompetitionEntrant"("entryJournalId");
-
--- CreateIndex
-CREATE INDEX "CompetitionEntrant_principalId_idx" ON "CompetitionEntrant"("principalId");
-
--- CreateIndex
-CREATE UNIQUE INDEX "CompetitionEntrant_competitionId_principalId_key" ON "CompetitionEntrant"("competitionId", "principalId");
-
--- CreateIndex
-CREATE UNIQUE INDEX "CompetitionEntrant_competitionId_seat_key" ON "CompetitionEntrant"("competitionId", "seat");
-
--- CreateIndex
-CREATE INDEX "ServiceCredential_userId_revoked_idx" ON "ServiceCredential"("userId", "revoked");
-
--- AddForeignKey
-ALTER TABLE "ServicePrincipalDelegation" ADD CONSTRAINT "ServicePrincipalDelegation_servicePrincipalId_fkey" FOREIGN KEY ("servicePrincipalId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "ServicePrincipalDelegation" ADD CONSTRAINT "ServicePrincipalDelegation_delegatePrincipalId_fkey" FOREIGN KEY ("delegatePrincipalId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "Competition" ADD CONSTRAINT "Competition_organizerId_fkey" FOREIGN KEY ("organizerId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "Competition" ADD CONSTRAINT "Competition_tournamentId_fkey" FOREIGN KEY ("tournamentId") REFERENCES "Tournament"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "Competition" ADD CONSTRAINT "Competition_sponsorId_fkey" FOREIGN KEY ("sponsorId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "CompetitionEntrant" ADD CONSTRAINT "CompetitionEntrant_competitionId_fkey" FOREIGN KEY ("competitionId") REFERENCES "Competition"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "CompetitionEntrant" ADD CONSTRAINT "CompetitionEntrant_principalId_fkey" FOREIGN KEY ("principalId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- Hand-written economic invariants ------------------------------------------
+-- Competition terms ----------------------------------------------------------
 
 ALTER TABLE "Competition" ADD CONSTRAINT "Competition_startingStack_positive"
     CHECK ("startingStack" > 0);
@@ -201,6 +67,12 @@ ALTER TABLE "Competition" ADD CONSTRAINT "Competition_prizeStatus_funded"
         AND ("prizeStatus" = 'NOT_APPLICABLE') = ("mode" = 'NONFINANCIAL')
     );
 
+-- Cancellation is terminal and carries its timestamp exactly when CANCELLED.
+ALTER TABLE "Competition" ADD CONSTRAINT "Competition_cancelled_requires_timestamp"
+    CHECK (("status" = 'CANCELLED') = ("cancelledAt" IS NOT NULL));
+
+-- Entrants -------------------------------------------------------------------
+
 ALTER TABLE "CompetitionEntrant" ADD CONSTRAINT "CompetitionEntrant_seat_range"
     CHECK ("seat" >= 0 AND "seat" <= 9);
 
@@ -211,5 +83,26 @@ ALTER TABLE "CompetitionEntrant" ADD CONSTRAINT "CompetitionEntrant_service_zero
         OR ("entryState" = 'NOT_REQUIRED' AND "entryAmountAtomic" IS NULL AND "entryJournalId" IS NULL)
     );
 
-ALTER TABLE "CompetitionEntrant" ADD CONSTRAINT "CompetitionEntrant_paid_requires_journal"
-    CHECK (("entryState" = 'PAID') = ("entryJournalId" IS NOT NULL));
+-- Canonical entry lifecycle: PAID/REFUNDED always carry the exact reserve-credit
+-- entry journal; REFUNDED additionally carries its refund journal and can never
+-- carry a settlement journal (only a prestart cancellation refunds, and a
+-- cancelled competition never transfers entries to the sponsor).
+ALTER TABLE "CompetitionEntrant" ADD CONSTRAINT "CompetitionEntrant_entry_lifecycle"
+    CHECK (
+        ("entryState" IN ('PAID', 'REFUNDED')) = ("entryJournalId" IS NOT NULL)
+        AND ("entryState" = 'REFUNDED') = ("refundJournalId" IS NOT NULL)
+        AND ("entrySettlementJournalId" IS NULL OR "entryState" = 'PAID')
+    );
+
+-- SERVICE table-credential binding -------------------------------------------
+-- A non-revoked table-scoped credential must carry a non-empty bound tableId.
+-- `scopes` is JSONB and always a JSON array of scope strings, so the JSONB
+-- `?|` existence operator is a safe shape test here. Revoked historical rows
+-- are exempt so public summaries may keep their original metadata without
+-- retaining any authority.
+ALTER TABLE "ServiceCredential" ADD CONSTRAINT "ServiceCredential_table_binding"
+    CHECK (
+        "revoked" = TRUE
+        OR ("tableId" IS NOT NULL AND char_length("tableId") > 0)
+        OR NOT ("scopes" ?| ARRAY['table:observe', 'table:act', 'table:chat']::text[])
+    );

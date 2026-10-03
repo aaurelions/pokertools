@@ -13,8 +13,8 @@
 --   * GameActionRequest may transition from PROCESSING to a terminal status
 --     exactly once, but its identity columns and its stored response are
 --     frozen afterwards.
---   * Re-assertion of the ordering / state-fingerprint unique indexes from the
---     retired 008_event_audit.sql (already in the baseline).
+--   * Re-assertion of the ordering / state-fingerprint unique indexes present in
+--     the generated baseline.
 --
 -- FK cascades (GameEvent -> Table, TournamentEvent -> Tournament,
 -- GameActionRequest -> Table all use ON DELETE CASCADE) still delete their
@@ -111,7 +111,7 @@ CREATE TRIGGER "TournamentEvent_immutable"
     FOR EACH ROW EXECUTE FUNCTION "guard_tournament_event_mutation"();
 
 -- Re-assert the per-tournament ordering + state-fingerprint unique indexes
--- (from the retired 008_event_audit.sql; already present in the baseline).
+-- (present in the generated baseline).
 CREATE UNIQUE INDEX IF NOT EXISTS "TournamentEvent_tournamentId_eventSeq_key"
     ON "TournamentEvent" ("tournamentId", "eventSeq");
 CREATE UNIQUE INDEX IF NOT EXISTS "TournamentEvent_tournamentId_stateFingerprint_key"

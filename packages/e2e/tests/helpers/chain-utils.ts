@@ -1,5 +1,13 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { createPublicClient, createWalletClient, http, defineChain, type Address } from "viem";
+import {
+  createPublicClient,
+  createWalletClient,
+  http,
+  defineChain,
+  type Address,
+  type PublicClient,
+  type WalletClient,
+} from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { ANVIL_PUBLIC_PRIVATE_KEY } from "../fixtures/anvil-public-key.js";
 import fs from "node:fs";
@@ -28,12 +36,16 @@ export const localChain = defineChain({
   },
 });
 
-export const publicClient = createPublicClient({
+export const publicClient: PublicClient = createPublicClient({
   chain: localChain,
   transport: http(ANVIL_RPC),
 });
 
-export const walletClient = createWalletClient({
+export const walletClient: WalletClient<
+  ReturnType<typeof http>,
+  typeof localChain,
+  ReturnType<typeof privateKeyToAccount>
+> = createWalletClient({
   chain: localChain,
   transport: http(ANVIL_RPC),
   account: privateKeyToAccount(DEPLOYER_PK),

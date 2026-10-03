@@ -273,10 +273,11 @@ describe("parseAssetRpcUrls", () => {
 });
 
 describe("createPrismaIncidentSink", () => {
-  it("persists RPC_DISAGREEMENT under its canonical kind, not remapped", async () => {
-    const create = vi.fn(async () => ({ id: "incident_1" }));
+  it("persists RPC_DISAGREEMENT under its canonical kind at a stable (kind, chain) id", async () => {
+    const upsert = vi.fn(async () => ({ id: "incident_1" }));
+    const updateMany = vi.fn(async () => ({ count: 0 }));
     const sink = createPrismaIncidentSink({
-      financialIncident: { create },
+      financialIncident: { upsert, updateMany },
     } as never);
 
     await sink.record({
@@ -292,9 +293,11 @@ describe("createPrismaIncidentSink", () => {
       },
     });
 
-    expect(create).toHaveBeenCalledTimes(1);
-    expect(create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(upsert).toHaveBeenCalledWith({
+      where: { id: `rpc-incident:RPC_DISAGREEMENT:${CHAIN_ID}` },
+      create: expect.objectContaining({
+        id: `rpc-incident:RPC_DISAGREEMENT:${CHAIN_ID}`,
         kind: "RPC_DISAGREEMENT",
         severity: "CRITICAL",
         status: "OPEN",
@@ -304,13 +307,25 @@ describe("createPrismaIncidentSink", () => {
           disagreement: true,
         }),
       }),
+      update: { severity: "CRITICAL" },
+    });
+    // A resolved incident is reopened in place, never duplicated.
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: `rpc-incident:RPC_DISAGREEMENT:${CHAIN_ID}`, status: "RESOLVED" },
+      data: expect.objectContaining({
+        status: "OPEN",
+        resolvedAt: null,
+        severity: "CRITICAL",
+        version: { increment: 1 },
+      }),
     });
   });
 
   it("persists RPC_QUORUM_FAILURE unchanged", async () => {
-    const create = vi.fn(async () => ({ id: "incident_1" }));
+    const upsert = vi.fn(async () => ({ id: "incident_1" }));
+    const updateMany = vi.fn(async () => ({ count: 0 }));
     const sink = createPrismaIncidentSink({
-      financialIncident: { create },
+      financialIncident: { upsert, updateMany },
     } as never);
 
     await sink.record({
@@ -326,8 +341,40 @@ describe("createPrismaIncidentSink", () => {
       },
     });
 
-    expect(create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ kind: "RPC_QUORUM_FAILURE" }),
+    expect(upsert).toHaveBeenCalledWith({
+      where: { id: `rpc-incident:RPC_QUORUM_FAILURE:${CHAIN_ID}` },
+      create: expect.objectContaining({ kind: "RPC_QUORUM_FAILURE" }),
+      update: { severity: "CRITICAL" },
     });
+  });
+
+  it("targets the same primary key for parallel records of the same kind and chain", async () => {
+    const upsert = vi.fn(async () => ({ id: "incident_1" }));
+    const updateMany = vi.fn(async () => ({ count: 0 }));
+    const sink = createPrismaIncidentSink({
+      financialIncident: { upsert, updateMany },
+    } as never);
+    const incident = {
+      kind: "RPC_QUORUM_FAILURE" as const,
+      severity: "CRITICAL" as const,
+      status: "OPEN" as const,
+      chainId: CHAIN_ID,
+      evidence: {
+        chainId: CHAIN_ID,
+        method: "eth_getBalance",
+        reason: "no_responses",
+        endpoints: [],
+      },
+    };
+
+    await Promise.all([sink.record(incident), sink.record(incident), sink.record(incident)]);
+
+    // One stable id under the existing PK; the database cannot create
+    // duplicate rows even when record calls run in parallel.
+    const ids = new Set(
+      upsert.mock.calls.map(([args]) => (args as { where: { id: string } }).where.id)
+    );
+    expect(ids.size).toBe(1);
+    expect(upsert).toHaveBeenCalledTimes(3);
   });
 });

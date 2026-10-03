@@ -18,6 +18,7 @@ import {
 } from "../../src/services/atomic-ledger.js";
 import { FinancialIntentService } from "../../src/services/financial-intents.js";
 import { FinancialIncidentService } from "../../src/services/financial-incidents.js";
+import { createCustodyAccounting } from "../../src/services/custody-accounting.js";
 import { ANVIL_PUBLIC_PRIVATE_KEY } from "../fixtures/anvil-public-key.js";
 
 // This SQLite integration suite deliberately corrupts secondary ledgers. Its
@@ -990,9 +991,11 @@ describe("Canonical atomic multi-asset finance", () => {
       expect(await prisma.journalTransaction.count({ where: { assetId } })).toBe(journalsBefore);
     });
 
-    it("restores the obligation exactly once on post-completion withdrawal reorg", async () => {
+    it("restores the obligation exactly once on post-completion withdrawal reorg through the custody accounting adapter", async () => {
       const ledger = ledgerFor();
       const intents = new FinancialIntentService(app.prisma, ledger);
+      const incidents = new FinancialIncidentService(app.prisma, ledger);
+      const accounting = createCustodyAccounting({ prisma: app.prisma, ledger, incidents });
       const user = await ledger.ensureAccount(prisma, {
         assetId,
         ownerId: userId,
@@ -1046,31 +1049,106 @@ describe("Canonical atomic multi-asset finance", () => {
         intent,
         signature,
       });
-      await intents.settleWithdrawal({ intentId: intent.intentId });
 
-      const result = await intents.recordWithdrawalReorg({
+      const record = {
         intentId: intent.intentId,
+        principalId: userId,
+        assetId,
+        chainId: CHAIN_ID,
+        amountAtomic: "30",
+      };
+      // Canonical production settlement path (custody workflow accounting port).
+      await accounting.completeWithdrawal(record);
+      const settled = await prisma.withdrawalIntentRecord.findUniqueOrThrow({
+        where: { id: intent.intentId },
+      });
+      expect(settled.confirmedJournalId).not.toBeNull();
+      const userAvailableAfterSettlement = (
+        await ledger.getAccount(prisma, {
+          assetId,
+          ownerId: userId,
+          class: "USER_AVAILABLE",
+        })
+      )?.balanceAtomic;
+
+      const incident = await incidents.open({
+        kind: "WITHDRAWAL_REORG",
+        severity: "CRITICAL",
+        assetId,
+        chainId: CHAIN_ID,
+        affectedId: intent.intentId,
         evidence: { reason: "canonical reorg" },
       });
-      expect(result.incident.kind).toBe("WITHDRAWAL_REORG");
-      const obligation = await ledger.getAccount(prisma, {
-        assetId,
-        ownerId: null,
-        class: "INCIDENT_OBLIGATION",
+      // Custody owns the withdrawal lifecycle state: simulate the durable
+      // post-reorg row its CAS would commit before the API accounting adapter
+      // is invoked, including the exact payout identity the adapter binds to.
+      const reorgTxHash = `0x${crypto.randomBytes(32).toString("hex")}`;
+      const priorReceiptBlockNumber = "4242";
+      const priorReceiptBlockHash = `0x${crypto.randomBytes(32).toString("hex")}`;
+      const obligationEvidence = {
+        txHash: reorgTxHash,
+        priorReceiptBlockNumber,
+        priorReceiptBlockHash,
+      };
+      await prisma.withdrawalIntentRecord.update({
+        where: { id: intent.intentId },
+        data: {
+          state: "REORGED",
+          txHash: reorgTxHash,
+          receiptBlockNumber: priorReceiptBlockNumber,
+          receiptBlockHash: priorReceiptBlockHash,
+        },
       });
-      expect(obligation?.balanceAtomic).toBe("30");
 
-      const replay = await intents.recordWithdrawalReorg({
-        intentId: intent.intentId,
-        evidence: { reason: "canonical reorg" },
-      });
-      expect(replay.incident.id).toBe(result.incident.id);
-      const obligationAgain = await ledger.getAccount(prisma, {
-        assetId,
-        ownerId: null,
-        class: "INCIDENT_OBLIGATION",
-      });
-      expect(obligationAgain?.balanceAtomic).toBe("30");
+      const obligation = await accounting.recordObligation(
+        record,
+        { incidentId: incident.id },
+        obligationEvidence
+      );
+      expect(incident.kind).toBe("WITHDRAWAL_REORG");
+      expect(obligation.journalId).toBeTruthy();
+      expect(
+        (
+          await ledger.getAccount(prisma, {
+            assetId,
+            ownerId: null,
+            class: "INCIDENT_OBLIGATION",
+          })
+        )?.balanceAtomic
+      ).toBe("30");
+
+      // Replay is idempotent: exactly one obligation journal, no second
+      // liability, and the user is never debited by the reorg path.
+      const replay = await accounting.recordObligation(
+        record,
+        { incidentId: incident.id },
+        obligationEvidence
+      );
+      expect(replay.journalId).toBe(obligation.journalId);
+      expect(
+        (
+          await ledger.getAccount(prisma, {
+            assetId,
+            ownerId: null,
+            class: "INCIDENT_OBLIGATION",
+          })
+        )?.balanceAtomic
+      ).toBe("30");
+      expect(
+        await prisma.journalTransaction.count({
+          where: { assetId, requestId: `withdrawal-reorg:${intent.intentId}` },
+        })
+      ).toBe(1);
+      // The reorg obligation path never debits the user.
+      expect(
+        (
+          await ledger.getAccount(prisma, {
+            assetId,
+            ownerId: userId,
+            class: "USER_AVAILABLE",
+          })
+        )?.balanceAtomic
+      ).toBe(userAvailableAfterSettlement);
     });
 
     it("persists reconciliation evidence with signed difference", async () => {

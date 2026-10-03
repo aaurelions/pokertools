@@ -12,8 +12,8 @@ Be respectful and constructive in all interactions. We're all here to build grea
 
 ### Prerequisites
 
-- Node.js 24.x or higher
-- npm 10.x or higher
+- Node.js ^24.15.0 || >=26.0.0
+- npm 12.2.0 or higher
 - Git
 - Docker (for Redis-backed local services and Docker E2E tests)
 - Foundry (for custody contract tests and E2E blockchain flows)
@@ -275,18 +275,126 @@ Do not add placeholders, TODO-only sections, undocumented claims, generated benc
 
 ### Dependency policy
 
-Use stable mutually compatible versions, not prerelease dist-tags or forced
-peer overrides. TypeScript 6 is retained because the supported tsup/ts-node
-compiler API and typescript-eslint peer range do not support native TS7.
-Prisma 7 and Redlock 4 are the stable lines; their newer dist-tags are RC/beta.
-Stable VitePress 1 requires markdown-it-mathjax3 4. Recheck these constraints
-before upgrading, rather than changing versions solely to clear `outdated`.
+Use stable mutually compatible versions, not prerelease dist-tags, broad
+ranges or forced peer overrides; the narrow exact parent-scoped security
+overrides below are the only exception. Three version lines are intentionally
+held; do not "fix" them just to clear `npm outdated`:
 
-The Prisma CLI dependency graph has known high advisories. Do not suppress
-them or treat a lockfile audit as runtime proof: Docker prunes CLI/config
-packages, and `node scripts/test-runtime-dependencies.mjs <image>` verifies
-their absence and the generated PostgreSQL client in the actual artifact.
-Keep build tooling and documentation development servers private.
+| Dependency             | Held at | Reason                                                                                                                     |
+| :--------------------- | :------ | :------------------------------------------------------------------------------------------------------------------------- |
+| `typescript`           | 6.0.3   | `typescript-eslint@8.71.0` peers on `typescript >=4.8.4 <6.1.0`, so stable 7.0.2 is out of range; tsup/ts-node target TS6. |
+| `prisma` / `@prisma/*` | 7.10.0  | Stable line; the newer dist-tag is an RC.                                                                                  |
+| `redlock`              | 4.x     | Stable line; newer dist-tags are beta.                                                                                     |
+
+Every manifest requires Node.js `^24.15.0 || >=26.0.0` and npm `>=12.2.0`.
+The Node range mirrors `jsdom@30.1.1` (`^22.22.2 || ^24.15.0 || >=26.0.0`);
+Node 25 and 24.x below 24.15 are unsupported. npm 12.2 is required because
+npm 12 enforces the `allowScripts` policy (npm 11.16 only warns). CI must
+install npm 12.2 before `npm ci`, and Docker builder/runtime images must pin
+the same npm.
+
+Recheck these constraints before upgrading, rather than changing versions
+solely to clear `outdated`.
+
+#### Security overrides
+
+Prisma 7.10.0 (latest stable 7.x) exact-pins vulnerable transitive packages.
+Two narrow, exact, parent-scoped `overrides` in the root `package.json`
+remediate them without forcing unrelated versions:
+
+| Parent (exact)          | Override             | Fixed advisory                                             |
+| :---------------------- | :------------------- | :--------------------------------------------------------- |
+| `@prisma/config@7.10.0` | `deepmerge-ts` 8.0.2 | GHSA-ggr8-5vv4-36mx (high) — fixed only in major 8         |
+| `prisma@7.10.0`         | `mysql2` 3.24.5      | GHSA-3f6p-5ww8-9rcr (high), GHSA-rgwj-5xj2-c3m3 (moderate) |
+
+`@prisma/config` only imports the named `deepmerge` export and passes it to
+`c12` as the config merger. An isolated temp install of `@prisma/config@7.10.0`
+with the override produced identical `loadConfigFromFile` output and identical
+`deepmerge` results versus 7.1.5, and `prisma validate`, `prisma db push`
+(SQLite) and `prisma generate` all pass with the overrides. The root `prisma`
+direct devDependency is pinned to exact `7.10.0` because npm rejects a
+parent-scoped override whose parent is a direct dependency unless the specs
+match exactly.
+
+Remove each override entry when the upstream stable Prisma release ships fixed
+`mysql2`/`deepmerge-ts`, then refresh the lockfile. Until then, any Prisma or
+override change must run the SQLite and PostgreSQL paths:
+
+```bash
+npm run db:generate -w @pokertools/api                        # SQLite client generation
+(cd packages/api && node scripts/validate-migrations.mjs)     # SQLite db push + schema.sql parity
+npm run db:migrate -w @pokertools/api                         # PostgreSQL migrations
+npm run test:postgres:migrations -w @pokertools/api           # disposable PostgreSQL acceptance
+```
+
+`npm audit --omit=dev` is clean after these overrides. Docker still prunes the
+CLI graph from the runtime image, and
+`node scripts/test-runtime-dependencies.mjs <image>` verifies its absence. The
+full root audit retains only a low dev-only `esbuild` advisory
+(GHSA-g7r4-m6w7-qqqr, Windows dev-server file read) in tsup's nested 0.27.x;
+latest tsup 8.5.1 still declares `esbuild ^0.27.0`, so the only in-range "fix"
+is a downgrade and it is absent from `--omit=dev`.
+
+#### Docs dependency class
+
+The docs site depends only on build-time generators (`vitepress`,
+`markdown-it`, `vue`), classified as `devDependencies`; the generated site is
+static HTML and none of them is a runtime artifact. `markdown-it-mathjax3`
+(MathJax + `speech-rule-engine` + `@xmldom/xmldom`) was removed rather than
+held at 4.3.2: no docs page used math rendering except one formatting demo,
+which now shows formulas as plain code/text. VitePress stays on the latest
+stable 1.6.4 (no prerelease, no Vite override); the full docs audit retains
+only VitePress's bundled `vite` 5.x/esbuild 0.21.5 advisories, which have no
+stable-1.x fix. The Vite 5 advisory is an optional dev-server residual, not
+part of the built site; the docs dev script binds loopback only (no
+`--host 0.0.0.0`), but VitePress 1.6.4's preview server ignores `--host` and
+listens on all interfaces, so run preview only on trusted machines.
+`npm --prefix docs audit --omit=dev` is clean.
+
+#### Install-script policy
+
+npm 11.16 introduced the `allowScripts` policy and only warned about blocked
+dependency install scripts; npm 12 enforces it by skipping unreviewed scripts
+by default. Approve exact resolved versions after a lockfile refresh instead of
+blanket-approving:
+
+```bash
+npm install-scripts ls               # read-only: unreviewed install scripts
+npm install-scripts prune --dry-run  # stale pins left by upgraded dependencies
+npm install-scripts prune
+npm approve-scripts <pkg>            # re-pin a specific reviewed upgrade
+```
+
+#### Dependency regression commands
+
+Run after dependency, lockfile or publish-manifest changes:
+
+```bash
+# Held peer ranges still resolve.
+npm ls typescript typescript-eslint
+npm --prefix docs ls vitepress markdown-it
+
+# Node floor and code still pass.
+npm run typecheck
+npm run lint
+npm test
+
+# Docs build on latest stable VitePress 1.x (no math renderer).
+npm --prefix docs run docs:build
+
+# Audit posture: both production trees are clean; the full root audit keeps
+# only the low dev-only esbuild advisory documented above.
+npm --prefix docs audit --omit=dev
+npm audit --omit=dev
+
+# Publishable tarballs ship compiled output only (no hidden build metadata).
+npm run check:publish
+```
+
+`check-publish-contents` fails if `dist/.tsbuildinfo` or
+`dist/.nlhe-build-stamp` reappear; the generic `!dist/.*` / `!dist/**/.*`
+exclusions in the publishable workspaces keep them out. Source maps under
+`dist/` remain intentionally public for the SDK.
 
 Releases are handled by maintainers:
 

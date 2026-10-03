@@ -1,10 +1,11 @@
 /// <reference path="../../types/fastify.d.ts" />
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import WebSocket, { type RawData } from "ws";
 import { once } from "node:events";
 import { ServerMessageSchema, type ServerMessage } from "@pokertools/types";
 import { buildApp } from "../../src/app.js";
+import { generateServiceToken, hashServiceToken } from "../../src/services/principal-manager.js";
 import {
   createTestUser,
   cleanupTestUser,
@@ -216,6 +217,25 @@ describe("Service principal auth + scoped authorization", () => {
     const denied = await getTable(body.token, tableB);
     expect(denied.statusCode).toBe(403);
     expect(JSON.parse(denied.body).error).toBe("TABLE_RESTRICTED");
+  });
+
+  it("keeps the global table collection closed to bound SERVICE credentials", async () => {
+    const { body } = await createCredential(admin.token, {
+      name: `collection-${Date.now()}`,
+      scopes: ["table:observe"],
+      tableId: tableA,
+    });
+    const collection = await app.inject({
+      method: "GET",
+      url: "/tables",
+      headers: { authorization: `Bearer ${body.token}` },
+    });
+    expect(collection.statusCode).toBe(403);
+    expect(JSON.parse(collection.body).error).toBe("SERVICE_SCOPE_FORBIDDEN");
+
+    // Its own bound room stays reachable directly; other rooms do not.
+    expect((await getTable(body.token, tableA)).statusCode).toBe(200);
+    expect((await getTable(body.token, tableB)).statusCode).toBe(403);
   });
 
   it("prevents scope escalation and blocks admin/finance routes", async () => {
@@ -493,5 +513,538 @@ describe("Service principal auth + scoped authorization", () => {
     });
     expect(revokeAudit).not.toBeNull();
     expect(revokeAudit?.actorId).toBe(admin.id);
+  });
+
+  // -------------------------------------------------------------------------
+  // Rotation / expiry / revocation race policy.
+  // -------------------------------------------------------------------------
+
+  it("rejects born-expired credential inputs before any mutation", async () => {
+    const name = `expired-${Date.now()}`;
+    const past = new Date(Date.now() - 60_000).toISOString();
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/auth/service-credentials",
+      headers: { authorization: `Bearer ${admin.token}` },
+      payload: { name, scopes: ["table:observe"], tableId: tableA, expiresAt: past },
+    });
+    expect(created.statusCode).toBe(400);
+    expect(JSON.parse(created.body).error).toBe("SERVICE_CREDENTIAL_EXPIRY_INVALID");
+    expect(await app.prisma.serviceCredential.count({ where: { name } })).toBe(0);
+
+    // A rejected rotation must not invalidate the existing secret.
+    const { body } = await createCredential(admin.token, {
+      name,
+      scopes: ["table:observe"],
+      tableId: tableA,
+    });
+    const rotated = await app.inject({
+      method: "POST",
+      url: `/auth/service-credentials/${body.id}/rotate`,
+      headers: { authorization: `Bearer ${admin.token}` },
+      payload: { expiresAt: past },
+    });
+    expect(rotated.statusCode).toBe(400);
+    expect(JSON.parse(rotated.body).error).toBe("SERVICE_CREDENTIAL_EXPIRY_INVALID");
+    expect((await getTable(body.token, tableA)).statusCode).toBe(200);
+  });
+
+  it("rotates in place preserving identity and restrictions; old secret dies", async () => {
+    const { body } = await createCredential(admin.token, {
+      name: `preserve-${Date.now()}`,
+      scopes: ["table:observe", "table:chat"],
+      tableId: tableA,
+      seat: 0,
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+
+    const expiresAt = new Date(Date.now() + 7_200_000).toISOString();
+    const rotated = await app.inject({
+      method: "POST",
+      url: `/auth/service-credentials/${body.id}/rotate`,
+      headers: { authorization: `Bearer ${admin.token}` },
+      payload: { expiresAt },
+    });
+    expect(rotated.statusCode).toBe(200);
+    const rotatedBody = JSON.parse(rotated.body) as {
+      id: string;
+      userId: string;
+      scopes: string[];
+      tableId: string | null;
+      seat: number | null;
+      expiresAt: string | null;
+      token: string;
+    };
+    expect(rotatedBody.id).toBe(body.id);
+    expect(rotatedBody.userId).toBe(body.userId);
+    expect(rotatedBody.scopes).toEqual(["table:observe", "table:chat"]);
+    expect(rotatedBody.tableId).toBe(tableA);
+    expect(rotatedBody.seat).toBe(0);
+    expect(rotatedBody.expiresAt).toBe(expiresAt);
+
+    const row = await app.prisma.serviceCredential.findUniqueOrThrow({ where: { id: body.id } });
+    expect(row.keyHash).toBe(hashServiceToken(rotatedBody.token));
+    expect(row.revoked).toBe(false);
+
+    // The previous secret stops working immediately; the new one authenticates.
+    expect((await getTable(body.token, tableA)).statusCode).toBe(401);
+    const me = await app.inject({
+      method: "GET",
+      url: "/auth/me",
+      headers: { authorization: `Bearer ${rotatedBody.token}` },
+    });
+    expect(me.statusCode).toBe(200);
+  });
+
+  it("fails closed for expired credentials and requires a future expiry to rotate", async () => {
+    const { body } = await createCredential(admin.token, {
+      name: `expires-${Date.now()}`,
+      scopes: ["table:observe"],
+      tableId: tableA,
+    });
+    await app.prisma.serviceCredential.update({
+      where: { id: body.id },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+
+    expect((await getTable(body.token, tableA)).statusCode).toBe(401);
+    expect(await app.principalManager.authenticateServiceToken(body.token)).toBeNull();
+
+    // Rotation without a new future expiry cannot produce a dead-on-arrival
+    // secret: it is rejected before the row is touched.
+    const omitted = await app.inject({
+      method: "POST",
+      url: `/auth/service-credentials/${body.id}/rotate`,
+      headers: { authorization: `Bearer ${admin.token}` },
+      payload: {},
+    });
+    expect(omitted.statusCode).toBe(409);
+    expect(JSON.parse(omitted.body).error).toBe("SERVICE_CREDENTIAL_EXPIRED");
+
+    // Explicit renewal is allowed and yields a working secret.
+    const renewed = await app.inject({
+      method: "POST",
+      url: `/auth/service-credentials/${body.id}/rotate`,
+      headers: { authorization: `Bearer ${admin.token}` },
+      payload: { expiresAt: new Date(Date.now() + 3_600_000).toISOString() },
+    });
+    expect(renewed.statusCode).toBe(200);
+    const renewedToken = (JSON.parse(renewed.body) as { token: string }).token;
+    const me = await app.inject({
+      method: "GET",
+      url: "/auth/me",
+      headers: { authorization: `Bearer ${renewedToken}` },
+    });
+    expect(me.statusCode).toBe(200);
+  });
+
+  it("enforces revocation and expiry at every request boundary", async () => {
+    const { body } = await createCredential(admin.token, {
+      name: `boundary-${Date.now()}`,
+      scopes: ["table:observe"],
+      tableId: tableA,
+    });
+
+    // A resolution completed before revocation stays authoritative for that
+    // in-flight operation; revocation is never retroactive to work already
+    // authenticated. Every subsequent request re-resolves and fails closed.
+    const inFlight = await app.principalManager.authenticateServiceToken(body.token);
+    expect(inFlight).not.toBeNull();
+
+    const revoked = await app.inject({
+      method: "POST",
+      url: `/auth/service-credentials/${body.id}/revoke`,
+      headers: { authorization: `Bearer ${admin.token}` },
+    });
+    expect(revoked.statusCode).toBe(200);
+    expect(await app.principalManager.authenticateServiceToken(body.token)).toBeNull();
+    expect((await getTable(body.token, tableA)).statusCode).toBe(401);
+
+    // A revoked credential can never be rotated back to life.
+    const rotated = await app.inject({
+      method: "POST",
+      url: `/auth/service-credentials/${body.id}/rotate`,
+      headers: { authorization: `Bearer ${admin.token}` },
+      payload: {},
+    });
+    expect(rotated.statusCode).toBe(409);
+    expect(JSON.parse(rotated.body).error).toBe("SERVICE_CREDENTIAL_REVOKED");
+  });
+
+  it("cannot revive a credential when rotate races revoke", async () => {
+    const { body } = await createCredential(admin.token, {
+      name: `race-${Date.now()}`,
+      scopes: ["table:observe"],
+      tableId: tableA,
+    });
+
+    const [rotated, revoked] = await Promise.all([
+      app.inject({
+        method: "POST",
+        url: `/auth/service-credentials/${body.id}/rotate`,
+        headers: { authorization: `Bearer ${admin.token}` },
+        payload: {},
+      }),
+      app.inject({
+        method: "POST",
+        url: `/auth/service-credentials/${body.id}/revoke`,
+        headers: { authorization: `Bearer ${admin.token}` },
+      }),
+    ]);
+    expect(revoked.statusCode).toBe(200);
+
+    const row = await app.prisma.serviceCredential.findUniqueOrThrow({ where: { id: body.id } });
+    expect(row.revoked).toBe(true);
+    expect(row.revokedAt).not.toBeNull();
+
+    // Whichever order the race resolved in, the revoked row is terminal:
+    // a successful rotation's fresh secret is dead, and a losing rotation
+    // reports the revocation instead of resurrecting the credential.
+    expect((await getTable(body.token, tableA)).statusCode).toBe(401);
+    if (rotated.statusCode === 200) {
+      const rotatedToken = (JSON.parse(rotated.body) as { token: string }).token;
+      expect((await getTable(rotatedToken, tableA)).statusCode).toBe(401);
+      expect(await app.principalManager.authenticateServiceToken(rotatedToken)).toBeNull();
+    } else {
+      expect(rotated.statusCode).toBe(409);
+      expect(JSON.parse(rotated.body).error).toBe("SERVICE_CREDENTIAL_REVOKED");
+    }
+  });
+
+  it("concurrent rotations leave exactly the final secret valid", async () => {
+    const { body } = await createCredential(admin.token, {
+      name: `double-rotate-${Date.now()}`,
+      scopes: ["table:observe"],
+      tableId: tableA,
+    });
+
+    const [first, second] = await Promise.all([
+      app.inject({
+        method: "POST",
+        url: `/auth/service-credentials/${body.id}/rotate`,
+        headers: { authorization: `Bearer ${admin.token}` },
+        payload: {},
+      }),
+      app.inject({
+        method: "POST",
+        url: `/auth/service-credentials/${body.id}/rotate`,
+        headers: { authorization: `Bearer ${admin.token}` },
+        payload: {},
+      }),
+    ]);
+    for (const response of [first, second]) {
+      expect([200, 409]).toContain(response.statusCode);
+    }
+
+    const successes = [first, second].filter((response) => response.statusCode === 200);
+    expect(successes.length).toBeGreaterThanOrEqual(1);
+    const tokens = successes.map(
+      (response) => (JSON.parse(response.body) as { token: string }).token
+    );
+
+    // Only the secret persisted last may authenticate; every earlier one is
+    // invalidated by the winning rotation.
+    const row = await app.prisma.serviceCredential.findUniqueOrThrow({ where: { id: body.id } });
+    expect(tokens.map(hashServiceToken)).toContain(row.keyHash);
+    for (const token of tokens) {
+      const expected = hashServiceToken(token) === row.keyHash;
+      expect((await getTable(token, tableA)).statusCode).toBe(expected ? 200 : 401);
+    }
+    expect((await getTable(body.token, tableA)).statusCode).toBe(401);
+  });
+
+  it("maps a duplicate service-principal name race to 409", async () => {
+    const name = `svc-name-race-${Date.now()}`;
+    const provision = () =>
+      app.inject({
+        method: "POST",
+        url: "/auth/service-principals",
+        headers: { authorization: `Bearer ${admin.token}` },
+        payload: { name },
+      });
+
+    const [first, second] = await Promise.all([provision(), provision()]);
+    const statuses = [first.statusCode, second.statusCode].sort((a, b) => a - b);
+    expect(statuses).toEqual([201, 409]);
+    const conflict = first.statusCode === 409 ? first : second;
+    expect(JSON.parse(conflict.body).error).toBe("SERVICE_PRINCIPAL_NAME_TAKEN");
+    const winner = first.statusCode === 201 ? first : second;
+    serviceUserIds.push((JSON.parse(winner.body) as { principalId: string }).principalId);
+
+    // Sequential duplicate is the same stable conflict, never a 500.
+    const third = await provision();
+    expect(third.statusCode).toBe(409);
+    expect(JSON.parse(third.body).error).toBe("SERVICE_PRINCIPAL_NAME_TAKEN");
+  });
+
+  it("revokes a service-principal delegation durably and idempotently without touching issued credentials", async () => {
+    const name = `delegated-${Date.now()}`;
+    const provisioned = await app.inject({
+      method: "POST",
+      url: "/auth/service-principals",
+      headers: { authorization: `Bearer ${admin.token}` },
+      payload: { name, delegatedToPrincipalId: admin.id },
+    });
+    expect(provisioned.statusCode).toBe(201);
+    const principalId = (JSON.parse(provisioned.body) as { principalId: string }).principalId;
+    serviceUserIds.push(principalId);
+
+    expect(await app.principalManager.isServicePrincipalDelegatedTo(principalId, admin.id)).toBe(
+      true
+    );
+
+    // A room credential issued while delegated keeps working after revocation:
+    // the explicit policy is that delegation revocation is not an implicit
+    // gameplay-credential revocation.
+    const { body: credential } = await createCredential(admin.token, {
+      name: `delegated-room-${Date.now()}`,
+      scopes: ["table:observe"],
+      tableId: tableA,
+      principalId,
+    });
+    expect(credential.userId).toBe(principalId);
+    expect((await getTable(credential.token, tableA)).statusCode).toBe(200);
+
+    const revokeUrl = `/auth/service-principals/${principalId}/delegation/revoke`;
+    const first = await app.inject({
+      method: "POST",
+      url: revokeUrl,
+      headers: { authorization: `Bearer ${admin.token}` },
+    });
+    expect(first.statusCode).toBe(200);
+    const firstBody = JSON.parse(first.body) as {
+      success: boolean;
+      servicePrincipalId: string;
+      delegatePrincipalId: string;
+      revokedAt: string;
+    };
+    expect(firstBody).toEqual({
+      success: true,
+      servicePrincipalId: principalId,
+      delegatePrincipalId: admin.id,
+      revokedAt: expect.any(String),
+    });
+    // The durable gate consumed by roster/credential issuance now fails closed.
+    expect(await app.principalManager.isServicePrincipalDelegatedTo(principalId, admin.id)).toBe(
+      false
+    );
+
+    // Idempotent: same revocation time, exactly one durable audit transition.
+    const second = await app.inject({
+      method: "POST",
+      url: revokeUrl,
+      headers: { authorization: `Bearer ${admin.token}` },
+    });
+    expect(second.statusCode).toBe(200);
+    expect((JSON.parse(second.body) as { revokedAt: string }).revokedAt).toBe(firstBody.revokedAt);
+    expect(
+      await app.prisma.auditLog.count({
+        where: {
+          action: "SERVICE_PRINCIPAL_DELEGATION_REVOKE",
+          resource: `service-principal:${principalId}`,
+        },
+      })
+    ).toBe(1);
+
+    // The already-issued room credential is deliberately untouched.
+    expect((await getTable(credential.token, tableA)).statusCode).toBe(200);
+  });
+
+  it("restricts delegation revocation to operator wallets with a strict contract", async () => {
+    const revokeUrl = `/auth/service-principals/${admin.id}/delegation/revoke`;
+
+    const denied = await app.inject({
+      method: "POST",
+      url: revokeUrl,
+      headers: { authorization: `Bearer ${player.token}` },
+    });
+    expect(denied.statusCode).toBe(403);
+    expect(JSON.parse(denied.body).error).toBe("OPERATOR_REQUIRED");
+
+    const { body: serviceCredential } = await createCredential(admin.token, {
+      name: `delegation-boundary-${Date.now()}`,
+      scopes: ["table:observe"],
+      tableId: tableA,
+    });
+    const serviceDenied = await app.inject({
+      method: "POST",
+      url: revokeUrl,
+      headers: { authorization: `Bearer ${serviceCredential.token}` },
+    });
+    expect(serviceDenied.statusCode).toBe(403);
+    // requireOperator runs in onRequest, before the global SERVICE boundary, so
+    // machine credentials are rejected as non-operators.
+    expect(JSON.parse(serviceDenied.body).error).toBe("OPERATOR_REQUIRED");
+
+    const missing = await app.inject({
+      method: "POST",
+      url: "/auth/service-principals/no-such-principal/delegation/revoke",
+      headers: { authorization: `Bearer ${admin.token}` },
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(JSON.parse(missing.body).error).toBe("SERVICE_PRINCIPAL_DELEGATION_NOT_FOUND");
+
+    const unknownBody = await app.inject({
+      method: "POST",
+      url: revokeUrl,
+      headers: { authorization: `Bearer ${admin.token}` },
+      payload: { force: true },
+    });
+    expect(unknownBody.statusCode).toBe(400);
+  });
+
+  it("rejects unbound table credentials at the boundary", async () => {
+    const name = `unbound-${Date.now()}`;
+    const res = await app.inject({
+      method: "POST",
+      url: "/auth/service-credentials",
+      headers: { authorization: `Bearer ${admin.token}` },
+      payload: { name, scopes: ["table:observe", "table:act"] },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toBe("Validation failed");
+    expect(await app.prisma.serviceCredential.count({ where: { name } })).toBe(0);
+  });
+
+  it("fails a legacy unbound credential closed, including action replay", async () => {
+    const { body: backing } = await createCredential(admin.token, {
+      name: `legacy-backing-${Date.now()}`,
+      scopes: ["table:observe"],
+      tableId: tableA,
+    });
+    const token = generateServiceToken();
+    const legacy = await app.prisma.serviceCredential.create({
+      data: {
+        userId: backing.userId,
+        name: `legacy-unbound-${Date.now()}`,
+        keyHash: hashServiceToken(token),
+        scopes: ["table:observe"],
+        tableId: null,
+        seat: null,
+      },
+    });
+    createdCredentials.push(legacy.id);
+
+    // Runtime authentication rejects the unbound grant outright, so no request
+    // (including an action replay) ever reaches the replay-authorization path.
+    expect(await app.principalManager.authenticateServiceToken(token)).toBeNull();
+    expect((await getTable(token, tableA)).statusCode).toBe(401);
+    const me = await app.inject({
+      method: "GET",
+      url: "/auth/me",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(me.statusCode).toBe(401);
+    const replay = await app.inject({
+      method: "POST",
+      url: `/tables/${tableA}/action`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        requestId: "legacy-replay",
+        turnId: "turn-legacy",
+        expectedVersion: 1,
+        actionId: "action-legacy",
+      },
+    });
+    expect(replay.statusCode).toBe(401);
+
+    // Historical revoked metadata may keep the unbound tableId; authority is
+    // gone regardless (and the migration persists this revocation).
+    const revoked = await app.inject({
+      method: "POST",
+      url: `/auth/service-credentials/${legacy.id}/revoke`,
+      headers: { authorization: `Bearer ${admin.token}` },
+    });
+    expect(revoked.statusCode).toBe(200);
+    const listed = await app.inject({
+      method: "GET",
+      url: "/auth/service-credentials",
+      headers: { authorization: `Bearer ${admin.token}` },
+    });
+    const row = (
+      JSON.parse(listed.body) as {
+        credentials: Array<{ id: string; tableId: string | null; revoked: boolean }>;
+      }
+    ).credentials.find((credential) => credential.id === legacy.id);
+    expect(row?.revoked).toBe(true);
+    expect(row?.tableId).toBeNull();
+    expect((await getTable(token, tableA)).statusCode).toBe(401);
+  });
+
+  it("keeps orchestration credentials valid without a resource binding", async () => {
+    const { body } = await createCredential(admin.token, {
+      name: `orchestrator-${Date.now()}`,
+      scopes: ["competition:orchestrate"],
+    });
+    expect(body.tableId).toBeNull();
+    expect(body.seat).toBeNull();
+
+    const principal = await app.principalManager.authenticateServiceToken(body.token);
+    expect(principal).not.toBeNull();
+    expect(principal!.scopes).toEqual(["competition:orchestrate"]);
+    expect(app.principalManager.authorizeOrchestration(principal)).toEqual({
+      allowed: true,
+      reason: "OK",
+    });
+
+    // Mixing or binding orchestration is rejected at the boundary.
+    const mixed = await app.inject({
+      method: "POST",
+      url: "/auth/service-credentials",
+      headers: { authorization: `Bearer ${admin.token}` },
+      payload: { name: "mixed", scopes: ["competition:orchestrate", "table:act"] },
+    });
+    expect(mixed.statusCode).toBe(400);
+    const bound = await app.inject({
+      method: "POST",
+      url: "/auth/service-credentials",
+      headers: { authorization: `Bearer ${admin.token}` },
+      payload: { name: "bound-orch", scopes: ["competition:orchestrate"], tableId: tableA },
+    });
+    expect(bound.statusCode).toBe(400);
+  });
+
+  it("sanitizes unexpected Prisma failures without leaking or logging the raw error", async () => {
+    // Simulated driver failure carrying database credentials and a code that
+    // must never surface in the response or the logs.
+    const simulatedSecret = "postgresql://poker:sup3r-s3cret@db.internal:5432/poker";
+    const rawError = Object.assign(
+      new Error(`driver failure while connecting to ${simulatedSecret}`),
+      { code: "P2010", meta: { driverAdapterError: simulatedSecret } }
+    );
+    const logSpy = vi.spyOn(app.log, "error").mockImplementation(() => undefined);
+    const failureSpy = vi
+      .spyOn(app.principalManager, "listServiceCredentials")
+      .mockRejectedValue(rawError);
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: "/auth/service-credentials",
+        headers: { authorization: `Bearer ${admin.token}` },
+      });
+      expect(res.statusCode).toBe(500);
+      expect(JSON.parse(res.body)).toEqual({
+        error: "INTERNAL_ERROR",
+        message: "Internal server error",
+      });
+      expect(res.body).not.toContain(simulatedSecret);
+      expect(res.body).not.toContain("P2010");
+      expect(res.body).not.toContain("driver failure");
+
+      // Only a request id and a stable message are logged; the raw error object
+      // (which may embed credentials) is never passed to the logger.
+      expect(logSpy).toHaveBeenCalled();
+      const serializedLogs = JSON.stringify(logSpy.mock.calls);
+      expect(serializedLogs).not.toContain(simulatedSecret);
+      expect(serializedLogs).not.toContain("P2010");
+      expect(serializedLogs).not.toContain("driver failure");
+      for (const call of logSpy.mock.calls) {
+        expect(call[0]).not.toBe(rawError);
+      }
+    } finally {
+      failureSpy.mockRestore();
+      logSpy.mockRestore();
+    }
   });
 });

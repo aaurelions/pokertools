@@ -13,7 +13,9 @@ import {
   UncalledBetReturnedActionSchema,
   TableConfigSchema,
   CreateTableSchema,
+  CreateTournamentSchema,
   BuyInRequestSchema,
+  MAX_INT32_CHIP_CONFIG,
 } from "../src/schemas";
 import { CanonicalActionRequestSchema } from "../src";
 
@@ -370,6 +372,74 @@ describe("Table Configuration Schemas", () => {
 
       const result = CreateTableSchema.safeParse(invalidRequest);
       expect(result.success).toBe(false);
+    });
+
+    test("bounds persisted configuration amounts to int32", () => {
+      expect(
+        CreateTableSchema.safeParse({
+          name: "Table 1",
+          mode: "CASH",
+          smallBlind: 5,
+          bigBlind: 10,
+          minBuyIn: MAX_INT32_CHIP_CONFIG,
+          maxBuyIn: MAX_INT32_CHIP_CONFIG,
+        }).success
+      ).toBe(true);
+      expect(
+        CreateTableSchema.safeParse({
+          name: "Table 1",
+          mode: "CASH",
+          smallBlind: 5,
+          bigBlind: 10,
+          minBuyIn: MAX_INT32_CHIP_CONFIG + 1,
+        }).success
+      ).toBe(false);
+      expect(
+        CreateTableSchema.safeParse({
+          name: "Table 1",
+          mode: "CASH",
+          smallBlind: MAX_INT32_CHIP_CONFIG + 1,
+          bigBlind: MAX_INT32_CHIP_CONFIG + 2,
+        }).success
+      ).toBe(false);
+    });
+  });
+
+  describe("CreateTournamentSchema", () => {
+    test("bounds persisted configuration amounts to int32", () => {
+      const base = {
+        name: "Tournament",
+        startingStack: 1000,
+        smallBlind: 5,
+        bigBlind: 10,
+      };
+      expect(
+        CreateTournamentSchema.safeParse({
+          ...base,
+          buyIn: MAX_INT32_CHIP_CONFIG,
+          fee: MAX_INT32_CHIP_CONFIG,
+        }).success
+      ).toBe(true);
+      expect(
+        CreateTournamentSchema.safeParse({
+          ...base,
+          buyIn: MAX_INT32_CHIP_CONFIG + 1,
+        }).success
+      ).toBe(false);
+      expect(
+        CreateTournamentSchema.safeParse({
+          ...base,
+          buyIn: 100,
+          startingStack: MAX_INT32_CHIP_CONFIG + 1,
+        }).success
+      ).toBe(false);
+      expect(
+        CreateTournamentSchema.safeParse({
+          ...base,
+          buyIn: 100,
+          blindStructure: [{ smallBlind: MAX_INT32_CHIP_CONFIG + 1, bigBlind: 1, ante: 0 }],
+        }).success
+      ).toBe(false);
     });
   });
 });

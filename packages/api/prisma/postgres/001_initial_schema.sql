@@ -14,6 +14,18 @@ CREATE TYPE "TournamentStatus" AS ENUM ('REGISTRATION', 'RUNNING', 'FINISHED', '
 CREATE TYPE "TournamentEntryStatus" AS ENUM ('REGISTERED', 'ACTIVE', 'ELIMINATED', 'PAID');
 
 -- CreateEnum
+CREATE TYPE "CompetitionMode" AS ENUM ('NONFINANCIAL', 'ASSET');
+
+-- CreateEnum
+CREATE TYPE "CompetitionStatus" AS ENUM ('REGISTRATION', 'RUNNING', 'FINISHED', 'CANCELLED');
+
+-- CreateEnum
+CREATE TYPE "CompetitionEntryState" AS ENUM ('NOT_REQUIRED', 'PENDING', 'PAID', 'REFUNDED');
+
+-- CreateEnum
+CREATE TYPE "CompetitionPrizeStatus" AS ENUM ('NOT_APPLICABLE', 'RESERVED', 'PAID', 'RELEASED');
+
+-- CreateEnum
 CREATE TYPE "GameMode" AS ENUM ('CASH', 'TOURNAMENT');
 
 -- CreateEnum
@@ -32,7 +44,7 @@ CREATE TYPE "AtomicAccountClass" AS ENUM ('USER_AVAILABLE', 'IN_PLAY_RESERVE', '
 CREATE TYPE "DepositClaimStatus" AS ENUM ('OBSERVED', 'CONFIRMED', 'CREDITED', 'ORPHANED', 'FAILED');
 
 -- CreateEnum
-CREATE TYPE "DepositProvenance" AS ENUM ('DIRECT_TREASURY', 'SWEEP', 'MIGRATION');
+CREATE TYPE "DepositProvenance" AS ENUM ('DIRECT_TREASURY');
 
 -- CreateEnum
 CREATE TYPE "WithdrawalIntentState" AS ENUM ('RESERVED', 'BLOCKED_GAS', 'SIGNED', 'PERSISTED', 'BROADCAST', 'AMBIGUOUS', 'PENDING_CONFIRMATION', 'CONFIRMED', 'FINALIZED', 'REORGED', 'FAILED');
@@ -98,6 +110,18 @@ CREATE TABLE "ServiceCredential" (
 );
 
 -- CreateTable
+CREATE TABLE "ServicePrincipalDelegation" (
+    "id" TEXT NOT NULL,
+    "servicePrincipalId" TEXT NOT NULL,
+    "delegatePrincipalId" TEXT NOT NULL,
+    "revokedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "ServicePrincipalDelegation_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "Session" (
     "id" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
@@ -140,7 +164,7 @@ CREATE TABLE "Tournament" (
     "maxPlayers" INTEGER NOT NULL,
     "tableMaxPlayers" INTEGER NOT NULL DEFAULT 10,
     "balancingTolerance" INTEGER NOT NULL DEFAULT 2,
-    "prizePool" INTEGER NOT NULL DEFAULT 0,
+    "prizePool" BIGINT NOT NULL DEFAULT 0,
     "blindStructure" JSONB NOT NULL,
     "payoutPercentages" JSONB NOT NULL,
     "economicPolicyId" TEXT,
@@ -162,13 +186,61 @@ CREATE TABLE "TournamentEntry" (
     "seat" INTEGER NOT NULL,
     "status" "TournamentEntryStatus" NOT NULL DEFAULT 'REGISTERED',
     "placement" INTEGER,
-    "prize" INTEGER NOT NULL DEFAULT 0,
+    "prize" BIGINT NOT NULL DEFAULT 0,
     "currentTableId" TEXT,
     "currentSeat" INTEGER,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "TournamentEntry_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "Competition" (
+    "id" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "mode" "CompetitionMode" NOT NULL,
+    "status" "CompetitionStatus" NOT NULL DEFAULT 'REGISTRATION',
+    "idempotencyKey" TEXT NOT NULL,
+    "requestHash" TEXT NOT NULL,
+    "organizerId" TEXT NOT NULL,
+    "tournamentId" TEXT NOT NULL,
+    "startingStack" INTEGER NOT NULL,
+    "smallBlind" INTEGER NOT NULL,
+    "bigBlind" INTEGER NOT NULL,
+    "entryAssetId" TEXT,
+    "entryAmountAtomic" TEXT,
+    "prizeAssetId" TEXT,
+    "prizeAmountAtomic" TEXT,
+    "sponsorId" TEXT,
+    "prizeStatus" "CompetitionPrizeStatus" NOT NULL DEFAULT 'NOT_APPLICABLE',
+    "prizeReservationJournalId" TEXT,
+    "prizeSettlementJournalId" TEXT,
+    "startedAt" TIMESTAMP(3),
+    "finishedAt" TIMESTAMP(3),
+    "cancelledAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "Competition_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "CompetitionEntrant" (
+    "id" TEXT NOT NULL,
+    "competitionId" TEXT NOT NULL,
+    "principalId" TEXT NOT NULL,
+    "kind" "PrincipalKind" NOT NULL,
+    "seat" INTEGER NOT NULL,
+    "entryState" "CompetitionEntryState" NOT NULL DEFAULT 'NOT_REQUIRED',
+    "entryAmountAtomic" TEXT,
+    "entryJournalId" TEXT,
+    "entrySettlementJournalId" TEXT,
+    "refundJournalId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "CompetitionEntrant_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -571,13 +643,13 @@ CREATE INDEX "User_address_idx" ON "User"("address");
 CREATE INDEX "User_kind_idx" ON "User"("kind");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "ServiceCredential_userId_key" ON "ServiceCredential"("userId");
-
--- CreateIndex
 CREATE UNIQUE INDEX "ServiceCredential_keyHash_key" ON "ServiceCredential"("keyHash");
 
 -- CreateIndex
 CREATE INDEX "ServiceCredential_userId_idx" ON "ServiceCredential"("userId");
+
+-- CreateIndex
+CREATE INDEX "ServiceCredential_userId_revoked_idx" ON "ServiceCredential"("userId", "revoked");
 
 -- CreateIndex
 CREATE INDEX "ServiceCredential_createdById_idx" ON "ServiceCredential"("createdById");
@@ -587,6 +659,15 @@ CREATE INDEX "ServiceCredential_revoked_idx" ON "ServiceCredential"("revoked");
 
 -- CreateIndex
 CREATE INDEX "ServiceCredential_tableId_idx" ON "ServiceCredential"("tableId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "ServicePrincipalDelegation_servicePrincipalId_key" ON "ServicePrincipalDelegation"("servicePrincipalId");
+
+-- CreateIndex
+CREATE INDEX "ServicePrincipalDelegation_delegatePrincipalId_idx" ON "ServicePrincipalDelegation"("delegatePrincipalId");
+
+-- CreateIndex
+CREATE INDEX "ServicePrincipalDelegation_delegatePrincipalId_revokedAt_idx" ON "ServicePrincipalDelegation"("delegatePrincipalId", "revokedAt");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "Session_jti_key" ON "Session"("jti");
@@ -629,6 +710,48 @@ CREATE UNIQUE INDEX "TournamentEntry_tournamentId_userId_key" ON "TournamentEntr
 
 -- CreateIndex
 CREATE UNIQUE INDEX "TournamentEntry_tournamentId_seat_key" ON "TournamentEntry"("tournamentId", "seat");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "TournamentEntry_tournamentId_placement_key" ON "TournamentEntry"("tournamentId", "placement");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Competition_tournamentId_key" ON "Competition"("tournamentId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Competition_prizeReservationJournalId_key" ON "Competition"("prizeReservationJournalId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Competition_prizeSettlementJournalId_key" ON "Competition"("prizeSettlementJournalId");
+
+-- CreateIndex
+CREATE INDEX "Competition_status_createdAt_idx" ON "Competition"("status", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "Competition_organizerId_idx" ON "Competition"("organizerId");
+
+-- CreateIndex
+CREATE INDEX "Competition_sponsorId_idx" ON "Competition"("sponsorId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Competition_organizerId_idempotencyKey_key" ON "Competition"("organizerId", "idempotencyKey");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "CompetitionEntrant_entryJournalId_key" ON "CompetitionEntrant"("entryJournalId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "CompetitionEntrant_entrySettlementJournalId_key" ON "CompetitionEntrant"("entrySettlementJournalId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "CompetitionEntrant_refundJournalId_key" ON "CompetitionEntrant"("refundJournalId");
+
+-- CreateIndex
+CREATE INDEX "CompetitionEntrant_principalId_idx" ON "CompetitionEntrant"("principalId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "CompetitionEntrant_competitionId_principalId_key" ON "CompetitionEntrant"("competitionId", "principalId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "CompetitionEntrant_competitionId_seat_key" ON "CompetitionEntrant"("competitionId", "seat");
 
 -- CreateIndex
 CREATE INDEX "HandHistory_tableId_timestamp_idx" ON "HandHistory"("tableId", "timestamp");
@@ -865,6 +988,12 @@ ALTER TABLE "ServiceCredential" ADD CONSTRAINT "ServiceCredential_userId_fkey" F
 ALTER TABLE "ServiceCredential" ADD CONSTRAINT "ServiceCredential_createdById_fkey" FOREIGN KEY ("createdById") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "ServicePrincipalDelegation" ADD CONSTRAINT "ServicePrincipalDelegation_servicePrincipalId_fkey" FOREIGN KEY ("servicePrincipalId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ServicePrincipalDelegation" ADD CONSTRAINT "ServicePrincipalDelegation_delegatePrincipalId_fkey" FOREIGN KEY ("delegatePrincipalId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "Session" ADD CONSTRAINT "Session_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -890,6 +1019,21 @@ ALTER TABLE "TournamentEntry" ADD CONSTRAINT "TournamentEntry_userId_fkey" FOREI
 
 -- AddForeignKey
 ALTER TABLE "TournamentEntry" ADD CONSTRAINT "TournamentEntry_currentTableId_fkey" FOREIGN KEY ("currentTableId") REFERENCES "Table"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Competition" ADD CONSTRAINT "Competition_organizerId_fkey" FOREIGN KEY ("organizerId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Competition" ADD CONSTRAINT "Competition_tournamentId_fkey" FOREIGN KEY ("tournamentId") REFERENCES "Tournament"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Competition" ADD CONSTRAINT "Competition_sponsorId_fkey" FOREIGN KEY ("sponsorId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "CompetitionEntrant" ADD CONSTRAINT "CompetitionEntrant_competitionId_fkey" FOREIGN KEY ("competitionId") REFERENCES "Competition"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "CompetitionEntrant" ADD CONSTRAINT "CompetitionEntrant_principalId_fkey" FOREIGN KEY ("principalId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "HandHistory" ADD CONSTRAINT "HandHistory_tableId_fkey" FOREIGN KEY ("tableId") REFERENCES "Table"("id") ON DELETE CASCADE ON UPDATE CASCADE;

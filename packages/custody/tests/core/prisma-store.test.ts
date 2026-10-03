@@ -21,12 +21,27 @@ function fakePrisma() {
 
   const matches = (row: Row, where: Row): boolean => {
     for (const [key, expected] of Object.entries(where)) {
+      if (key === "OR") {
+        if (!(expected as Row[]).some((clause) => matches(row, clause))) return false;
+        continue;
+      }
       if (expected && typeof expected === "object" && "in" in expected) {
         if (!(expected as { in: unknown[] }).in.includes(row[key])) return false;
         continue;
       }
       if (expected && typeof expected === "object" && "not" in expected) {
         if (row[key] === (expected as { not: unknown }).not) return false;
+        continue;
+      }
+      if (expected && typeof expected === "object" && "gt" in expected) {
+        const gt = (expected as { gt: unknown }).gt;
+        if (gt instanceof Date) {
+          if (!(row[key] instanceof Date) || (row[key] as Date).getTime() <= gt.getTime()) {
+            return false;
+          }
+        } else if (String(row[key]) <= String(gt)) {
+          return false;
+        }
         continue;
       }
       if (expected && typeof expected === "object" && "equals" in expected) {
@@ -44,6 +59,37 @@ function fakePrisma() {
       if (row[key] !== expected) return false;
     }
     return true;
+  };
+
+  const applyUpdate = (row: Row, data: Row): void => {
+    for (const [key, value] of Object.entries(data)) {
+      if (value === undefined) continue;
+      if (value && typeof value === "object" && "increment" in value) {
+        row[key] = Number(row[key]) + Number((value as { increment: number }).increment);
+      } else {
+        row[key] = value;
+      }
+    }
+  };
+
+  const sortRows = (rows: Row[], orderBy: Row | Row[] | undefined): Row[] => {
+    const clauses = Array.isArray(orderBy) ? orderBy : orderBy ? [orderBy] : [];
+    if (clauses.length === 0) return rows;
+    return rows.sort((a, b) => {
+      for (const clause of clauses) {
+        const [key, direction] = Object.entries(clause)[0] as [string, string];
+        const left = a[key];
+        const right = b[key];
+        let cmp: number;
+        if (left instanceof Date && right instanceof Date) cmp = left.getTime() - right.getTime();
+        else if (typeof left === "bigint" && typeof right === "bigint")
+          cmp = left < right ? -1 : left > right ? 1 : 0;
+        else if (typeof left === "number" && typeof right === "number") cmp = left - right;
+        else cmp = String(left).localeCompare(String(right));
+        if (cmp !== 0) return direction === "desc" ? -cmp : cmp;
+      }
+      return 0;
+    });
   };
 
   const client = {
@@ -70,26 +116,27 @@ function fakePrisma() {
         return row;
       },
       updateMany: async ({ where, data }: { where: Row; data: Row }) => {
-        const row = withdrawals.get(where.id as string);
-        if (!row || !matches(row, where)) return { count: 0 };
-        for (const [key, value] of Object.entries(data)) {
-          if (value && typeof value === "object" && "increment" in value) {
-            row[key] = Number(row[key]) + Number((value as { increment: number }).increment);
-          } else {
-            row[key] = value;
-          }
-        }
-        return { count: 1 };
+        const targets =
+          where.id && typeof where.id === "object" && "in" in where.id
+            ? (where.id as { in: string[] }).in
+                .map((id) => withdrawals.get(id))
+                .filter((row): row is Row => row !== undefined)
+            : withdrawals.get(where.id as string)
+              ? [withdrawals.get(where.id as string)!]
+              : [];
+        const matched = targets.filter((row) => matches(row, where));
+        for (const row of matched) applyUpdate(row, data);
+        return { count: matched.length };
       },
       findFirst: async ({ where }: { where: Row }) => {
         const found = [...withdrawals.values()].filter((row) => matches(row, where));
         return found[0] ?? null;
       },
       findMany: async ({ where, take, orderBy }: { where: Row; take?: number; orderBy?: Row }) => {
-        const rows = [...withdrawals.values()].filter((row) => matches(row, where));
-        if (orderBy?.broadcastNonce === "desc")
-          rows.sort((a, b) => Number(b.broadcastNonce) - Number(a.broadcastNonce));
-        return take === undefined ? rows : rows.slice(0, take);
+        const rows = [...withdrawals.values()].filter((row) => matches(row, where ?? {}));
+        return take === undefined
+          ? sortRows(rows, orderBy)
+          : sortRows(rows, orderBy).slice(0, take);
       },
     },
     financialIncident: {
@@ -106,15 +153,19 @@ function fakePrisma() {
         incidents.set(row.id as string, row);
         return row;
       },
+      upsert: async ({ where, create, update }: { where: Row; create: Row; update: Row }) => {
+        const existing = incidents.get(where.id as string);
+        if (existing) {
+          applyUpdate(existing, update);
+          return existing;
+        }
+        const row: Row = { version: 0, ...create, createdAt: new Date() };
+        incidents.set(row.id as string, row);
+        return row;
+      },
       update: async ({ where, data }: { where: Row; data: Row }) => {
         const row = incidents.get(where.id as string)!;
-        for (const [key, value] of Object.entries(data)) {
-          if (value && typeof value === "object" && "increment" in value) {
-            row[key] = Number(row[key]) + Number((value as { increment: number }).increment);
-          } else {
-            row[key] = value;
-          }
-        }
+        applyUpdate(row, data);
         return row;
       },
     },
@@ -149,6 +200,31 @@ function newRecord(overrides: Record<string, unknown> = {}) {
 }
 
 describe("PrismaWithdrawalStore", () => {
+  it("pages and rotates by durable (updatedAt, id) so a blocked front batch cannot starve the tail", async () => {
+    const { client, withdrawals } = fakePrisma();
+    const store = new PrismaWithdrawalStore(client, "file:./test.db");
+    for (const id of ["int_a", "int_b", "int_c"]) {
+      await store.create(newRecord({ intentId: id }));
+    }
+    withdrawals.get("int_a")!.updatedAt = new Date(1_000);
+    withdrawals.get("int_b")!.updatedAt = new Date(2_000);
+    withdrawals.get("int_c")!.updatedAt = new Date(3_000);
+
+    const first = await store.listByStates(["RESERVED"], 2);
+    expect(first.map((record) => record.intentId)).toEqual(["int_a", "int_b"]);
+    const last = first[first.length - 1];
+    const second = await store.listByStates(["RESERVED"], 2, {
+      updatedAt: last.updatedAt,
+      intentId: last.intentId,
+    });
+    expect(second.map((record) => record.intentId)).toEqual(["int_c"]);
+
+    // Rotation: scanned records move strictly behind the unscanned tail.
+    await store.markScanned(["int_a", "int_b"], 4_000);
+    const rotated = await store.listByStates(["RESERVED"], 3);
+    expect(rotated.map((record) => record.intentId)).toEqual(["int_c", "int_a", "int_b"]);
+  });
+
   it("does not lose a treasury's maximum behind fifty higher nonces from another treasury", async () => {
     const { client, withdrawals } = fakePrisma();
     const store = new PrismaWithdrawalStore(client, "file:./test.db");
@@ -233,6 +309,31 @@ describe("PrismaWithdrawalStore", () => {
 });
 
 describe("PrismaIncidentStore", () => {
+  it("collapses concurrent opens for one (kind, assetId, intentId) onto a single durable row", async () => {
+    const { client, incidents } = fakePrisma();
+    const store = new PrismaIncidentStore(client);
+    const input = {
+      kind: "GAS_STARVATION" as const,
+      severity: "CRITICAL" as const,
+      assetId: ASSET_ID,
+      chainId: CHAIN_ID,
+      intentId: "int_1",
+      principalId: "principal_1",
+      detail: { availableAtomic: "5" },
+    };
+
+    const [first, second, third] = await Promise.all([
+      store.open(input),
+      store.open({ ...input, detail: { availableAtomic: "6" } }),
+      store.open(input),
+    ]);
+
+    expect(incidents.size).toBe(1);
+    expect(first.incidentId).toBe(second.incidentId);
+    expect(second.incidentId).toBe(third.incidentId);
+    expect(first.incidentId.startsWith("inc_")).toBe(true);
+  });
+
   it("maps evidence/affectedId to the durable incident shape and is idempotent per intent", async () => {
     const { client } = fakePrisma();
     const store = new PrismaIncidentStore(client);
@@ -270,6 +371,22 @@ describe("PrismaIncidentStore", () => {
     expect(resolved.status).toBe("RESOLVED");
     expect(resolved.resolvedAt).toBeGreaterThan(0);
     expect(await store.listOpen()).toHaveLength(0);
+
+    // A recurring condition reopens the same durable row (stable key) instead
+    // of racing a second find/create.
+    const reopened = await store.open({
+      kind: "GAS_STARVATION",
+      severity: "CRITICAL",
+      assetId: ASSET_ID,
+      chainId: CHAIN_ID,
+      intentId: "int_1",
+      detail: { availableAtomic: "7" },
+    });
+    expect(reopened.incidentId).toBe(first.incidentId);
+    expect(reopened.status).toBe("OPEN");
+    expect(reopened.resolvedAt).toBeUndefined();
+    expect(reopened.detail.availableAtomic).toBe("7");
+    expect(await store.listOpen()).toHaveLength(1);
   });
 });
 

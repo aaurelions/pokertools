@@ -88,18 +88,22 @@ HTTP sends `Authorization: Bearer <token>`; the WebSocket sends the
 
 ### Retry policy
 
-| Request type                        | Retried? | Notes                               |
-| :---------------------------------- | :------- | :---------------------------------- |
-| `GET`                               | ✅       | Safe reads                          |
-| Mutations with a stable identity    | ✅       | Exact serialized bytes are replayed |
-| Mutations without a stable identity | ❌       | Never auto-replayed                 |
-| `429` / `5xx`                       | ✅       | Backoff                             |
-| Other `4xx`                         | ❌       | `304` aborts immediately            |
-| Timeout / abort                     | ❌       | Throws `TIMEOUT`                    |
+| Request type                             | Retried? | Notes                                                                    |
+| :--------------------------------------- | :------- | :----------------------------------------------------------------------- |
+| `GET`                                    | ✅       | Safe reads                                                               |
+| Mutations explicitly declared retry-safe | ✅       | Naturally idempotent operations (competition opt-in/start/settle/cancel) |
+| Mutations with a stable identity         | ✅       | Exact serialized bytes are replayed                                      |
+| Mutations without a stable identity      | ❌       | Never auto-replayed                                                      |
+| `429` / `5xx`                            | ✅       | Backoff                                                                  |
+| Other `4xx`                              | ❌       | `304` aborts immediately                                                 |
+| Timeout / abort                          | ❌       | Throws `TIMEOUT`                                                         |
 
 A stable identity is a `requestId`, an `idempotencyKey`, a signed withdrawal
 `intent` (`intentId` + `nonce`), or an exact deposit log identity
-(`txHash` + `logIndex`).
+(`txHash` + `logIndex`). The shared transport additionally accepts an explicit
+`retrySafe` operation flag for mutations that are naturally idempotent for
+their resource even though the body carries no identity; only known-safe
+operations opt in, so arbitrary mutations are never replayed on a guess.
 
 ### Error handling
 
@@ -131,15 +135,16 @@ reconnects with backoff and re-joins previously joined tables.
 
 ### Client method groups
 
-| Group             | Methods                                                                                                                                                                              |
-| :---------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Auth              | `getNonce()`, `login(request)`, `logout()`, `setToken()`, `isAuthenticated()`                                                                                                        |
-| Tables            | `getTables()`, `createTable()`, `getObservation(id)`, `action(id, request)`, `buyIn()`, `addChips()`                                                                                 |
-| Table sugar       | `fold()`, `check()`, `call()`, `bet()`, `raise()`, `deal()`, `show()`, `muck()`, `timeBank()`, `stand()`                                                                             |
-| Tournaments       | `getTournaments()`, `createTournament()`, `getTournament()`, `registerTournament()`, `startTournament()`, `reconcileTournament()`, `advanceTournamentBlinds()`, `settleTournament()` |
-| Profile & history | `getProfile()`, `getHandHistory()`                                                                                                                                                   |
-| Finance           | `getAssets()`, `getBalances()`, `claimDeposit()`, `getDeposit()`, `submitWithdrawal()`, `getWithdrawal()`                                                                            |
-| Notes             | `getNotes()`, `getNote()`, `saveNote()`, `deleteNote()`                                                                                                                              |
+| Group             | Methods                                                                                                                                                                                                              |
+| :---------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Auth              | `getNonce()`, `login(request)`, `logout()`, `setToken()`, `isAuthenticated()`                                                                                                                                        |
+| Operator admin    | `createServiceCredential(request)`, `listServiceCredentials()`, `revokeServiceCredential(id)`, `provisionServicePrincipal(request)`, `revokeServicePrincipalDelegation(id)`, `rotateServiceCredential(id, request?)` |
+| Tables            | `getTables()`, `createTable()`, `getObservation(id)`, `action(id, request)`, `buyIn()`, `addChips()`                                                                                                                 |
+| Table sugar       | `fold()`, `check()`, `call()`, `bet()`, `raise()`, `deal()`, `show()`, `muck()`, `timeBank()`, `stand()`                                                                                                             |
+| Tournaments       | `getTournaments()`, `createTournament()`, `getTournament()`, `registerTournament()`, `startTournament()`, `reconcileTournament()`, `advanceTournamentBlinds()`, `settleTournament()`                                 |
+| Profile & history | `getProfile()`, `getHandHistory()`                                                                                                                                                                                   |
+| Finance           | `getAssets()`, `getBalances()`, `claimDeposit()`, `getDeposit()`, `submitWithdrawal()`, `getWithdrawal()`                                                                                                            |
+| Notes             | `getNotes()`, `getNote()`, `saveNote()`, `deleteNote()`                                                                                                                                                              |
 
 `getObservation(id)` returns the authoritative `SeatObservation`: masked
 `PublicWireState` plus the server-issued `legalActions` for the acting seat.
@@ -147,9 +152,12 @@ reconnects with backoff and re-joins previously joined tables.
 (`{ requestId, turnId, expectedVersion, actionId, amount? }`) and returns
 `{ receipt, observation }`. `getTableState(id, since?)` returns the same
 `PublicWireState` projection (or `null` on 304), without turn/legal-action metadata.
-Maps are decimal seat-keyed records on every public transport. The SDK does not
-export authoritative engine/reducer models; use the engine/types packages for
-standalone engine applications.
+The `GET /tables` collection is a WALLET surface: a table-scoped SERVICE
+credential is denied with `403 SERVICE_SCOPE_FORBIDDEN` and reaches only its
+bound room through `getTableState(id)`/`getObservation(id)` using the `tableId`
+it was granted. Maps are decimal seat-keyed records on every public transport.
+The SDK does not export authoritative engine/reducer models; use the
+engine/types packages for standalone engine applications.
 
 ## Canonical withdrawals
 
@@ -182,6 +190,48 @@ const typedData = createWithdrawalTypedData(intent, domain);
 const signature = await account.signTypedData({ ...typedData });
 await client.submitWithdrawal({ intent, signature });
 ```
+
+## Competitions
+
+`CompetitionClient` is exported from the root entry and orchestrates generic
+server-authoritative single-table competitions with a 2-10 entrant roster. It
+uses the same transport, retry policy and error mapping as `PokerClient`:
+
+```ts
+import { CompetitionClient } from "@pokertools/sdk";
+
+const competitions = new CompetitionClient({
+  baseUrl: "https://api.example.com",
+  token: orchestratorServiceToken, // competition:orchestrate
+});
+
+const { competition } = await competitions.createCompetition({
+  name: "Asset table",
+  mode: "ASSET",
+  entrants: [
+    { principalId: walletPrincipalId, kind: "WALLET" },
+    { principalId: agentPrincipalId, kind: "SERVICE" },
+  ],
+  terms,
+  idempotencyKey: crypto.randomUUID(),
+});
+
+await competitions.optIn(competition.id); // configured WALLET payer session
+await competitions.start(competition.id); // or cancel(competition.id) prestart
+await competitions.settle(competition.id);
+```
+
+| Group         | Methods                                                                                                                                 |
+| :------------ | :-------------------------------------------------------------------------------------------------------------------------------------- |
+| Orchestration | `createCompetition(request)`, `getCompetition(id)`, `start(id)`, `settle(id)`, `cancel(id)`, `issueAgentCredential(id, request)`        |
+| Entry         | `optIn(id)` — configured WALLET payer only; returns the immutable `journalRequestId` receipt with live `entryState` (`PAID`/`REFUNDED`) |
+| Credential    | `setToken()`, `getToken()`, `isAuthenticated()`                                                                                         |
+
+`createCompetition` is idempotent on its explicit `idempotencyKey`.
+`optIn`, `start`, `settle` and `cancel` send strict empty-object bodies and are
+naturally idempotent from durable server state; the transport replays them only
+because the client explicitly declares them retry-safe, with identical
+serialized bytes.
 
 ## WebSocket transport
 

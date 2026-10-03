@@ -39,7 +39,7 @@ console.log("--- Creating throw-away database with prisma db push ---");
 // Prisma 7 `db push` no longer regenerates the client (and rejects the retired
 // --skip-generate flag), so the PostgreSQL-provider client generated for the
 // runtime is left untouched.
-execSync("npx prisma db push --accept-data-loss", {
+execSync("npx prisma db push", {
   cwd: packageDir,
   env: { ...process.env, DATABASE_URL: dbUrl },
   stdio: "inherit",

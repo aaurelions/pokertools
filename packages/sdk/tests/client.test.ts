@@ -164,6 +164,38 @@ describe("PokerClient", () => {
       await expect(client.getTables()).rejects.toThrow();
     });
 
+    it("denies the table collection to a table-scoped SERVICE credential", async () => {
+      // The collection listing is a WALLET surface: a bound SERVICE credential
+      // is not part of it and the API fails closed with 403.
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        json: () => Promise.resolve({ error: "SERVICE_SCOPE_FORBIDDEN" }),
+      });
+
+      await expect(client.getTables()).rejects.toMatchObject({
+        statusCode: 403,
+        code: "SERVICE_SCOPE_FORBIDDEN",
+      });
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.example.com/tables",
+        expect.objectContaining({ method: "GET" })
+      );
+    });
+
+    it("reads only the known bound room through GET /tables/:id", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ state: wireState }),
+      });
+
+      await expect(client.getTableState("bound-table-1")).resolves.toEqual(wireState);
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.example.com/tables/bound-table-1",
+        expect.objectContaining({ method: "GET" })
+      );
+    });
+
     it("createTable returns tableId", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,

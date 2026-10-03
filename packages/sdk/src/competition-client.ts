@@ -12,9 +12,12 @@
  * against the same strict canonical schema, so an internal projection drift
  * fails closed instead of reaching the caller.
  *
- * Retry safety: every mutation body carries a stable `idempotencyKey`. The
- * shared transport replays the identical serialized bytes, so a lost response
- * can never create a second entry, charge, start or prize.
+ * Retry safety: `createCompetition` carries a real stable `idempotencyKey`
+ * (and the exact serialized bytes are replayed). The lifecycle mutations
+ * (`optIn`, `start`, `settle`, `cancel`) have strict empty-object bodies and are
+ * naturally idempotent from durable server state, so they declare
+ * `retrySafe: true` on the shared transport explicitly; no other mutation is
+ * replayed on a guess.
  *
  * @example
  * ```typescript
@@ -33,23 +36,28 @@
  *   terms,
  *   idempotencyKey: crypto.randomUUID(),
  * });
+ *
+ * await competitions.optIn(created.competition.id); // configured WALLET payer
+ * await competitions.start(created.competition.id);
+ * await competitions.settle(created.competition.id);
+ * // Prestart alternative to start: await competitions.cancel(created.competition.id);
  * ```
  */
 
 import type {
+  CancelCompetitionResponse,
   Competition,
   CreateCompetitionRequest,
   CreateCompetitionResponse,
-  OptInCompetitionRequest,
   OptInCompetitionResponse,
-  StartCompetitionRequest,
   StartCompetitionResponse,
-  SettleCompetitionRequest,
   SettleCompetitionResponse,
   IssueAgentCredentialRequest,
   IssuedAgentCredential,
 } from "@pokertools/types";
 import {
+  CancelCompetitionRequestSchema,
+  CancelCompetitionResponseSchema,
   CreateCompetitionRequestSchema,
   CreateCompetitionResponseSchema,
   GetCompetitionResponseSchema,
@@ -122,18 +130,18 @@ export class CompetitionClient {
    * Opt in as the authenticated configured WALLET entry payer
    * (`POST /competitions/:id/opt-in`), charging the explicit entry atomically.
    *
-   * The payer is resolved from authentication; the body carries only the
-   * idempotency identity. Replays return the original journal conversion.
+   * The payer is resolved from authentication; the strict empty-object body
+   * carries no identity because the durable PAID marker plus the exact entry
+   * journal are the operation identity. Naturally idempotent, so the transport
+   * may replay the identical bytes after a lost response.
    */
-  async optIn(
-    competitionId: string,
-    request: OptInCompetitionRequest
-  ): Promise<OptInCompetitionResponse> {
-    const parsed = OptInCompetitionRequestSchema.parse(request);
+  async optIn(competitionId: string): Promise<OptInCompetitionResponse> {
+    const parsed = OptInCompetitionRequestSchema.parse({});
     const response = await this.transport.request<unknown>(
       "POST",
       `${COMPETITIONS_PATH}/${encodeURIComponent(competitionId)}/opt-in`,
-      parsed
+      parsed,
+      { retrySafe: true }
     );
     return OptInCompetitionResponseSchema.parse(response);
   }
@@ -141,36 +149,53 @@ export class CompetitionClient {
   /**
    * Start a fully paid competition (`POST /competitions/:id/start`,
    * orchestration only). Returns the authoritative table and seat assignments.
+   * Replayable from the durable start marker.
    */
-  async startCompetition(
-    competitionId: string,
-    request: StartCompetitionRequest
-  ): Promise<StartCompetitionResponse> {
-    const parsed = StartCompetitionRequestSchema.parse(request);
+  async start(competitionId: string): Promise<StartCompetitionResponse> {
+    const parsed = StartCompetitionRequestSchema.parse({});
     const response = await this.transport.request<unknown>(
       "POST",
       `${COMPETITIONS_PATH}/${encodeURIComponent(competitionId)}/start`,
-      parsed
+      parsed,
+      { retrySafe: true }
     );
     return StartCompetitionResponseSchema.parse(response);
   }
 
   /**
    * Settle a finished competition (`POST /competitions/:id/settle`,
-   * orchestration only, idempotent). For `ASSET` competitions the reserved
-   * prize is paid exactly once or released back to the sponsor.
+   * orchestration only, naturally idempotent). For `ASSET` competitions the
+   * reserved prize is paid exactly once or released back to the sponsor.
    */
-  async settleCompetition(
-    competitionId: string,
-    request: SettleCompetitionRequest
-  ): Promise<SettleCompetitionResponse> {
-    const parsed = SettleCompetitionRequestSchema.parse(request);
+  async settle(competitionId: string): Promise<SettleCompetitionResponse> {
+    const parsed = SettleCompetitionRequestSchema.parse({});
     const response = await this.transport.request<unknown>(
       "POST",
       `${COMPETITIONS_PATH}/${encodeURIComponent(competitionId)}/settle`,
-      parsed
+      parsed,
+      { retrySafe: true }
     );
     return SettleCompetitionResponseSchema.parse(response);
+  }
+
+  /**
+   * Cancel a prestart competition (`POST /competitions/:id/cancel`,
+   * orchestration only, `REGISTRATION` only). Refunds every entry still held in
+   * the competition reserve, releases the prize reservation and durably
+   * cancels the backing tournament and table.
+   *
+   * Naturally idempotent from durable state: a replay returns the same durable
+   * facts and never refunds, releases or pays twice.
+   */
+  async cancel(competitionId: string): Promise<CancelCompetitionResponse> {
+    const parsed = CancelCompetitionRequestSchema.parse({});
+    const response = await this.transport.request<unknown>(
+      "POST",
+      `${COMPETITIONS_PATH}/${encodeURIComponent(competitionId)}/cancel`,
+      parsed,
+      { retrySafe: true }
+    );
+    return CancelCompetitionResponseSchema.parse(response);
   }
 
   /**

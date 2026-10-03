@@ -8,6 +8,8 @@
 export type {
   ProvisionServicePrincipalRequest,
   ProvisionedServicePrincipal,
+  RevokeServicePrincipalDelegationRequest,
+  RevokeServicePrincipalDelegationResponse,
   RotateServiceCredentialRequest,
   ServiceCredentialRef,
   ServicePrincipalDelegation,
@@ -16,6 +18,8 @@ export type {
 export {
   ProvisionServicePrincipalRequestSchema,
   ProvisionedServicePrincipalSchema,
+  RevokeServicePrincipalDelegationRequestSchema,
+  RevokeServicePrincipalDelegationResponseSchema,
   RotateServiceCredentialRequestSchema,
   ServiceCredentialRefSchema,
   ServicePrincipalDelegationSchema,

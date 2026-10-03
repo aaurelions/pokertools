@@ -1,7 +1,7 @@
 /**
  * Narrow custody withdrawal workflow.
  *
- * Invariants enforced here (Telegram-independent, callable/testable in
+ * Invariants enforced here (callable/testable in
  * isolation):
  *
  * 1. Persist-before-broadcast: treasury nonce (`broadcastNonce`), route
@@ -24,10 +24,20 @@
  *    confirmation and exactly once (`confirmedJournalId`).
  * 7. Reorgs preserve history as a `WITHDRAWAL_REORG` incident. After
  *    completion, an `INCIDENT_OBLIGATION` journal restores the obligation
- *    exactly once (`reorgJournalId`); pre-completion reorgs keep the existing
- *    PENDING_WITHDRAWAL obligation with no second liability. The route freezes
- *    but monitoring continues.
- * 8. Reconciliation compares quorum ERC-20 custody against accounting-expected
+ *    exactly once per reorg cycle (`reorgJournalId`); pre-completion reorgs keep
+ *    the existing PENDING_WITHDRAWAL obligation with no second liability. When
+ *    the exact same persisted payout (`txHash`) is re-included and re-finalizes,
+ *    a balanced, idempotent reversal (`INCIDENT_OBLIGATION -a` /
+ *    `TREASURY_RESERVE +a`) restores the settled state; settlement is never
+ *    replayed, no replacement bytes are signed and no refund is ever issued.
+ *    Repeat cycles chain obligation -> reversal -> obligation via journal ids.
+ *    The REORGED state is entered via the custody CAS before any obligation is
+ *    posted, and obligations/reversals are bound to the durable receipt
+ *    identity and payout hash, never to a stale caller snapshot.
+ *    The route freezes but monitoring continues.
+ * 8. Treasury nonce overflow or unreadable durable nonce state opens a durable
+ *    CRITICAL incident and refuses to sign (fail closed).
+ * 9. Reconciliation compares quorum ERC-20 custody against accounting-expected
  *    signed net liabilities; a mismatch freezes and raises
  *    `TREASURY_SHORTFALL`.
  */
@@ -49,6 +59,7 @@ import type {
   IncidentStore,
   NewWithdrawalRecord,
   QuorumResult,
+  ReceiptObservation,
   RpcQuorumReader,
   SignedTransaction,
   TreasuryAccounting,
@@ -56,6 +67,7 @@ import type {
   TreasuryBroadcaster,
   TreasurySigner,
   WithdrawalRecord,
+  WithdrawalScanCursor,
   WithdrawalState,
   WithdrawalStore,
   ReconciliationEvidence,
@@ -70,13 +82,16 @@ import {
 export interface WithdrawalWorkflowConfig {
   /** Minimum agreeing RPC observations for a quorum decision. */
   minQuorum: number;
-  /** Max records to scan per state bucket per tick. */
+  /** Max records to scan per state bucket per page. */
   maxScanBatch: number;
+  /** Max keyset pages per state lane per tick (bounded tick latency). */
+  maxScanPages: number;
 }
 
 export const DEFAULT_WORKFLOW_CONFIG: WithdrawalWorkflowConfig = {
   minQuorum: 2,
   maxScanBatch: 25,
+  maxScanPages: 4,
 };
 
 const MAX_SAFE_NONCE = Number.MAX_SAFE_INTEGER;
@@ -87,6 +102,7 @@ export type ProcessAction =
   | "expired"
   | "blocked_gas"
   | "blocked_quorum"
+  | "blocked_reorg_reversal"
   | "signed_broadcast"
   | "rebroadcast"
   | "ambiguous"
@@ -186,7 +202,19 @@ export class WithdrawalWorkflow {
     return this.monitorRecord(record);
   }
 
-  /** Advance pending obligations. Scope: signable first, then monitoring. */
+  /**
+   * Advance pending obligations. Scope: signable first, then monitoring.
+   *
+   * Both lanes page over the durable `(updatedAt, id)` order and then mark the
+   * visited records as scanned, so a fixed oldest batch that stays blocked (RPC
+   * outage, frozen route, reorg) can never starve the rest of the bucket. Each
+   * lane is bounded by `maxScanPages * maxScanBatch` per tick to keep tick
+   * latency bounded; rotation guarantees the tail is reached on later ticks.
+   *
+   * Signing itself stays serialized per `(chainId, treasuryAddress)` inside the
+   * store's durable treasury lock (`signUnderLock`), so paging order can never
+   * interleave two nonce allocations for the same account.
+   */
   async runOnce(): Promise<RunSummary> {
     const summary: RunSummary = {
       signed: 0,
@@ -199,23 +227,59 @@ export class WithdrawalWorkflow {
       failed: 0,
     };
 
-    const signable = await this.store.listByStates(
-      ["RESERVED", "BLOCKED_GAS"],
-      this.config.maxScanBatch
+    await this.runLane(["RESERVED", "BLOCKED_GAS"], summary, (record) =>
+      this.processIntent(record.intentId)
     );
-    for (const record of signable) {
-      this.tally(summary, await this.processIntent(record.intentId));
-    }
-
-    const monitoring = await this.store.listByStates(
-      [...MONITORING_WITHDRAWAL_STATES],
-      this.config.maxScanBatch
+    await this.runLane([...MONITORING_WITHDRAWAL_STATES], summary, (record) =>
+      this.monitorRecord(record)
     );
-    for (const record of monitoring) {
-      this.tally(summary, await this.monitorRecord(record));
-    }
 
     return summary;
+  }
+
+  private async runLane(
+    states: readonly WithdrawalState[],
+    summary: RunSummary,
+    process: (record: WithdrawalRecord) => Promise<ProcessOutcome>
+  ): Promise<void> {
+    const scanned: WithdrawalRecord[] = [];
+    let cursor: WithdrawalScanCursor | undefined;
+    for (let page = 0; page < this.config.maxScanPages; page += 1) {
+      let batch: WithdrawalRecord[];
+      try {
+        batch = await this.store.listByStates([...states], this.config.maxScanBatch, cursor);
+      } catch (error) {
+        // An unreadable durable scan (e.g. a persisted nonce above the safe
+        // integer range) must fail closed with durable evidence, never a
+        // silent tick abort.
+        await this.incidents.open({
+          kind: "CUSTODY_FAILURE",
+          severity: "CRITICAL",
+          detail: {
+            reason: "scan_failed",
+            states,
+            code: error instanceof Error ? error.name : "UNKNOWN",
+          },
+        });
+        return;
+      }
+      if (batch.length === 0) break;
+      for (const record of batch) {
+        scanned.push(record);
+        this.tally(summary, await process(record));
+      }
+      const last = batch[batch.length - 1];
+      cursor = { updatedAt: last.updatedAt, intentId: last.intentId };
+      if (batch.length < this.config.maxScanBatch) break;
+    }
+    if (scanned.length === 0) return;
+    // Strictly ahead of every scanned record's durable timestamp so rotation
+    // works even when the clock is frozen or several records share a tick.
+    const newest = scanned.reduce((max, record) => Math.max(max, record.updatedAt), 0);
+    await this.store.markScanned(
+      scanned.map((record) => record.intentId),
+      Math.max(this.clock.now(), newest + 1)
+    );
   }
 
   private tally(summary: RunSummary, outcome: ProcessOutcome): void {
@@ -241,6 +305,7 @@ export class WithdrawalWorkflow {
         break;
       case "blocked_gas":
       case "blocked_quorum":
+      case "blocked_reorg_reversal":
       case "blocked_reverted":
       case "skipped_frozen":
         summary.blocked += 1;
@@ -540,7 +605,8 @@ export class WithdrawalWorkflow {
    * Next treasury nonce. Requires on-chain `pending` nonce quorum; the durable
    * lock plus `maxPersistedTreasuryNonce` prevents reuse. There is deliberately
    * no "guess from local state" fallback: when quorum is unavailable signing
-   * fails closed.
+   * fails closed. Nonce overflow or an unreadable durable nonce state opens a
+   * durable CRITICAL incident and refuses to sign.
    */
   private async deriveTreasuryNonce(
     asset: TreasuryAsset,
@@ -554,15 +620,42 @@ export class WithdrawalWorkflow {
       );
       return null;
     }
-    const persistedMax = await this.store.maxPersistedTreasuryNonce(
-      asset.chainId,
-      asset.treasuryAddress
-    );
+    let persistedMax: number;
+    try {
+      persistedMax = await this.store.maxPersistedTreasuryNonce(
+        asset.chainId,
+        asset.treasuryAddress
+      );
+    } catch (error) {
+      // A durable nonce above the safe integer range (or an unreadable row) is
+      // an operator condition, not a retryable transport error: fail closed.
+      await this.openIncident("CUSTODY_FAILURE", "CRITICAL", record, {
+        reason: "treasury_nonce_state_unreadable",
+        code: error instanceof Error ? error.name : "UNKNOWN",
+      });
+      return null;
+    }
+    if (!Number.isSafeInteger(count.value) || count.value < 0) {
+      await this.openIncident("CUSTODY_FAILURE", "CRITICAL", record, {
+        reason: "treasury_nonce_overflow_operator_resolution",
+        chainId: asset.chainId,
+        treasuryAddress: asset.treasuryAddress,
+        onChainPending: String(count.value),
+      });
+      return null;
+    }
     const onChain = BigInt(count.value);
     const persistedNext = BigInt(persistedMax + 1);
     const candidate = onChain > persistedNext ? onChain : persistedNext;
     if (candidate < 0n || candidate > BigInt(MAX_SAFE_NONCE)) {
-      throw new RangeError("Treasury nonce exceeds safe integer range");
+      await this.openIncident("CUSTODY_FAILURE", "CRITICAL", record, {
+        reason: "treasury_nonce_overflow_operator_resolution",
+        chainId: asset.chainId,
+        treasuryAddress: asset.treasuryAddress,
+        candidate: candidate.toString(),
+        persistedMax: String(persistedMax),
+      });
+      return null;
     }
     return Number(candidate);
   }
@@ -823,6 +916,22 @@ export class WithdrawalWorkflow {
     }
 
     if (confirmations >= asset.confirmations && record.state === "PENDING_CONFIRMATION") {
+      // A previously settled withdrawal whose payout reorged away and then
+      // re-included must have its outstanding reorg obligation reversed before
+      // it is re-confirmed. The settlement itself is never replayed
+      // (`confirmedJournalId` stays authoritative). Fail closed on a reversal
+      // failure: the record stays PENDING_CONFIRMATION and is retried.
+      if (record.confirmedJournalId !== null) {
+        const reversed = await this.reverseReorgObligation(record, receipt);
+        if (!reversed) {
+          return {
+            intentId: record.intentId,
+            action: "blocked_reorg_reversal",
+            state: record.state,
+            txHash: record.txHash,
+          };
+        }
+      }
       const advanced = await this.store.transition({
         intentId: record.intentId,
         from: ["PENDING_CONFIRMATION"],
@@ -880,6 +989,58 @@ export class WithdrawalWorkflow {
     }
   }
 
+  /**
+   * Reverse the outstanding post-completion reorg obligation when the exact
+   * same payout (`record.txHash` of the durable raw bytes) re-finalizes in a
+   * canonical receipt. The durable receipt identity is merged into the open
+   * WITHDRAWAL_REORG incident before the balanced ledger reversal is posted.
+   * Never signs replacement bytes, never refunds and never replays settlement.
+   */
+  private async reverseReorgObligation(
+    record: WithdrawalRecord,
+    receipt: ReceiptObservation
+  ): Promise<boolean> {
+    const evidence = {
+      txHash: record.txHash!,
+      receiptBlockNumber: receipt.blockNumber.toString(),
+      receiptBlockHash: receipt.blockHash,
+    };
+    // Per-cycle durable evidence key: a repeat reorg cycle must not overwrite a
+    // previous cycle's receipt/hash proof in the shared incident row.
+    const evidenceKey = record.reorgJournalId
+      ? `reorgReversal:${record.reorgJournalId}`
+      : "reorgReinclusionWithoutObligation";
+    await this.openIncident("WITHDRAWAL_REORG", "CRITICAL", record, {
+      [evidenceKey]: {
+        reason: "same_payout_reincluded",
+        ...evidence,
+        obligationJournalId: record.reorgJournalId,
+        at: this.clock.now(),
+      },
+    });
+    if (record.reorgJournalId === null) {
+      // No outstanding obligation (pre-completion reorg, or the obligation post
+      // failed). The re-included payout returns the record to the settled state
+      // without any ledger movement.
+      return true;
+    }
+    try {
+      await this.accounting.reverseObligation(record, evidence);
+      return true;
+    } catch {
+      this.logger.error(
+        { intentId: record.intentId, code: "REORG_REVERSAL_FAILED" },
+        "reorg obligation reversal failed"
+      );
+      await this.openIncident("CUSTODY_FAILURE", "CRITICAL", record, {
+        reason: "reorg_reversal_failed_operator_resolution",
+        ...evidence,
+        obligationJournalId: record.reorgJournalId,
+      });
+      return false;
+    }
+  }
+
   private async monitorWithoutReceipt(
     record: WithdrawalRecord,
     asset: TreasuryAsset
@@ -900,6 +1061,26 @@ export class WithdrawalWorkflow {
     // reorg; preserve history and freeze.
     if (isConfirmationStage(record.state) && record.receiptBlockHash !== null) {
       return this.handleReorg(record, asset, "receipt_missing");
+    }
+
+    // A post-completion reorg whose obligation post failed (state REORGED with
+    // confirmedJournalId but no pointer) must recover the exact cycle
+    // obligation from durable evidence before rebroadcasting. A reversal keeps
+    // `reorgJournalId` set, so null here really means "never posted".
+    if (
+      record.state === "REORGED" &&
+      record.confirmedJournalId !== null &&
+      record.reorgJournalId === null &&
+      record.receiptBlockHash !== null
+    ) {
+      await this.ensureReorgObligation(
+        record,
+        await this.openIncident("WITHDRAWAL_REORG", "CRITICAL", record, {
+          reason: "obligation_recovery",
+          priorBlockNumber: record.receiptBlockNumber,
+          priorBlockHash: record.receiptBlockHash,
+        })
+      );
     }
 
     // Observation failed to find the transaction: re-broadcast the exact same
@@ -956,58 +1137,128 @@ export class WithdrawalWorkflow {
     asset: TreasuryAsset,
     reason: string
   ): Promise<ProcessOutcome> {
-    const completionRecorded = record.state === "CONFIRMED" || record.state === "FINALIZED";
+    // Re-read durable state: the scanning snapshot may be stale (another worker
+    // may have re-included and re-confirmed the payout concurrently). Never
+    // post a cycle from a caller snapshot alone.
+    const fresh = await this.store.get(record.intentId);
+    const freshHash = fresh?.txHash?.toLowerCase();
+    const observedHash = record.txHash?.toLowerCase();
+    if (!fresh || !freshHash || freshHash !== observedHash) {
+      return {
+        intentId: record.intentId,
+        action: "none",
+        state: fresh?.state ?? null,
+        txHash: fresh?.txHash ?? null,
+      };
+    }
+    if (!isConfirmationStage(fresh.state) || fresh.receiptBlockHash === null) {
+      // The record already moved past the observed reorg; do not create a
+      // liability for a superseded cycle.
+      return {
+        intentId: fresh.intentId,
+        action: "none",
+        state: fresh.state,
+        txHash: fresh.txHash,
+      };
+    }
 
-    const incident = await this.openIncident("WITHDRAWAL_REORG", "CRITICAL", record, {
+    const completionRecorded = fresh.state === "CONFIRMED" || fresh.state === "FINALIZED";
+    const incident = await this.openIncident("WITHDRAWAL_REORG", "CRITICAL", fresh, {
       reason,
-      priorBlockNumber: record.receiptBlockNumber,
-      priorBlockHash: record.receiptBlockHash,
+      priorBlockNumber: fresh.receiptBlockNumber,
+      priorBlockHash: fresh.receiptBlockHash,
+      priorState: fresh.state,
       completionRecorded,
     });
 
+    // Custody owns the lifecycle CAS: enter REORGED BEFORE any obligation is
+    // posted, so an obligation can never be committed for a record that is no
+    // longer in the observed reorg state. If the CAS loses, post nothing.
+    const reorged = await this.store.transition({
+      intentId: fresh.intentId,
+      from: [fresh.state],
+      to: "REORGED",
+    });
+    if (!reorged) {
+      return { intentId: fresh.intentId, action: "none", state: null, txHash: fresh.txHash };
+    }
+
     // Ledger contract: an after-completion reorg restores the economic
-    // obligation exactly once via INCIDENT_OBLIGATION +a / TREASURY_RESERVE -a,
-    // and only when the settlement journal actually exists (confirmedJournalId).
-    // A pre-completion reorg still holds the PENDING_WITHDRAWAL obligation, so
-    // no second liability (and no obligation journal) is created.
-    let reorgJournalId: string | undefined;
-    if (
-      completionRecorded &&
-      record.confirmedJournalId !== null &&
-      record.reorgJournalId === null
-    ) {
-      try {
-        const result = await this.accounting.recordObligation(record, incident);
-        reorgJournalId = result.journalId;
-      } catch {
-        this.logger.error(
-          { intentId: record.intentId, code: "OBLIGATION_JOURNAL_FAILED" },
-          "failed to record reorg obligation"
-        );
-        await this.openIncident("CUSTODY_FAILURE", "CRITICAL", record, {
-          reason: "obligation_journal_failed",
-        });
-      }
-    } else if (completionRecorded && record.confirmedJournalId === null) {
-      await this.openIncident("CUSTODY_FAILURE", "CRITICAL", record, {
+    // obligation exactly once per reorg cycle via INCIDENT_OBLIGATION +a /
+    // TREASURY_RESERVE -a, bound to this durable reorged receipt identity and
+    // only when the exact settlement journal exists. The accounting adapter is
+    // cycle-aware and rejects superseded cycles. A pre-completion reorg still
+    // holds the PENDING_WITHDRAWAL obligation, so no second liability is
+    // created.
+    if (completionRecorded && reorged.confirmedJournalId !== null) {
+      await this.ensureReorgObligation(reorged, incident);
+    } else if (completionRecorded) {
+      await this.openIncident("CUSTODY_FAILURE", "CRITICAL", reorged, {
         reason: "reorg_before_settlement_journal",
       });
     }
 
-    await this.store.transition({
-      intentId: record.intentId,
-      from: [record.state],
-      to: "REORGED",
-      ...(reorgJournalId ? { patch: { reorgJournalId } } : {}),
-    });
     await this.assets.setStatus(asset.assetId, "FROZEN", `withdrawal reorg: ${reason}`);
 
+    const final = await this.store.get(fresh.intentId);
+    if (final?.state === "REORGED") {
+      return {
+        intentId: fresh.intentId,
+        action: "reorged",
+        state: "REORGED",
+        txHash: fresh.txHash,
+      };
+    }
     return {
-      intentId: record.intentId,
-      action: "reorged",
-      state: "REORGED",
-      txHash: record.txHash,
+      intentId: fresh.intentId,
+      action: "none",
+      state: final?.state ?? null,
+      txHash: fresh.txHash,
     };
+  }
+
+  /**
+   * Post (or recover) the INCIDENT_OBLIGATION for a REORGED record, bound to
+   * the durable reorged receipt identity and persisted payout hash. The adapter
+   * refuses superseded cycles (`journalId: null`). A failure keeps the record
+   * REORGED and raises durable evidence; the next monitoring tick retries.
+   */
+  private async ensureReorgObligation(
+    record: WithdrawalRecord,
+    incident: IncidentRecord
+  ): Promise<void> {
+    if (
+      record.txHash === null ||
+      record.receiptBlockNumber === null ||
+      record.receiptBlockHash === null
+    ) {
+      return;
+    }
+    try {
+      const { journalId } = await this.accounting.recordObligation(record, incident, {
+        txHash: record.txHash,
+        priorReceiptBlockNumber: record.receiptBlockNumber,
+        priorReceiptBlockHash: record.receiptBlockHash,
+      });
+      if (journalId !== null && journalId !== record.reorgJournalId) {
+        await this.store.transition({
+          intentId: record.intentId,
+          from: ["REORGED"],
+          to: "REORGED",
+          patch: { reorgJournalId: journalId },
+        });
+      }
+    } catch {
+      this.logger.error(
+        { intentId: record.intentId, code: "OBLIGATION_JOURNAL_FAILED" },
+        "failed to record reorg obligation"
+      );
+      await this.openIncident("CUSTODY_FAILURE", "CRITICAL", record, {
+        reason: "obligation_journal_failed",
+        priorBlockNumber: record.receiptBlockNumber,
+        priorBlockHash: record.receiptBlockHash,
+      });
+    }
   }
 
   // -------------------------------------------------------------------------

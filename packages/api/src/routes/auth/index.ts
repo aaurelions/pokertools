@@ -11,10 +11,13 @@ import {
   LoginResponseSchema,
   LogoutResponseSchema,
   NonceResponseSchema,
+  PrincipalIdSchema,
   PrincipalSchema,
   ProvisionServicePrincipalRequestSchema,
   ProvisionedServicePrincipalSchema,
   RevokeServiceCredentialResponseSchema,
+  RevokeServicePrincipalDelegationRequestSchema,
+  RevokeServicePrincipalDelegationResponseSchema,
   RotateServiceCredentialRequestSchema,
   type LoginRequest,
 } from "@pokertools/types";
@@ -30,14 +33,43 @@ function normalizeHost(host: string | undefined): string {
   return (host ?? "localhost").split(":")[0].toLowerCase();
 }
 
-async function createUniqueUsername(prisma: PrismaClient, addressLower: string): Promise<string> {
-  const base = `player_${addressLower.slice(2, 14)}`;
-  for (let suffix = 0; suffix < 100; suffix++) {
-    const username = suffix === 0 ? base : `${base}_${suffix}`;
-    const existing = await prisma.user.findUnique({ where: { username } });
-    if (!existing) return username;
+/**
+ * Opaque, non-wallet-derived default username for a fresh wallet principal.
+ * 128 bits of CSPRNG entropy keep the default unlinkable to the wallet address;
+ * `player_` remains only as a display namespace.
+ */
+function generateOpaqueUsername(): string {
+  return `player_${crypto.randomBytes(16).toString("hex")}`;
+}
+
+/**
+ * Resolve the durable WALLET user for a signature-verified lowercase address,
+ * creating it on first login with an opaque username.
+ *
+ * Concurrent first logins for the same wallet race on the unique address: the
+ * loser re-reads the winner's row instead of failing, so both callers receive
+ * the same durable principal and an existing username/role is never
+ * overwritten.
+ */
+async function findOrCreateWalletUser(
+  prisma: PrismaClient,
+  addressLower: string
+): Promise<{ id: string; username: string; address: string | null }> {
+  const existing = await prisma.user.findUnique({ where: { address: addressLower } });
+  if (existing) return existing;
+  try {
+    return await prisma.user.create({
+      data: { address: addressLower, username: generateOpaqueUsername() },
+    });
+  } catch (error) {
+    // P2002: a concurrent first login created the wallet row first. Never
+    // overwrite the winner's username or role.
+    if ((error as { code?: string } | null)?.code === "P2002") {
+      const winner = await prisma.user.findUnique({ where: { address: addressLower } });
+      if (winner) return winner;
+    }
+    throw error;
   }
-  return `player_${addressLower.slice(2, 14)}_${crypto.randomBytes(4).toString("hex")}`;
 }
 
 export const authRoutes: FastifyPluginAsync = async (fastify) => {
@@ -158,20 +190,11 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(401).send({ error: "Invalid or expired nonce" });
       }
 
-      // Upsert user (store address in lowercase)
+      // Resolve the durable wallet principal (store address in lowercase). A
+      // first login creates an opaque default username; concurrent first logins
+      // converge on the same durable row without overwriting it.
       const addressLower = siweMessage.address.toLowerCase();
-      const existingUser = await fastify.prisma.user.findUnique({
-        where: { address: addressLower },
-      });
-
-      const user =
-        existingUser ??
-        (await fastify.prisma.user.create({
-          data: {
-            address: addressLower,
-            username: await createUniqueUsername(fastify.prisma, addressLower),
-          },
-        }));
+      const user = await findOrCreateWalletUser(fastify.prisma, addressLower);
 
       // Ensure user has accounts
       await fastify.financialManager.ensureAccounts(user.id);
@@ -375,6 +398,46 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
         ProvisionedServicePrincipalSchema.parse({
           ...created,
           createdAt: created.createdAt.toISOString(),
+        })
+      );
+    }
+  );
+
+  // POST /auth/service-principals/:id/delegation/revoke — operator-only,
+  // durable and idempotent. Blocks the delegate from further roster/credential
+  // issuance for the principal; already-issued credentials are deliberately
+  // left intact (explicit policy, never an implicit gameplay revocation).
+  fastify.post<{ Params: { id: string } }>(
+    "/service-principals/:id/delegation/revoke",
+    { onRequest: [fastify.authenticate, fastify.requireOperator] },
+    async (request, reply) => {
+      const parsedId = PrincipalIdSchema.safeParse(request.params.id);
+      if (!parsedId.success) {
+        return reply.code(400).send({ error: "Invalid service principal id" });
+      }
+      const parsed = RevokeServicePrincipalDelegationRequestSchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return reply.code(400).send({ error: "Validation failed", issues: parsed.error.issues });
+      }
+
+      const revoked = await fastify.principalManager.revokeServicePrincipalDelegation(
+        parsedId.data,
+        {
+          actorId: request.principal?.id ?? null,
+          ip: request.ip,
+          userAgent: request.headers["user-agent"] ?? null,
+        }
+      );
+      if (!revoked) {
+        return reply.code(404).send({ error: "SERVICE_PRINCIPAL_DELEGATION_NOT_FOUND" });
+      }
+
+      return reply.code(200).send(
+        RevokeServicePrincipalDelegationResponseSchema.parse({
+          success: true,
+          servicePrincipalId: revoked.servicePrincipalId,
+          delegatePrincipalId: revoked.delegatePrincipalId,
+          revokedAt: revoked.revokedAt.toISOString(),
         })
       );
     }

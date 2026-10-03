@@ -15,7 +15,7 @@ import {
 import type { AuthenticatedPrincipal } from "../../services/principal-manager.js";
 import { config } from "../../config.js";
 import { getHouseUserId } from "../../utils/house-user.js";
-import { reconcileTournament } from "../tournaments/index.js";
+import { reconcileTournament } from "../../services/tournament-director.js";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 

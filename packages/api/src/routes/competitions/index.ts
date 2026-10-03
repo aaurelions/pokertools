@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import {
+  CancelCompetitionRequestSchema,
   CreateCompetitionRequestSchema,
   IssueAgentCredentialRequestSchema,
   OptInCompetitionRequestSchema,
@@ -8,6 +9,7 @@ import {
 } from "@pokertools/types";
 import {
   assertCompetitionOwner,
+  cancelCompetition,
   createCompetition,
   getCompetition,
   issueAgentCredential,
@@ -16,6 +18,7 @@ import {
   settleCompetition,
   startCompetition,
 } from "../../services/competition-manager.js";
+import { AppError } from "../../utils/errors.js";
 import type { AuthenticatedPrincipal } from "../../services/principal-manager.js";
 
 /**
@@ -27,10 +30,15 @@ import type { AuthenticatedPrincipal } from "../../services/principal-manager.js
  *
  * Authorization:
  * - an ADMIN wallet or a SERVICE credential holding `competition:orchestrate`
- *   may create/start/settle/issue agent credentials, and only for the
+ *   may create/start/settle/cancel/issue agent credentials, and only for the
  *   competitions it organizes (an ADMIN wallet may manage any);
  * - a configured WALLET entry payer opts in through its authenticated wallet
  *   session only; SERVICE principals are always zero-entry.
+ *
+ * Natural idempotency: opt-in/start/settle/cancel take an empty strict body.
+ * Their identity is durable state (PAID marker + exact journal, start marker,
+ * settled status, cancelled status), so a stale `idempotencyKey` in the body is
+ * rejected instead of ignored. Create keeps a real request idempotency key.
  *
  * Table-scoped agent credentials never reach these routes: the global SERVICE
  * boundary in `app.ts` requires `competition:orchestrate` for every
@@ -40,15 +48,25 @@ import type { AuthenticatedPrincipal } from "../../services/principal-manager.js
 export const competitionRoutes: FastifyPluginAsync = async (fastify) => {
   // Local error mapping for this new surface only: route/finance/service errors
   // must return the stable `{error, message}` envelope regardless of Fastify
-  // encapsulation. Existing platform routes keep their current handlers.
+  // encapsulation. Only trusted domain `AppError`s may expose a code/status
+  // (including deliberate public 5xx readiness/disabled codes). Unexpected
+  // errors — Prisma/driver failures, even ones that carry a `code` property —
+  // are sanitized so their message/credentials can never leak.
   fastify.setErrorHandler((error, _request, reply) => {
-    const err = error as Error & { statusCode?: number; code?: string };
-    const statusCode = typeof err.statusCode === "number" ? err.statusCode : 500;
-    // Intentional public 5xx codes (readiness/disabled) carry a code; unknown
-    // failures never leak internals.
-    if (statusCode >= 500 && typeof err.code !== "string") {
+    if (error instanceof AppError) {
+      return reply
+        .code(error.statusCode)
+        .send({ error: error.code ?? "REQUEST_REJECTED", message: error.message });
+    }
+    const statusCode =
+      typeof (error as { statusCode?: unknown }).statusCode === "number"
+        ? (error as { statusCode: number }).statusCode
+        : 500;
+    if (statusCode >= 500) {
       return reply.code(500).send({ error: "INTERNAL_ERROR", message: "Internal server error" });
     }
+    // Bounded Fastify client errors (body parse/validation) are safe to surface.
+    const err = error as Error & { code?: string };
     return reply
       .code(statusCode)
       .send({ error: err.code ?? "REQUEST_REJECTED", message: err.message });
@@ -56,6 +74,17 @@ export const competitionRoutes: FastifyPluginAsync = async (fastify) => {
 
   const rejectInvalid = (reply: FastifyReply, issues: unknown) =>
     reply.code(400).send({ error: "VALIDATION_FAILED", issues });
+
+  // Opt-in/start/settle/cancel are naturally idempotent from durable state and
+  // accept an empty strict object: an absent body is `{}`, while any present
+  // key (including a stale `idempotencyKey`) is rejected, never ignored.
+  const parseEmptyBody = (
+    schema: typeof OptInCompetitionRequestSchema,
+    body: unknown
+  ): { ok: true } | { ok: false; issues: unknown } => {
+    const parsed = schema.safeParse(body === undefined ? {} : body);
+    return parsed.success ? { ok: true } : { ok: false, issues: parsed.error.issues };
+  };
 
   const authorize = (
     principal: AuthenticatedPrincipal | undefined,
@@ -112,12 +141,11 @@ export const competitionRoutes: FastifyPluginAsync = async (fastify) => {
       if (principal.kind !== "WALLET") {
         return reply.code(403).send({ error: "COMPETITION_WALLET_REQUIRED" });
       }
-      const parsed = OptInCompetitionRequestSchema.safeParse(request.body);
-      if (!parsed.success) return rejectInvalid(reply, parsed.error.issues);
+      const parsed = parseEmptyBody(OptInCompetitionRequestSchema, request.body);
+      if (!parsed.ok) return rejectInvalid(reply, parsed.issues);
       return optInCompetition(fastify, {
         competitionId: request.params.id,
         principalId: principal.id,
-        idempotencyKey: parsed.data.idempotencyKey,
       });
     }
   );
@@ -128,12 +156,26 @@ export const competitionRoutes: FastifyPluginAsync = async (fastify) => {
     async (request, reply) => {
       const principal = request.principal;
       if (!authorize(principal, reply)) return reply;
-      const parsed = StartCompetitionRequestSchema.safeParse(request.body);
-      if (!parsed.success) return rejectInvalid(reply, parsed.error.issues);
+      const parsed = parseEmptyBody(StartCompetitionRequestSchema, request.body);
+      if (!parsed.ok) return rejectInvalid(reply, parsed.issues);
       return startCompetition(fastify, {
         competitionId: request.params.id,
         actor: principal,
-        idempotencyKey: parsed.data.idempotencyKey,
+      });
+    }
+  );
+
+  fastify.post<{ Params: { id: string } }>(
+    "/:id/cancel",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      const principal = request.principal;
+      if (!authorize(principal, reply)) return reply;
+      const parsed = parseEmptyBody(CancelCompetitionRequestSchema, request.body);
+      if (!parsed.ok) return rejectInvalid(reply, parsed.issues);
+      return cancelCompetition(fastify, {
+        competitionId: request.params.id,
+        actor: principal,
       });
     }
   );
@@ -157,12 +199,11 @@ export const competitionRoutes: FastifyPluginAsync = async (fastify) => {
     async (request, reply) => {
       const principal = request.principal;
       if (!authorize(principal, reply)) return reply;
-      const parsed = SettleCompetitionRequestSchema.safeParse(request.body);
-      if (!parsed.success) return rejectInvalid(reply, parsed.error.issues);
+      const parsed = parseEmptyBody(SettleCompetitionRequestSchema, request.body);
+      if (!parsed.ok) return rejectInvalid(reply, parsed.issues);
       return settleCompetition(fastify, {
         competitionId: request.params.id,
         actor: principal,
-        idempotencyKey: parsed.data.idempotencyKey,
       });
     }
   );

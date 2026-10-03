@@ -57,13 +57,21 @@ describe("canonical auth wire contracts", () => {
 });
 
 describe("canonical service credential wire contracts", () => {
-  test("create request is strict, scoped and requires tableId for a seat restriction", () => {
+  test("create request is strict, scoped and requires a bound tableId for table scopes", () => {
+    expect(
+      CreateServiceCredentialRequestSchema.safeParse({
+        name: "bot-1",
+        scopes: ["table:observe", "table:act"],
+        tableId: "table-1",
+      }).success
+    ).toBe(true);
+    // An unbound table credential would be a cross-room wildcard: rejected.
     expect(
       CreateServiceCredentialRequestSchema.safeParse({
         name: "bot-1",
         scopes: ["table:observe", "table:act"],
       }).success
-    ).toBe(true);
+    ).toBe(false);
     expect(
       CreateServiceCredentialRequestSchema.safeParse({
         name: "bot-1",

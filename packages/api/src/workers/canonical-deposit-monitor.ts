@@ -9,6 +9,14 @@
  * A lost RPC / quorum failure is never treated as a reorg: the claim status is
  * preserved and retried on a later pass.
  *
+ * Sweep: each pass processes ONE bounded page of CREDITED claims using a durable
+ * keyset cursor (`id > cursor`, ascending). The cursor wraps to the beginning
+ * after the last page, so every credited claim — including claims that already
+ * reached `deepFinality` — is re-verified on every full sweep. There is
+ * intentionally NO depth/age cutoff: monitoring credited money never stops.
+ * Any future horizon after which a claim would stop being re-checked must be
+ * explicitly documented and approved before it is introduced.
+ *
  * The workers entry point calls `bootstrapCanonicalDepositMonitor` for full
  * startup (asset-derived registry, services, BullMQ worker, repeatable job).
  */
@@ -33,6 +41,45 @@ import type {
 
 export const CANONICAL_DEPOSIT_MONITOR_QUEUE = "canonical-deposit-monitor";
 export const CANONICAL_DEPOSIT_DEFAULT_INTERVAL_MS = 30_000;
+export const CANONICAL_DEPOSIT_MONITOR_CURSOR_KEY = "canonical-deposit-monitor:cursor";
+
+/**
+ * Durable sweep mirror. `read` seeds a fresh process (last claim id processed
+ * by a completed page, or null to start a fresh sweep); `write` mirrors each
+ * completed page. A missing or failing store never stops or rewinds the
+ * in-process sweep.
+ */
+export interface DepositMonitorCursorStore {
+  read(): Promise<string | null>;
+  write(cursor: string | null): Promise<void>;
+}
+
+/** Redis-backed cursor so the sweep survives worker restarts. */
+export function createRedisDepositMonitorCursorStore(redis: Redis): DepositMonitorCursorStore {
+  return {
+    async read(): Promise<string | null> {
+      return redis.get(CANONICAL_DEPOSIT_MONITOR_CURSOR_KEY);
+    },
+    async write(cursor: string | null): Promise<void> {
+      if (cursor === null) {
+        await redis.del(CANONICAL_DEPOSIT_MONITOR_CURSOR_KEY);
+        return;
+      }
+      await redis.set(CANONICAL_DEPOSIT_MONITOR_CURSOR_KEY, cursor);
+    },
+  };
+}
+
+/**
+ * In-process sweep progress scoped to one stable `prisma` instance. The cursor
+ * is pure coordination: PostgreSQL claims are authoritative and Redis is only a
+ * best-effort durable mirror that lets a restarted process resume. Keying the
+ * fallback by the caller's stable prisma object keeps independent monitors and
+ * databases from sharing progress, and advancing it after EVERY completed page
+ * (even when the durable write fails) means a Redis read/write outage can never
+ * rewind the sweep and starve claims past the page boundary.
+ */
+const cursorByPrisma = new WeakMap<object, string | null>();
 
 export interface MonitorRegistry extends QuorumReader {
   freezeChain(chainId: number, evidence: RegistryIncidentEvidence): Promise<void>;
@@ -44,7 +91,9 @@ export interface CanonicalDepositMonitorDeps {
   intents: Pick<FinancialIntentService, "recordDepositReorg">;
   incidents: Pick<FinancialIncidentService, "freezeAsset">;
   logger?: RegistryLogger;
+  /** Bounded page size per pass. Defaults to 100. */
   limit?: number;
+  cursorStore?: DepositMonitorCursorStore;
 }
 
 export interface CanonicalDepositMonitorResult {
@@ -54,6 +103,11 @@ export interface CanonicalDepositMonitorResult {
   reorged: number;
   /** Claims left untouched because quorum was unavailable or data was missing. */
   preserved: number;
+  /**
+   * True when this page reached the end of the CREDITED set; the next pass
+   * starts a fresh sweep from the beginning.
+   */
+  sweepComplete: boolean;
 }
 
 /**
@@ -65,17 +119,46 @@ export async function runCanonicalDepositMonitorOnce(
   deps: CanonicalDepositMonitorDeps
 ): Promise<CanonicalDepositMonitorResult> {
   const limit = deps.limit ?? 100;
+  const durableCursorStore = deps.cursorStore;
+  const prismaKey: object = deps.prisma;
+
+  // In-process progress wins once established: it is advanced after every page
+  // even when the durable mirror write fails, so a Redis read/write outage can
+  // never rewind the sweep. The durable store only seeds a fresh process.
+  let cursor: string | null = cursorByPrisma.get(prismaKey) ?? null;
+  if (!cursorByPrisma.has(prismaKey) && durableCursorStore) {
+    try {
+      cursor = await durableCursorStore.read();
+    } catch (error) {
+      // Fresh process with an unavailable cursor store: start the sweep from
+      // the beginning. Once a page completes, the in-memory cursor takes over.
+      deps.logger?.warn(
+        { error: error instanceof Error ? error.message : String(error) },
+        "Canonical deposit monitor could not read sweep cursor; starting from the beginning"
+      );
+      cursor = null;
+    }
+  }
+
+  // Keyset pagination, NOT `take` of the oldest rows: with more credited claims
+  // than the page size, the oldest-first window would starve every later claim
+  // forever (deep-final claims stay CREDITED). `id > cursor` walks the whole
+  // set and wraps. Deep-final records are deliberately not filtered out.
   const claims = await deps.prisma.depositClaimRecord.findMany({
-    where: { status: "CREDITED" },
-    orderBy: { createdAt: "asc" },
+    where: { status: "CREDITED", ...(cursor ? { id: { gt: cursor } } : {}) },
+    orderBy: { id: "asc" },
     take: limit,
   });
 
+  // An empty page (including a degenerate `limit <= 0`) is always a completed
+  // sweep; never index into an empty batch.
+  const sweepComplete = claims.length === 0 || claims.length < limit;
   const result: CanonicalDepositMonitorResult = {
     checked: claims.length,
     deepFinalized: 0,
     reorged: 0,
     preserved: 0,
+    sweepComplete,
   };
 
   for (const claim of claims) {
@@ -156,6 +239,27 @@ export async function runCanonicalDepositMonitorOnce(
     if (safeConfirmations >= asset.deepFinality) result.deepFinalized += 1;
   }
 
+  // Advance only after the whole page was processed; a crash mid-page retries
+  // the same page (all checks are idempotent). The last page resets the cursor
+  // so the next pass wraps to the oldest credited claims. In-process progress
+  // is updated FIRST and unconditionally; the durable store is a best-effort
+  // mirror for restarts, never the authority for this instance.
+  const nextCursor = sweepComplete ? null : claims[claims.length - 1].id;
+  cursorByPrisma.set(prismaKey, nextCursor);
+  if (durableCursorStore) {
+    try {
+      await durableCursorStore.write(nextCursor);
+    } catch (error) {
+      // Cursor persistence is an optimization, never a correctness requirement:
+      // the in-memory cursor continues the sweep and the next pass re-checks
+      // this page after a restart only.
+      deps.logger?.warn(
+        { error: error instanceof Error ? error.message : String(error) },
+        "Canonical deposit monitor could not persist sweep cursor"
+      );
+    }
+  }
+
   return result;
 }
 
@@ -187,6 +291,8 @@ export interface BootstrapCanonicalDepositMonitorOptions {
   logger: RegistryLogger;
   intervalMs?: number;
   limit?: number;
+  /** Overrides the Redis-backed sweep cursor (tests/in-process callers). */
+  cursorStore?: DepositMonitorCursorStore;
 }
 
 export interface BootstrappedCanonicalDepositMonitor {
@@ -225,6 +331,7 @@ export async function bootstrapCanonicalDepositMonitor(
       incidents,
       logger: options.logger,
       limit: options.limit,
+      cursorStore: options.cursorStore ?? createRedisDepositMonitorCursorStore(options.redis),
     },
     options.redis
   );

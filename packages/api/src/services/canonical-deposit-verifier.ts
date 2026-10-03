@@ -152,26 +152,60 @@ export interface DepositVerifierPrisma {
   };
 }
 
+/**
+ * Stable primary key for a registry incident, one row per `(kind, chainId)`.
+ * The PK constraint makes parallel `record` calls unable to create duplicate
+ * rows without any schema change; a resolved incident is reopened in place on
+ * recurrence (see `createPrismaIncidentSink`).
+ */
+function registryIncidentId(kind: RegistryIncident["kind"], chainId: number): string {
+  return `rpc-incident:${kind}:${chainId}`;
+}
+
 export function createPrismaIncidentSink(
   prisma: Pick<PrismaClient, "financialIncident">
 ): NonNullable<ChainRegistryOptions["incidentSink"]> {
   return {
     async record(incident: RegistryIncident): Promise<void> {
-      await prisma.financialIncident.create({
-        data: {
-          // The durable IncidentKind enum carries RPC_DISAGREEMENT as a
-          // first-class kind; persist it verbatim so an operator can query the
-          // mandatory disagreement incident directly. The original kind is also
-          // mirrored into evidence for redundancy.
+      const id = registryIncidentId(incident.kind, incident.chainId);
+      const evidence = {
+        ...incident.evidence,
+        // The durable IncidentKind enum carries RPC_DISAGREEMENT as a
+        // first-class kind; persist it verbatim so an operator can query the
+        // mandatory disagreement incident directly. The original kind is also
+        // mirrored into evidence for redundancy.
+        reportedKind: incident.kind,
+        disagreement: incident.kind === "RPC_DISAGREEMENT",
+      };
+
+      // Stable-id upsert under the existing primary key: parallel record calls
+      // for the same (kind, chainId) converge on ONE durable row instead of
+      // racing find-then-create duplicates. `update` only refreshes the
+      // severity so a concurrent writer never reopens a resolved row here.
+      await prisma.financialIncident.upsert({
+        where: { id },
+        create: {
+          id,
           kind: incident.kind,
           severity: incident.severity,
           status: incident.status,
           chainId: incident.chainId,
-          evidence: {
-            ...incident.evidence,
-            reportedKind: incident.kind,
-            disagreement: incident.kind === "RPC_DISAGREEMENT",
-          },
+          evidence,
+        },
+        update: { severity: incident.severity },
+      });
+
+      // Recurrence policy: a recurrence after explicit operator resolution
+      // reopens the SAME durable incident with fresh evidence and a bumped
+      // optimistic version, so a stale resolver cannot clobber the recurrence.
+      await prisma.financialIncident.updateMany({
+        where: { id, status: "RESOLVED" },
+        data: {
+          status: "OPEN",
+          resolvedAt: null,
+          severity: incident.severity,
+          evidence,
+          version: { increment: 1 },
         },
       });
     },

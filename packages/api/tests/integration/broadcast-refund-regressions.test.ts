@@ -104,6 +104,9 @@ class FakeAccounting {
     this.obligations.push(record.intentId);
     return { journalId: `obligation:${record.intentId}` };
   }
+  async reverseObligation() {
+    return { journalId: null };
+  }
   async recordReconciliation(_evidence: unknown) {
     return { journalId: "reconcile" };
   }

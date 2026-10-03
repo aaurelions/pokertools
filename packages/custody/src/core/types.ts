@@ -1,10 +1,10 @@
 /**
  * Core custody withdrawal contracts.
  *
- * These types are the narrow, Telegram-independent boundary between the
+ * These types are the narrow boundary between the
  * withdrawal workflow and its dependencies (durable store, signer, RPC quorum
  * reader, broadcaster, treasury accounting). They deliberately contain no
- * Telegram, no Fastify and no wire DTO duplication.
+ * product integrations, no Fastify and no wire DTO duplication.
  *
  * Canonical wire contracts (asset identity, EIP-712 intent, incidents) live in
  * `@pokertools/types/canonical`; this module only models custody's persisted
@@ -176,6 +176,15 @@ export interface TransitionRequest {
 }
 
 /**
+ * Keyset cursor over the durable `(updatedAt, id)` scan order. `updatedAt` is
+ * persisted, so pagination and rotation survive process restarts.
+ */
+export interface WithdrawalScanCursor {
+  updatedAt: number;
+  intentId: string;
+}
+
+/**
  * Durable store for withdrawal obligations and the treasury nonce serializer.
  *
  * Implementations MUST make `withTreasuryLock` serialize per
@@ -184,12 +193,24 @@ export interface TransitionRequest {
  * covers nonce selection, signing and the persistence writes. `transition` MUST
  * be an optimistic compare-and-set so a stale worker cannot clobber a
  * concurrent decision.
+ *
+ * `listByStates` returns records ordered by `(updatedAt, id)` ascending and
+ * supports a durable keyset cursor so a worker can page through a state bucket
+ * without re-reading the same fixed oldest batch forever. `markScanned` moves
+ * already-visited records to the back of that order, giving every record a
+ * bounded turn even while it remains in a blocked/no-op state.
  */
 export interface WithdrawalStore {
   get(intentId: string): Promise<WithdrawalRecord | null>;
   create(record: NewWithdrawalRecord): Promise<WithdrawalRecord>;
   transition(request: TransitionRequest): Promise<WithdrawalRecord | null>;
-  listByStates(states: WithdrawalState[], limit: number): Promise<WithdrawalRecord[]>;
+  listByStates(
+    states: WithdrawalState[],
+    limit: number,
+    after?: WithdrawalScanCursor
+  ): Promise<WithdrawalRecord[]>;
+  /** Durably push scanned records behind unscanned ones in the rotation order. */
+  markScanned(intentIds: string[], at: number): Promise<void>;
   /**
    * Highest treasury nonce already persisted for the account, or -1 when none.
    * Used to derive the next nonce without reusing an already-signed nonce.
@@ -284,7 +305,7 @@ export interface ReconciliationEvidence {
 /**
  * Port implemented by the API finance-core export. Custody calls this only at
  * the defined accounting boundaries: confirmation (pending withdrawal ->
- * treasury reserve), reorg obligation, and reconciliation evidence.
+ * treasury reserve), reorg obligation/reversal, and reconciliation evidence.
  */
 export interface TreasuryAccounting {
   /**
@@ -295,13 +316,35 @@ export interface TreasuryAccounting {
   completeWithdrawal(record: WithdrawalRecord): Promise<{ journalId: string }>;
   /**
    * Post-completion reorg obligation: INCIDENT_OBLIGATION `+a`,
-   * TREASURY_RESERVE `-a`. Must be idempotent; custody persists the returned
-   * journal id as `reorgJournalId`.
+   * TREASURY_RESERVE `-a`. Must be idempotent per outstanding obligation and
+   * cycle-aware: when the previous obligation has already been reversed, a
+   * fresh reorg posts a new obligation instead of replaying the reversed one.
+   * Custody persists the returned journal id as `reorgJournalId`.
+   *
+   * `evidence` binds the obligation to the durable reorged inclusion (state
+   * `REORGED` + prior receipt identity + persisted payout hash). When the
+   * durable record no longer matches that cycle (e.g. the payout re-included
+   * first), no liability is posted and `journalId` is `null`.
    */
   recordObligation(
     record: WithdrawalRecord,
-    incident: IncidentRecord
-  ): Promise<{ journalId: string }>;
+    incident: IncidentRecord,
+    evidence: ReorgObligationEvidence
+  ): Promise<{ journalId: string | null }>;
+  /**
+   * Reverse an outstanding post-completion reorg obligation when the exact same
+   * payout re-finalizes: INCIDENT_OBLIGATION `-a`, TREASURY_RESERVE `+a`.
+   * Must be idempotent and keyed to the outstanding obligation journal, never
+   * posting a second settlement, payout or refund. Returns `journalId: null`
+   * when there is no outstanding obligation or when the durable record no
+   * longer matches the re-included receipt (e.g. it reorged away again).
+   * `evidence` must bind the reversal to the durable receipt identity of the
+   * re-included payout.
+   */
+  reverseObligation(
+    record: WithdrawalRecord,
+    evidence: ReorgReversalEvidence
+  ): Promise<{ journalId: string | null }>;
   /** Persist reconciliation evidence. */
   recordReconciliation(evidence: ReconciliationEvidence): Promise<{ journalId: string }>;
   /**
@@ -309,6 +352,28 @@ export interface TreasuryAccounting {
    * account classes excluding the TREASURY_RESERVE counterparty.
    */
   expectedTreasuryAtomic(assetId: string): Promise<string>;
+}
+
+/**
+ * Durable evidence that the exact same persisted payout (`txHash` of the
+ * original raw bytes) re-included in a canonical receipt. A reversal is only
+ * valid when bound to this evidence.
+ */
+export interface ReorgReversalEvidence {
+  txHash: TxHash;
+  receiptBlockNumber: string;
+  receiptBlockHash: string;
+}
+
+/**
+ * Durable evidence for the reorged inclusion an obligation restores. The
+ * obligation is only valid while the record is still `REORGED` with this exact
+ * prior receipt identity and the persisted payout hash.
+ */
+export interface ReorgObligationEvidence {
+  txHash: TxHash;
+  priorReceiptBlockNumber: string;
+  priorReceiptBlockHash: string;
 }
 
 // ============================================================================

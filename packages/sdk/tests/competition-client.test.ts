@@ -8,8 +8,11 @@ import { PokerSDKError } from "../src/types";
  *
  * Fixtures mirror the committed canonical schemas in
  * `@pokertools/types/canonical/competition.ts` (strict objects, canonical
- * atomic decimal strings, server-assigned seats). Every mutating body is
- * idempotent on `idempotencyKey`, which is what makes transport retry safe.
+ * atomic decimal strings, server-assigned seats). `createCompetition` is
+ * idempotent on `idempotencyKey`; the lifecycle mutations (`optIn`, `start`,
+ * `settle`, `cancel`) have strict empty-object bodies and are naturally
+ * idempotent from durable server state, so the transport retries them only
+ * because the client explicitly declares them retry-safe.
  */
 
 const mockFetch = vi.fn();
@@ -48,6 +51,7 @@ const competition = {
   createdAt: "2026-01-01T00:00:00.000Z",
   startedAt: null,
   finishedAt: null,
+  cancelledAt: null,
 };
 
 const createRequest: CreateCompetitionRequest = {
@@ -73,6 +77,68 @@ const createRequest: CreateCompetitionRequest = {
     },
   },
   idempotencyKey: "create-1",
+};
+
+const optInResponse = {
+  success: true,
+  competitionId: "comp-1",
+  principalId: "wallet-1",
+  entryState: "PAID",
+  entry: { assetId: ASSET_ID, amountAtomic: "1000000" },
+  journalRequestId: "journal-1",
+};
+
+const startResponse = {
+  success: true,
+  competitionId: "comp-1",
+  tableId: "table-1",
+  seats: [
+    { principalId: "wallet-1", seat: 0 },
+    { principalId: "agent-1", seat: 1 },
+  ],
+};
+
+const settleResponse = {
+  success: true,
+  competitionId: "comp-1",
+  winnerPrincipalId: "wallet-1",
+  winnerKind: "WALLET",
+  prizeStatus: "PAID",
+  prize: { assetId: ASSET_ID, amountAtomic: "5000000" },
+  placements: [
+    {
+      principalId: "wallet-1",
+      kind: "WALLET",
+      placement: 1,
+      prize: { assetId: ASSET_ID, amountAtomic: "5000000" },
+    },
+    { principalId: "agent-1", kind: "SERVICE", placement: 2, prize: null },
+  ],
+};
+
+const cancelResponse = {
+  success: true,
+  competitionId: "comp-1",
+  status: "CANCELLED",
+  cancelledAt: "2026-01-01T00:00:05.000Z",
+  prizeStatus: "RELEASED",
+  prize: { assetId: ASSET_ID, amountAtomic: "5000000" },
+  entries: [
+    {
+      principalId: "wallet-1",
+      kind: "WALLET",
+      entryState: "REFUNDED",
+      refunded: true,
+      refundJournalId: "journal-1",
+    },
+    {
+      principalId: "agent-1",
+      kind: "SERVICE",
+      entryState: "NOT_REQUIRED",
+      refunded: false,
+      refundJournalId: null,
+    },
+  ],
 };
 
 function ok(body: unknown) {
@@ -220,95 +286,90 @@ describe("CompetitionClient", () => {
   });
 
   describe("optIn", () => {
-    const response = {
-      success: true,
-      competitionId: "comp-1",
-      principalId: "wallet-1",
-      entryState: "PAID",
-      entry: { assetId: ASSET_ID, amountAtomic: "1000000" },
-      conversionId: "conv-1",
-    };
+    it("POSTs the strict empty body and returns the persisted entry", async () => {
+      mockFetch.mockResolvedValueOnce(ok(optInResponse));
 
-    it("POSTs only the idempotency body and returns the persisted entry", async () => {
-      mockFetch.mockResolvedValueOnce(ok(response));
-
-      await expect(client.optIn("comp-1", { idempotencyKey: "optin-1" })).resolves.toEqual(
-        response
-      );
+      await expect(client.optIn("comp-1")).resolves.toEqual(optInResponse);
       expect(mockFetch).toHaveBeenCalledWith(
         "https://api.example.com/competitions/comp-1/opt-in",
         expect.objectContaining({
           method: "POST",
-          body: JSON.stringify({ idempotencyKey: "optin-1" }),
+          body: "{}",
         })
       );
     });
 
-    it("rejects a body that tries to choose the payer identity", async () => {
-      await expect(
-        client.optIn("comp-1", { idempotencyKey: "optin-2", principalId: "someone-else" } as never)
-      ).rejects.toThrow();
-      expect(mockFetch).not.toHaveBeenCalled();
+    it("returns the immutable journal receipt with live REFUNDED state after cancellation", async () => {
+      const refunded = { ...optInResponse, entryState: "REFUNDED" };
+      mockFetch.mockResolvedValueOnce(ok(refunded));
+
+      await expect(client.optIn("comp-1")).resolves.toEqual(refunded);
+    });
+
+    it("rejects the removed conversionId receipt field (no alias)", async () => {
+      const legacy: Record<string, unknown> = { ...optInResponse };
+      delete legacy.journalRequestId;
+      legacy.conversionId = "conv-1";
+      mockFetch.mockResolvedValueOnce(ok(legacy));
+
+      await expect(client.optIn("comp-1")).rejects.toThrow();
+    });
+
+    it("rejects a response that does not match the canonical entry contract", async () => {
+      mockFetch.mockResolvedValueOnce(ok({ ...optInResponse, entryState: "PENDING" }));
+
+      await expect(client.optIn("comp-1")).rejects.toThrow();
     });
   });
 
-  describe("startCompetition", () => {
-    it("POSTs the idempotency body and returns authoritative seat assignments", async () => {
-      const response = {
-        success: true,
-        competitionId: "comp-1",
-        tableId: "table-1",
-        seats: [
-          { principalId: "wallet-1", seat: 0 },
-          { principalId: "agent-1", seat: 1 },
-        ],
-      };
-      mockFetch.mockResolvedValueOnce(ok(response));
+  describe("start", () => {
+    it("POSTs the strict empty body and returns authoritative seat assignments", async () => {
+      mockFetch.mockResolvedValueOnce(ok(startResponse));
 
-      await expect(
-        client.startCompetition("comp-1", { idempotencyKey: "start-1" })
-      ).resolves.toEqual(response);
+      await expect(client.start("comp-1")).resolves.toEqual(startResponse);
       expect(mockFetch).toHaveBeenCalledWith(
         "https://api.example.com/competitions/comp-1/start",
         expect.objectContaining({
           method: "POST",
-          body: JSON.stringify({ idempotencyKey: "start-1" }),
+          body: "{}",
         })
       );
     });
   });
 
-  describe("settleCompetition", () => {
-    it("POSTs the idempotency body and returns placements plus prize disposition", async () => {
-      const response = {
-        success: true,
-        competitionId: "comp-1",
-        winnerPrincipalId: "wallet-1",
-        winnerKind: "WALLET",
-        prizeStatus: "PAID",
-        prize: { assetId: ASSET_ID, amountAtomic: "5000000" },
-        placements: [
-          {
-            principalId: "wallet-1",
-            kind: "WALLET",
-            placement: 1,
-            prize: { assetId: ASSET_ID, amountAtomic: "5000000" },
-          },
-          { principalId: "agent-1", kind: "SERVICE", placement: 2, prize: null },
-        ],
-      };
-      mockFetch.mockResolvedValueOnce(ok(response));
+  describe("settle", () => {
+    it("POSTs the strict empty body and returns placements plus prize disposition", async () => {
+      mockFetch.mockResolvedValueOnce(ok(settleResponse));
 
-      await expect(
-        client.settleCompetition("comp-1", { idempotencyKey: "settle-1" })
-      ).resolves.toEqual(response);
+      await expect(client.settle("comp-1")).resolves.toEqual(settleResponse);
       expect(mockFetch).toHaveBeenCalledWith(
         "https://api.example.com/competitions/comp-1/settle",
         expect.objectContaining({
           method: "POST",
-          body: JSON.stringify({ idempotencyKey: "settle-1" }),
+          body: "{}",
         })
       );
+    });
+  });
+
+  describe("cancel", () => {
+    it("POSTs the strict empty body and returns durable refund facts", async () => {
+      mockFetch.mockResolvedValueOnce(ok(cancelResponse));
+
+      await expect(client.cancel("comp-1")).resolves.toEqual(cancelResponse);
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.example.com/competitions/comp-1/cancel",
+        expect.objectContaining({
+          method: "POST",
+          body: "{}",
+        })
+      );
+    });
+
+    it("rejects a cancellation response outside the canonical contract", async () => {
+      mockFetch.mockResolvedValueOnce(ok({ ...cancelResponse, entries: [] }));
+
+      await expect(client.cancel("comp-1")).rejects.toThrow();
     });
   });
 
@@ -366,6 +427,21 @@ describe("CompetitionClient", () => {
       ).rejects.toThrow();
       expect(mockFetch).not.toHaveBeenCalled();
     });
+
+    it("never retries the non-idempotent mint after a transport failure", async () => {
+      const retryClient = new CompetitionClient({
+        baseUrl: "https://api.example.com",
+        token: "orchestrator-token",
+        fetch: mockFetch as unknown as typeof fetch,
+        retry: { count: 2, delay: 0, backoff: 1 },
+      });
+      mockFetch.mockRejectedValue(new Error("Connection lost after server committed"));
+
+      await expect(
+        retryClient.issueAgentCredential("comp-1", { principalId: "agent-1", name: "agent-1" })
+      ).rejects.toThrow(/Connection lost/);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("error and retry semantics", () => {
@@ -380,7 +456,7 @@ describe("CompetitionClient", () => {
       });
     });
 
-    it("retries an idempotent mutation with identical bytes after a transport failure", async () => {
+    it("retries an idempotent create with identical bytes after a transport failure", async () => {
       const retryClient = new CompetitionClient({
         baseUrl: "https://api.example.com",
         token: "orchestrator-token",
@@ -407,14 +483,47 @@ describe("CompetitionClient", () => {
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
+    const retrySafeOperations = [
+      { name: "optIn", call: (c: CompetitionClient) => c.optIn("comp-1"), response: optInResponse },
+      { name: "start", call: (c: CompetitionClient) => c.start("comp-1"), response: startResponse },
+      {
+        name: "settle",
+        call: (c: CompetitionClient) => c.settle("comp-1"),
+        response: settleResponse,
+      },
+      {
+        name: "cancel",
+        call: (c: CompetitionClient) => c.cancel("comp-1"),
+        response: cancelResponse,
+      },
+    ];
+
+    it.each(retrySafeOperations)(
+      "retries $name with identical empty bytes after a transport failure",
+      async ({ call, response }) => {
+        const retryClient = new CompetitionClient({
+          baseUrl: "https://api.example.com",
+          token: "orchestrator-token",
+          fetch: mockFetch as unknown as typeof fetch,
+          retry: { count: 1, delay: 0, backoff: 1 },
+        });
+        mockFetch
+          .mockRejectedValueOnce(new Error("ECONNRESET"))
+          .mockResolvedValueOnce(ok(response));
+
+        await expect(call(retryClient)).resolves.toEqual(response);
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+        expect(mockFetch.mock.calls[0][1].body).toBe("{}");
+        expect(mockFetch.mock.calls[1][1].body).toBe("{}");
+      }
+    );
+
     it("parses the canonical error envelope into a typed error", async () => {
       mockFetch.mockResolvedValueOnce(
         httpError(403, { error: "ORCHESTRATION_REQUIRED", message: "Not an orchestrator" })
       );
 
-      await expect(
-        client.startCompetition("comp-1", { idempotencyKey: "start-2" })
-      ).rejects.toBeInstanceOf(PokerSDKError);
+      await expect(client.start("comp-1")).rejects.toBeInstanceOf(PokerSDKError);
     });
   });
 });

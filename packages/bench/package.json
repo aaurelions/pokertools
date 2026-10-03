@@ -30,7 +30,8 @@
     "url": "https://github.com/aaurelions/pokertools/issues"
   },
   "engines": {
-    "node": ">=24.0.0"
+    "node": "^24.15.0 || >=26.0.0",
+    "npm": ">=12.2.0"
   },
   "dependencies": {
     "@pokertools/evaluator": "1.0.20",

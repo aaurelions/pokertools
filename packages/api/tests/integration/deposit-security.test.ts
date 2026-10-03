@@ -9,10 +9,14 @@ import {
 } from "../../src/services/canonical-deposits.js";
 import {
   createCanonicalDepositVerifier,
+  createPrismaIncidentSink,
   type DepositVerifierPrisma,
 } from "../../src/services/canonical-deposit-verifier.js";
 import { AtomicLedger } from "../../src/services/atomic-ledger.js";
-import { FinancialIntentService } from "../../src/services/financial-intents.js";
+import {
+  DepositAssetFrozenError,
+  FinancialIntentService,
+} from "../../src/services/financial-intents.js";
 import { FinancialIncidentService } from "../../src/services/financial-incidents.js";
 import {
   runCanonicalDepositMonitorOnce,
@@ -532,6 +536,103 @@ describe("deposit security: canonical credit path", () => {
     expect(await prisma.depositClaimRecord.count({ where: { assetId: asset.id } })).toBe(0);
   });
 
+  it("rejects a new credit when the asset freezes after verification but before the ledger lock", async () => {
+    const asset = await createAsset();
+    // The freeze lands after the verifier's own ACTIVE read and before
+    // `creditDepositClaim` takes the durable asset lock. The fresh read under
+    // the lock must observe FROZEN and admit no new risk.
+    const verifier = vi.fn(async () => {
+      await prisma.asset.update({ where: { id: asset.id }, data: { status: "FROZEN" } });
+      return {
+        verified: true,
+        amountAtomic: "1000",
+        blockNumber: "100",
+        blockHash: BLOCK_HASH,
+        confirmations: 5,
+        provenance: "DIRECT_TREASURY" as const,
+      };
+    }) as unknown as DepositClaimVerifier;
+    const service = new CanonicalDepositService(prisma, { verifier });
+
+    await expect(claim(service, asset.id)).rejects.toMatchObject({ code: "ASSET_FROZEN" });
+    expect(await prisma.depositClaimRecord.count({ where: { assetId: asset.id } })).toBe(0);
+    expect(await prisma.journalTransaction.count({ where: { assetId: asset.id } })).toBe(0);
+    expect(await prisma.atomicAccount.count({ where: { assetId: asset.id } })).toBe(0);
+  });
+
+  it("blocks a direct new credit while the asset is frozen under the ledger lock", async () => {
+    const asset = await createAsset();
+    await prisma.asset.update({ where: { id: asset.id }, data: { status: "FROZEN" } });
+    const ledger = new AtomicLedger(prisma);
+    const intents = new FinancialIntentService(prisma, ledger);
+
+    await expect(
+      intents.creditDepositClaim({
+        principalId: "principal_1",
+        assetId: asset.id,
+        chainId: CHAIN_ID,
+        txHash: TX,
+        logIndex: 0,
+        amountAtomic: "1000",
+      })
+    ).rejects.toBeInstanceOf(DepositAssetFrozenError);
+    expect(await prisma.depositClaimRecord.count({ where: { assetId: asset.id } })).toBe(0);
+    expect(await prisma.journalTransaction.count({ where: { assetId: asset.id } })).toBe(0);
+  });
+
+  it("returns the exact durable credited claim on replay while the asset is frozen", async () => {
+    const asset = await createAsset();
+    const verifier = verifyOk("1000");
+    const service = new CanonicalDepositService(prisma, { verifier });
+    const first = await claim(service, asset.id);
+    expect(first.idempotent).toBe(false);
+
+    await prisma.asset.update({ where: { id: asset.id }, data: { status: "FROZEN" } });
+
+    // A freeze blocks new risk, not the idempotent acknowledgement of a credit
+    // that already committed.
+    const replay = await claim(service, asset.id);
+    expect(replay.idempotent).toBe(true);
+    expect(replay.id).toBe(first.id);
+    expect(verifier).toHaveBeenCalledTimes(1);
+    expect(await prisma.depositClaimRecord.count({ where: { assetId: asset.id } })).toBe(1);
+    expect(await prisma.journalTransaction.count({ where: { assetId: asset.id } })).toBe(1);
+  });
+
+  it("never adopts another principal's credited claim on replay", async () => {
+    const asset = await createAsset();
+    const verifier = verifyOk("1000");
+    const service = new CanonicalDepositService(prisma, { verifier });
+    await claim(service, asset.id);
+
+    await expect(claim(service, asset.id, { principalId: "principal_2" })).rejects.toMatchObject({
+      code: "DUPLICATE_CLAIM",
+    });
+    expect(verifier).toHaveBeenCalledTimes(1);
+    expect(await prisma.depositClaimRecord.count({ where: { assetId: asset.id } })).toBe(1);
+    expect(await prisma.journalTransaction.count({ where: { assetId: asset.id } })).toBe(1);
+  });
+
+  it("refuses to adopt a credited claim when the replay amount differs", async () => {
+    const asset = await createAsset();
+    const service = new CanonicalDepositService(prisma, { verifier: verifyOk("1000") });
+    await claim(service, asset.id);
+    const ledger = new AtomicLedger(prisma);
+    const intents = new FinancialIntentService(prisma, ledger);
+
+    await expect(
+      intents.creditDepositClaim({
+        principalId: "principal_1",
+        assetId: asset.id,
+        chainId: CHAIN_ID,
+        txHash: TX,
+        logIndex: 0,
+        amountAtomic: "999",
+      })
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(await prisma.journalTransaction.count({ where: { assetId: asset.id } })).toBe(1);
+  });
+
   it("exposes DepositClaimRejected as an AppError subclass with a stable code", () => {
     const error = new DepositClaimRejected("SOME_CODE", "message");
     expect(error).toBeInstanceOf(Error);
@@ -667,5 +768,49 @@ describe("deposit security: canonical reorg preservation", () => {
     ).toBe(0);
     const assetAfter = await prisma.asset.findUnique({ where: { id: asset.id } });
     expect(assetAfter?.status).toBe("ACTIVE");
+  });
+});
+
+describe("createPrismaIncidentSink durable dedup", () => {
+  it("keeps one PK row per kind+chain under parallel record and reopens on recurrence", async () => {
+    const chainId = 900_000 + Math.floor(Math.random() * 100_000);
+    const sink = createPrismaIncidentSink(prisma);
+    const base = {
+      kind: "RPC_QUORUM_FAILURE" as const,
+      severity: "CRITICAL" as const,
+      status: "OPEN" as const,
+      chainId,
+      evidence: { chainId, method: "eth_blockNumber", reason: "no_responses", endpoints: [] },
+    };
+
+    // Parallel records must converge on the stable primary key: the existing
+    // PK constraint (no new schema) makes duplicate rows impossible.
+    await Promise.all([sink.record(base), sink.record(base), sink.record(base)]);
+
+    const rows = await prisma.financialIncident.findMany({ where: { chainId } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe(`rpc-incident:RPC_QUORUM_FAILURE:${chainId}`);
+    const originalVersion = rows[0].version;
+
+    // Operator resolution, then the same condition recurs.
+    await prisma.financialIncident.update({
+      where: { id: rows[0].id },
+      data: { status: "RESOLVED", resolvedAt: new Date() },
+    });
+    await sink.record({
+      ...base,
+      evidence: { ...base.evidence, reason: "no_responses_again" },
+    });
+
+    const reopened = await prisma.financialIncident.findUniqueOrThrow({
+      where: { id: rows[0].id },
+    });
+    expect(reopened.status).toBe("OPEN");
+    expect(reopened.resolvedAt).toBeNull();
+    expect(reopened.version).toBe(originalVersion + 1);
+    expect(reopened.evidence).toMatchObject({ reason: "no_responses_again" });
+    expect(await prisma.financialIncident.count({ where: { chainId } })).toBe(1);
+
+    await prisma.financialIncident.deleteMany({ where: { chainId } });
   });
 });

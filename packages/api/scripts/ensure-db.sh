@@ -108,25 +108,14 @@ if [ ! -d "generated/prisma" ]; then
 fi
 
 set +e
-PUSH_OUTPUT=$(npx prisma db push --accept-data-loss 2>&1)
+PUSH_OUTPUT=$(npx prisma db push 2>&1)
 PUSH_EXIT_CODE=$?
 set -e
 
 if [ $PUSH_EXIT_CODE -ne 0 ]; then
-  # If the push fails because of a NOT NULL column being added to a table
-  # with existing rows (e.g. schema evolution in development), attempt a
-  # force-reset only in test environments where data is disposable.
-  if [ "$NODE_ENV" = "test" ] && echo "$PUSH_OUTPUT" | grep -q "without a default value"; then
-    echo "⚠️  Schema drift requires force-reset (test data is disposable)."
-    echo "   Force-resetting database..."
-    npx prisma db push --accept-data-loss --force-reset || {
-      echo "❌ Force-reset failed!"
-      exit 1
-    }
-    echo "✅ Database force-reset and schema synced successfully!"
-    exit 0
-  fi
-
+  # NODE_ENV=test is not proof that a caller-supplied database is disposable.
+  # Never erase data automatically; an explicit operator reset is required for
+  # destructive drift, even when invoked by the test runner.
   echo "❌ Failed to sync database schema!"
   echo "$PUSH_OUTPUT"
   exit 1
@@ -140,8 +129,8 @@ if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_FILE" ]; then
     echo "⚠️  Warning: Asset table not found after db push"
     echo "   Attempting to verify all tables..."
     sqlite3 "$DB_FILE" "SELECT name FROM sqlite_master WHERE type='table';" 2>/dev/null || true
-    echo "   Re-running db push without --skip-generate to ensure schema is applied..."
-    npx prisma db push --accept-data-loss || exit 1
+    echo "❌ Schema synchronization did not create the required Asset table."
+    exit 1
   fi
 fi
 

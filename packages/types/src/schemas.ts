@@ -180,12 +180,34 @@ export const ActionSchema = z.discriminatedUnion("type", [
 // ============================================================================
 
 /**
+ * Persisted configuration amounts are 32-bit columns (buy-in, fee, starting
+ * stack, blinds, min/max buy-in). Creation inputs are bounded to this so a
+ * valid configuration can never overflow its column. Aggregated chip amounts
+ * (pots, prize pools, winning stacks) are NOT bounded by this and may exceed
+ * 32 bits; they are held as BigInt internally and converted exactly at the
+ * public wire boundary.
+ */
+export const MAX_INT32_CHIP_CONFIG = 2_147_483_647;
+
+/**
  * Schema for blind level configuration
  */
 export const BlindLevelSchema = z.object({
-  smallBlind: z.number().int().positive("Small blind must be positive"),
-  bigBlind: z.number().int().positive("Big blind must be positive"),
-  ante: z.number().int().min(0, "Ante cannot be negative"),
+  smallBlind: z
+    .number()
+    .int()
+    .positive("Small blind must be positive")
+    .max(MAX_INT32_CHIP_CONFIG, "Small blind exceeds the 32-bit configuration range"),
+  bigBlind: z
+    .number()
+    .int()
+    .positive("Big blind must be positive")
+    .max(MAX_INT32_CHIP_CONFIG, "Big blind exceeds the 32-bit configuration range"),
+  ante: z
+    .number()
+    .int()
+    .min(0, "Ante cannot be negative")
+    .max(MAX_INT32_CHIP_CONFIG, "Ante exceeds the 32-bit configuration range"),
 });
 
 /**
@@ -193,9 +215,22 @@ export const BlindLevelSchema = z.object({
  */
 export const TableConfigSchema = z
   .object({
-    smallBlind: z.number().int().positive("Small blind must be positive"),
-    bigBlind: z.number().int().positive("Big blind must be positive"),
-    ante: z.number().int().min(0, "Ante cannot be negative").optional(),
+    smallBlind: z
+      .number()
+      .int()
+      .positive("Small blind must be positive")
+      .max(MAX_INT32_CHIP_CONFIG, "Small blind exceeds the 32-bit configuration range"),
+    bigBlind: z
+      .number()
+      .int()
+      .positive("Big blind must be positive")
+      .max(MAX_INT32_CHIP_CONFIG, "Big blind exceeds the 32-bit configuration range"),
+    ante: z
+      .number()
+      .int()
+      .min(0, "Ante cannot be negative")
+      .max(MAX_INT32_CHIP_CONFIG, "Ante exceeds the 32-bit configuration range")
+      .optional(),
     maxPlayers: z
       .number()
       .int()
@@ -203,7 +238,7 @@ export const TableConfigSchema = z
       .max(10, "Maximum 10 players"),
     blindStructure: z.array(BlindLevelSchema).optional(),
     rakePercent: z.number().min(0).max(100).optional(),
-    rakeCap: z.number().int().min(0).optional(),
+    rakeCap: z.number().int().min(0).max(MAX_INT32_CHIP_CONFIG).optional(),
     timeBankSeconds: z.number().int().positive().optional(),
     timeBankDeductionSeconds: z.number().int().positive().optional(),
   })
@@ -219,14 +254,37 @@ export const CreateTableSchema = z
   .object({
     name: z.string().min(1, "Table name is required").max(100, "Name too long"),
     mode: z.enum(["CASH", "TOURNAMENT"]),
-    smallBlind: z.number().int().positive("Small blind must be positive"),
-    bigBlind: z.number().int().positive("Big blind must be positive"),
+    smallBlind: z
+      .number()
+      .int()
+      .positive("Small blind must be positive")
+      .max(MAX_INT32_CHIP_CONFIG, "Small blind exceeds the 32-bit configuration range"),
+    bigBlind: z
+      .number()
+      .int()
+      .positive("Big blind must be positive")
+      .max(MAX_INT32_CHIP_CONFIG, "Big blind exceeds the 32-bit configuration range"),
     maxPlayers: z.number().int().min(2).max(10).default(9),
-    minBuyIn: z.number().int().positive().optional(),
-    maxBuyIn: z.number().int().positive().optional(),
-    ante: z.number().int().min(0).optional(),
+    minBuyIn: z
+      .number()
+      .int()
+      .positive()
+      .max(MAX_INT32_CHIP_CONFIG, "Minimum buy-in exceeds the 32-bit configuration range")
+      .optional(),
+    maxBuyIn: z
+      .number()
+      .int()
+      .positive()
+      .max(MAX_INT32_CHIP_CONFIG, "Maximum buy-in exceeds the 32-bit configuration range")
+      .optional(),
+    ante: z
+      .number()
+      .int()
+      .min(0)
+      .max(MAX_INT32_CHIP_CONFIG, "Ante exceeds the 32-bit configuration range")
+      .optional(),
     rakePercent: z.number().min(0).max(100).optional(),
-    rakeCap: z.number().int().min(0).optional(),
+    rakeCap: z.number().int().min(0).max(MAX_INT32_CHIP_CONFIG).optional(),
     noFlopNoDrop: z.boolean().optional(),
     timeBankSeconds: z.number().int().positive().optional(),
     timeBankDeductionSeconds: z.number().int().positive().optional(),
@@ -260,11 +318,32 @@ export const TournamentPayoutSchema = z
 export const CreateTournamentSchema = z
   .object({
     name: z.string().min(1, "Tournament name is required").max(100, "Name too long"),
-    buyIn: z.number().int().positive("Buy-in must be positive"),
-    fee: z.number().int().min(0, "Fee cannot be negative").default(0),
-    startingStack: z.number().int().positive("Starting stack must be positive"),
-    smallBlind: z.number().int().positive("Small blind must be positive"),
-    bigBlind: z.number().int().positive("Big blind must be positive"),
+    buyIn: z
+      .number()
+      .int()
+      .positive("Buy-in must be positive")
+      .max(MAX_INT32_CHIP_CONFIG, "Buy-in exceeds the 32-bit configuration range"),
+    fee: z
+      .number()
+      .int()
+      .min(0, "Fee cannot be negative")
+      .max(MAX_INT32_CHIP_CONFIG, "Fee exceeds the 32-bit configuration range")
+      .default(0),
+    startingStack: z
+      .number()
+      .int()
+      .positive("Starting stack must be positive")
+      .max(MAX_INT32_CHIP_CONFIG, "Starting stack exceeds the 32-bit configuration range"),
+    smallBlind: z
+      .number()
+      .int()
+      .positive("Small blind must be positive")
+      .max(MAX_INT32_CHIP_CONFIG, "Small blind exceeds the 32-bit configuration range"),
+    bigBlind: z
+      .number()
+      .int()
+      .positive("Big blind must be positive")
+      .max(MAX_INT32_CHIP_CONFIG, "Big blind exceeds the 32-bit configuration range"),
     maxPlayers: z
       .number()
       .int()

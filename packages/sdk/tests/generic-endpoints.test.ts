@@ -165,7 +165,13 @@ describe("PokerClient generic public endpoints", () => {
         scopes: ["competition:orchestrate"],
       };
       mockFetch.mockResolvedValueOnce(
-        ok({ ...createdCredential, name: "orchestrator", scopes: ["competition:orchestrate"] })
+        ok({
+          ...createdCredential,
+          name: "orchestrator",
+          scopes: ["competition:orchestrate"],
+          tableId: null,
+          seat: null,
+        })
       );
 
       await expect(client.createServiceCredential(request)).resolves.toMatchObject({
@@ -178,6 +184,13 @@ describe("PokerClient generic public endpoints", () => {
           body: JSON.stringify(request),
         })
       );
+    });
+
+    it("rejects a table-scoped mint without a bound tableId before any network call", async () => {
+      await expect(
+        client.createServiceCredential({ name: "bot-1", scopes: ["table:observe"] })
+      ).rejects.toThrow();
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it("rejects an unsupported scope before any network call", async () => {
@@ -197,7 +210,11 @@ describe("PokerClient generic public endpoints", () => {
       );
 
       await expect(
-        client.createServiceCredential({ name: "bot-1", scopes: ["table:observe"] })
+        client.createServiceCredential({
+          name: "bot-1",
+          scopes: ["table:observe"],
+          tableId: "table-1",
+        })
       ).rejects.toMatchObject({ statusCode: 403, code: "OPERATOR_REQUIRED" });
     });
 
@@ -282,6 +299,70 @@ describe("PokerClient generic public endpoints", () => {
         retryClient.provisionServicePrincipal({ name: "agent-principal" })
       ).rejects.toThrow();
       expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    const delegationRevocation = {
+      success: true,
+      servicePrincipalId: provisioned.principalId,
+      delegatePrincipalId: "orchestrator-1",
+      revokedAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    it("revokeServicePrincipalDelegation posts the strict empty body and returns the durable revocation", async () => {
+      mockFetch.mockResolvedValueOnce(ok(delegationRevocation));
+
+      await expect(
+        client.revokeServicePrincipalDelegation(provisioned.principalId)
+      ).resolves.toEqual(delegationRevocation);
+      expect(mockFetch).toHaveBeenCalledWith(
+        `https://api.example.com/auth/service-principals/${provisioned.principalId}/delegation/revoke`,
+        expect.objectContaining({
+          method: "POST",
+          body: "{}",
+        })
+      );
+    });
+
+    it("revokeServicePrincipalDelegation rejects a malformed principal id before any network call", async () => {
+      await expect(client.revokeServicePrincipalDelegation("")).rejects.toThrow();
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it("revokeServicePrincipalDelegation rejects a response that does not assert the revocation", async () => {
+      mockFetch.mockResolvedValueOnce(ok({ ...delegationRevocation, success: false }));
+
+      await expect(
+        client.revokeServicePrincipalDelegation(provisioned.principalId)
+      ).rejects.toThrow();
+    });
+
+    it("revokeServicePrincipalDelegation rejects a response without the durable revocation timestamp", async () => {
+      const withoutTimestamp: Record<string, unknown> = { ...delegationRevocation };
+      delete withoutTimestamp.revokedAt;
+      mockFetch.mockResolvedValueOnce(ok(withoutTimestamp));
+
+      await expect(
+        client.revokeServicePrincipalDelegation(provisioned.principalId)
+      ).rejects.toThrow();
+    });
+
+    it("replays the naturally idempotent delegation revocation with identical empty bytes", async () => {
+      const retryClient = new PokerClient({
+        baseUrl: "https://api.example.com",
+        token: "test-token",
+        fetch: mockFetch as unknown as typeof fetch,
+        retry: { count: 1, delay: 0, backoff: 1 },
+      });
+      mockFetch
+        .mockRejectedValueOnce(new Error("ECONNRESET"))
+        .mockResolvedValueOnce(ok(delegationRevocation));
+
+      await expect(
+        retryClient.revokeServicePrincipalDelegation(provisioned.principalId)
+      ).resolves.toEqual(delegationRevocation);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch.mock.calls[0][1].body).toBe("{}");
+      expect(mockFetch.mock.calls[1][1].body).toBe("{}");
     });
 
     it("rotateServiceCredential posts optional expiresAt and returns the one-time token", async () => {

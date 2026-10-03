@@ -101,7 +101,12 @@ export const DepositStatusSchema = z.enum([
 ]);
 export type DepositStatus = z.infer<typeof DepositStatusSchema>;
 
-export const DepositProvenanceSchema = z.enum(["DIRECT_TREASURY", "SWEEP", "MIGRATION"]);
+/**
+ * How deposited value arrived. Only the direct treasury rail is supported:
+ * sweep/migration provenance states were never produced by a real writer and
+ * are deliberately not part of the wire vocabulary.
+ */
+export const DepositProvenanceSchema = z.enum(["DIRECT_TREASURY"]);
 export type DepositProvenance = z.infer<typeof DepositProvenanceSchema>;
 
 /** Exact on-chain log identity. */
@@ -295,8 +300,10 @@ export const WithdrawalSubmissionSchema = z.strictObject({
 export type WithdrawalSubmission = z.infer<typeof WithdrawalSubmissionSchema>;
 
 /**
- * Durable withdrawal lifecycle record. Terminal `FAILED`/`REORGED` records
- * retain the economic obligation; there is no field that clears it.
+ * Durable withdrawal lifecycle record. `REORGED` remains under monitoring:
+ * recovery may rebroadcast only the exact persisted transaction, never create
+ * a replacement payout or infer a refund from receipt absence. Economic
+ * obligations are reconciled by durable balanced journals, not status flags.
  */
 export const WithdrawalRecordSchema = WithdrawalIntentSchema.safeExtend({
   status: WithdrawalStatusSchema,

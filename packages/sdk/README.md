@@ -47,6 +47,9 @@ WebSocket integration, and optional React hooks.
   schemas re-exported from `@pokertools/types`.
 - 💰 **Canonical finance**: per-asset balances are atomic decimal strings;
   gameplay chips are integer game units and are never mixed with chain value.
+- 🏁 **Competitions**: `CompetitionClient` orchestrates server-authoritative
+  single-table competitions (create, opt in, start, settle, cancel) with strict
+  request/response schemas and replay-safe transport.
 
 ## 📦 Installation
 
@@ -63,7 +66,7 @@ TypeScript types. The React hooks require `react >= 19.2.3` as an **optional**
 peer dependency — install `react` and `react-dom` only if you use the React
 integration. The base client targets both browsers and Node.js.
 
-Requires **Node.js >= 24.0.0**.
+Requires **Node.js ^24.15.0 || >=26.0.0** and **npm >= 12.2.0**.
 
 ## 🚀 Quick Start (plain TypeScript)
 
@@ -444,9 +447,12 @@ try {
 `PokerClient` retries failed requests with exponential backoff:
 
 1. **Reads**: `GET` requests retry up to `retry.count` times.
-2. **Mutations**: replay automatically only when the body carries a stable
+2. **Mutations**: replay automatically only when the operation is explicitly
+   declared retry-safe (naturally idempotent resource operations such as
+   competition opt-in/start/settle/cancel) or when the body carries a stable
    identity (`requestId`, `idempotencyKey`, EIP-712 `intent.intentId`+`nonce`,
-   or exact deposit log identity), and the exact serialized bytes are replayed.
+   or exact deposit log identity). The exact serialized bytes are replayed;
+   arbitrary mutations are never replayed on a guess.
 3. **Retryable**: 5xx, network failures, and 429.
 4. **Non-retryable**: other 4xx and aborted requests.
 
@@ -509,48 +515,49 @@ Obtain it via `new PokerClient(config)` or `usePokerClient()`.
 
 #### Methods
 
-| Method                             | Description                                                                                                      |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `setToken(token)`                  | Update or clear the bearer token.                                                                                |
-| `getToken()` / `isAuthenticated()` | Inspect the current credential.                                                                                  |
-| `health()`                         | `GET /health` — canonical liveness check.                                                                        |
-| `getReadiness()`                   | `GET /ready` — canonical readiness report; resolves on 200 **and** 503 (inspect `status`/`financial.state`).     |
-| `getNonce()`                       | `POST /auth/nonce` — get SIWE nonce.                                                                             |
-| `login(request)`                   | `POST /auth/login` — complete SIWE auth and store the token.                                                     |
-| `logout()`                         | `POST /auth/logout` — revoke session and clear the token.                                                        |
-| `getPrincipal()`                   | `GET /auth/me` — canonical `{ id, kind, walletAddress }` identity for the caller.                                |
-| `createServiceCredential(request)` | `POST /auth/service-credentials` — operator-only mint; returns the one-time plaintext `token`.                   |
-| `listServiceCredentials()`         | `GET /auth/service-credentials` — operator-only summaries (never the token).                                     |
-| `revokeServiceCredential(id)`      | `POST /auth/service-credentials/:id/revoke` — operator-only, effective immediately.                              |
-| `getTables()`                      | `GET /tables` — list active tables.                                                                              |
-| `createTable(config)`              | `POST /tables` — create a table. Returns the `tableId`.                                                          |
-| `getTableState(id, since?)`        | Schema-validated `PublicWireState` view; returns `null` on 304. Use `getObservation` for turns/legal actions.    |
-| `getObservation(tableId)`          | `GET /tables/:id/observation` — authoritative `SeatObservation`.                                                 |
-| `action(tableId, request)`         | `POST /tables/:id/action` — submit a canonical action; returns the stored result with `receipt` + `observation`. |
-| `buyIn(tableId, request)`          | `POST /tables/:id/buy-in`.                                                                                       |
-| `addChips(tableId, request)`       | `POST /tables/:id/add-chips`.                                                                                    |
-| `getChat(tableId, options?)`       | `GET /tables/:id/chat` — bounded, ordered `ChatPage`; `{ limit?, beforeSeq? }`.                                  |
-| `sendChat(tableId, body)`          | `POST /tables/:id/chat` — append one server-escaped `ChatMessage`.                                               |
-| `getReplay(tableId, options)`      | `GET /tables/:id/replay` — hash-chained `ReplayFrame` for `{ fromEventSeq, toEventSeq? }` (event log).           |
-| `getTournaments()`                 | `GET /tournaments`.                                                                                              |
-| `createTournament(request)`        | `POST /tournaments`.                                                                                             |
-| `getTournament(id)`                | `GET /tournaments/:id`.                                                                                          |
-| `registerTournament(id, request)`  | `POST /tournaments/:id/register`.                                                                                |
-| `startTournament(id)`              | `POST /tournaments/:id/start`.                                                                                   |
-| `reconcileTournament(id)`          | `POST /tournaments/:id/reconcile`.                                                                               |
-| `advanceTournamentBlinds(id)`      | `POST /tournaments/:id/advance-blinds`.                                                                          |
-| `settleTournament(id)`             | `POST /tournaments/:id/settle`.                                                                                  |
-| `getProfile()`                     | `GET /user/me`.                                                                                                  |
-| `getHandHistory()`                 | `GET /user/history`.                                                                                             |
-| `getAssets()`                      | `GET /finance/assets` — canonical asset registry.                                                                |
-| `getBalances()`                    | `GET /finance/balances` — per-asset atomic decimal-string balances.                                              |
-| `claimDeposit(claim)`              | `POST /finance/deposits/claim` — claim by exact `(assetId, txHash, logIndex)`.                                   |
-| `getDeposit(depositId)`            | `GET /finance/deposits/:id`.                                                                                     |
-| `submitWithdrawal(submission)`     | `POST /finance/withdrawals/intents` — submit `{ intent, signature }`.                                            |
-| `getWithdrawal(intentId)`          | `GET /finance/withdrawals/:id`.                                                                                  |
-| `getNotes()` / `getNote(id)`       | `GET /notes`, `GET /notes/:id`.                                                                                  |
-| `saveNote(targetId, content)`      | `POST /notes`.                                                                                                   |
-| `deleteNote(targetId)`             | `DELETE /notes/:id`.                                                                                             |
+| Method                                 | Description                                                                                                                                                                                             |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `setToken(token)`                      | Update or clear the bearer token.                                                                                                                                                                       |
+| `getToken()` / `isAuthenticated()`     | Inspect the current credential.                                                                                                                                                                         |
+| `health()`                             | `GET /health` — canonical liveness check.                                                                                                                                                               |
+| `getReadiness()`                       | `GET /ready` — canonical readiness report; resolves on 200 **and** 503 (inspect `status`/`financial.state`).                                                                                            |
+| `getNonce()`                           | `POST /auth/nonce` — get SIWE nonce.                                                                                                                                                                    |
+| `login(request)`                       | `POST /auth/login` — complete SIWE auth and store the token.                                                                                                                                            |
+| `logout()`                             | `POST /auth/logout` — revoke session and clear the token.                                                                                                                                               |
+| `getPrincipal()`                       | `GET /auth/me` — canonical `{ id, kind, walletAddress }` identity for the caller.                                                                                                                       |
+| `createServiceCredential(request)`     | `POST /auth/service-credentials` — operator-only mint; returns the one-time plaintext `token`.                                                                                                          |
+| `listServiceCredentials()`             | `GET /auth/service-credentials` — operator-only summaries (never the token).                                                                                                                            |
+| `revokeServiceCredential(id)`          | `POST /auth/service-credentials/:id/revoke` — operator-only, effective immediately.                                                                                                                     |
+| `revokeServicePrincipalDelegation(id)` | `POST /auth/service-principals/:id/delegation/revoke` — operator-only, durable and idempotent; blocks new rostering/credential issuance but leaves the principal and already-issued credentials intact. |
+| `getTables()`                          | `GET /tables` — list active tables (WALLET principals; table-scoped SERVICE credentials are denied and read only their bound room through `getTableState`/`getObservation`).                            |
+| `createTable(config)`                  | `POST /tables` — create a table. Returns the `tableId`.                                                                                                                                                 |
+| `getTableState(id, since?)`            | Schema-validated `PublicWireState` view; returns `null` on 304. Use `getObservation` for turns/legal actions.                                                                                           |
+| `getObservation(tableId)`              | `GET /tables/:id/observation` — authoritative `SeatObservation`.                                                                                                                                        |
+| `action(tableId, request)`             | `POST /tables/:id/action` — submit a canonical action; returns the stored result with `receipt` + `observation`.                                                                                        |
+| `buyIn(tableId, request)`              | `POST /tables/:id/buy-in`.                                                                                                                                                                              |
+| `addChips(tableId, request)`           | `POST /tables/:id/add-chips`.                                                                                                                                                                           |
+| `getChat(tableId, options?)`           | `GET /tables/:id/chat` — bounded, ordered `ChatPage`; `{ limit?, beforeSeq? }`.                                                                                                                         |
+| `sendChat(tableId, body)`              | `POST /tables/:id/chat` — append one server-escaped `ChatMessage`.                                                                                                                                      |
+| `getReplay(tableId, options)`          | `GET /tables/:id/replay` — hash-chained `ReplayFrame` for `{ fromEventSeq, toEventSeq? }` (event log).                                                                                                  |
+| `getTournaments()`                     | `GET /tournaments`.                                                                                                                                                                                     |
+| `createTournament(request)`            | `POST /tournaments`.                                                                                                                                                                                    |
+| `getTournament(id)`                    | `GET /tournaments/:id`.                                                                                                                                                                                 |
+| `registerTournament(id, request)`      | `POST /tournaments/:id/register`.                                                                                                                                                                       |
+| `startTournament(id)`                  | `POST /tournaments/:id/start`.                                                                                                                                                                          |
+| `reconcileTournament(id)`              | `POST /tournaments/:id/reconcile`.                                                                                                                                                                      |
+| `advanceTournamentBlinds(id)`          | `POST /tournaments/:id/advance-blinds`.                                                                                                                                                                 |
+| `settleTournament(id)`                 | `POST /tournaments/:id/settle`.                                                                                                                                                                         |
+| `getProfile()`                         | `GET /user/me`.                                                                                                                                                                                         |
+| `getHandHistory()`                     | `GET /user/history`.                                                                                                                                                                                    |
+| `getAssets()`                          | `GET /finance/assets` — canonical asset registry.                                                                                                                                                       |
+| `getBalances()`                        | `GET /finance/balances` — per-asset atomic decimal-string balances.                                                                                                                                     |
+| `claimDeposit(claim)`                  | `POST /finance/deposits/claim` — claim by exact `(assetId, txHash, logIndex)`.                                                                                                                          |
+| `getDeposit(depositId)`                | `GET /finance/deposits/:id`.                                                                                                                                                                            |
+| `submitWithdrawal(submission)`         | `POST /finance/withdrawals/intents` — submit `{ intent, signature }`.                                                                                                                                   |
+| `getWithdrawal(intentId)`              | `GET /finance/withdrawals/:id`.                                                                                                                                                                         |
+| `getNotes()` / `getNote(id)`           | `GET /notes`, `GET /notes/:id`.                                                                                                                                                                         |
+| `saveNote(targetId, content)`          | `POST /notes`.                                                                                                                                                                                          |
+| `deleteNote(targetId)`                 | `DELETE /notes/:id`.                                                                                                                                                                                    |
 
 #### Canonical action submission
 
@@ -588,6 +595,56 @@ action, returning `Promise<PublicWireState>` (the resulting `observation.state`)
 
 Throws `PokerSDKError("ILLEGAL_ACTION")` when the server does not currently
 offer that family.
+
+### CompetitionClient (REST API)
+
+`CompetitionClient` orchestrates the generic competition surface (a
+server-authoritative single-table tournament with a 2-10 entrant roster). It
+shares the same transport and retry policy as `PokerClient` and is exported
+from the root entry:
+
+```typescript
+import { CompetitionClient } from "@pokertools/sdk";
+
+const competitions = new CompetitionClient({
+  baseUrl: "https://api.example.com",
+  token: orchestratorServiceToken, // competition:orchestrate
+});
+
+const { competition } = await competitions.createCompetition({
+  name: "Asset table",
+  mode: "ASSET",
+  entrants: [
+    { principalId: walletPrincipalId, kind: "WALLET" },
+    { principalId: agentPrincipalId, kind: "SERVICE" },
+  ],
+  terms,
+  idempotencyKey: crypto.randomUUID(),
+});
+
+await competitions.optIn(competition.id); // configured WALLET payer session
+await competitions.start(competition.id); // or cancel(competition.id) prestart
+await competitions.settle(competition.id);
+```
+
+| Method                              | Description                                                                                                                                                                                                  |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `setToken(token)`                   | Update or clear the orchestration bearer token.                                                                                                                                                              |
+| `getToken()` / `isAuthenticated()`  | Inspect the current credential.                                                                                                                                                                              |
+| `createCompetition(request)`        | `POST /competitions` — strict roster/economics body; idempotent on `idempotencyKey` (`replayed` on replay).                                                                                                  |
+| `getCompetition(id)`                | `GET /competitions/:id` — privacy-preserving projection with `settlementReady`.                                                                                                                              |
+| `optIn(id)`                         | `POST /competitions/:id/opt-in` — configured WALLET payer only; strict empty body, naturally idempotent; returns the immutable `journalRequestId` charge receipt with live `entryState` (`PAID`/`REFUNDED`). |
+| `start(id)`                         | `POST /competitions/:id/start` — orchestration only; returns authoritative table and seat assignments.                                                                                                       |
+| `settle(id)`                        | `POST /competitions/:id/settle` — orchestration only; pays or releases the reserved prize exactly once.                                                                                                      |
+| `cancel(id)`                        | `POST /competitions/:id/cancel` — orchestration only, `REGISTRATION` only; refunds held entries and releases prize.                                                                                          |
+| `issueAgentCredential(id, request)` | `POST /competitions/:id/agent-credentials` — mint or rotate a table-scoped agent credential.                                                                                                                 |
+
+`createCompetition` is the only competition mutation with a request identity:
+it replays on its stable `idempotencyKey`. `optIn`, `start`, `settle` and
+`cancel` send a strict empty-object body because their server operations are
+naturally idempotent from durable state; the client declares them retry-safe so
+a lost response is replayed with identical bytes and can never create a second
+entry, charge, refund, start or prize.
 
 ### PokerSocket (WebSocket)
 
@@ -691,13 +748,13 @@ projection carried by a `SeatObservation`:
 
 #### `@pokertools/sdk` (main entry)
 
-| Export                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Kind                                                                                                                                                                |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PokerClient`, `PokerSocket`, `PokerSDKError`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Class                                                                                                                                                               |
-| `createSiweMessage`, `parseSiweMessage`, `isSiweExpired`, `createWithdrawalTypedData`, `signWithdrawalIntent`, `generateIdempotencyKey`, `formatChips`, `parseChips`, `getActivePlayer`, `getPlayerById`, `getPlayerSeat`, `isPlayerTurn`, `getTotalPot`, `getActivePlayers`, `getPlayersInHand`, `suitToEmoji`, `formatCard`, `formatCards`, `getStreetName`, `isShowdown`, `isHandComplete`, `abbreviateNumber`                                                                                                                                                                                                                                                                                                                                                                                                                                  | Function                                                                                                                                                            |
-| `SiweMessageParams`, `WithdrawalTypedDataSigner`, `PokerSDKConfig`, `UserBalances`, `UserProfile`, `HandHistoryEntry`, `PlayerNote`, `ConnectionState`, `PokerSocketEvents`, `EventListener`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Type                                                                                                                                                                |
-| `SeatObservation`, `PublicWireState`, `PublicWirePlayer`, `LegalAction`, action receipts, principals, asset/finance contracts and endpoint DTOs                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Public types re-exported from `@pokertools/types`; see `src/index.ts` for the full surface. Engine/reducer models belong to the engine/types packages, not the SDK. |
-| `PrincipalSchema`, `SeatObservationSchema`, `LegalActionSchema`, `CanonicalActionRequestSchema`, `CanonicalActionResultSchema`, `PublicWireStateSchema`, `ObservationMessageSchema`, `ServerMessageSchema`, `safeParseServerMessage`, `AssetSchema`, `BalanceSchema`, `DepositClaimSchema`, `DepositClaimRequestSchema`, `WithdrawalIntentSchema`, `WithdrawalSubmissionSchema`, `WithdrawalRecordSchema`, `withdrawalIntentTypedData`, `atomicAmountToBigInt`, `bigIntToAtomicAmount`, `LoginRequestSchema`, `LoginResponseSchema`, `NonceResponseSchema`, `LogoutResponseSchema`, `UserProfileSchema`, `UserBalancesSchema`, `HandHistoryEntrySchema`, `HandHistoryResponseSchema`, `PlayerNoteSchema`, `PlayerNoteRequestSchema`, `GetNotesResponseSchema`, `GetNoteResponseSchema`, `SavePlayerNoteResponseSchema`, `DeleteNoteResponseSchema` | Schema / helper                                                                                                                                                     |
+| Export                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Kind                                                                                                                                                                |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PokerClient`, `PokerSocket`, `CompetitionClient`, `PokerSDKError`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Class                                                                                                                                                               |
+| `createSiweMessage`, `parseSiweMessage`, `isSiweExpired`, `createWithdrawalTypedData`, `signWithdrawalIntent`, `generateIdempotencyKey`, `formatChips`, `parseChips`, `getActivePlayer`, `getPlayerById`, `getPlayerSeat`, `isPlayerTurn`, `getTotalPot`, `getActivePlayers`, `getPlayersInHand`, `suitToEmoji`, `formatCard`, `formatCards`, `getStreetName`, `isShowdown`, `isHandComplete`, `abbreviateNumber`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Function                                                                                                                                                            |
+| `SiweMessageParams`, `WithdrawalTypedDataSigner`, `PokerSDKConfig`, `UserBalances`, `UserProfile`, `HandHistoryEntry`, `PlayerNote`, `ConnectionState`, `PokerSocketEvents`, `EventListener`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Type                                                                                                                                                                |
+| `SeatObservation`, `PublicWireState`, `PublicWirePlayer`, `LegalAction`, action receipts, principals, asset/finance contracts, competition contracts (`Competition`, `CancelCompetitionResponse`, request/response DTOs) and endpoint DTOs                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Public types re-exported from `@pokertools/types`; see `src/index.ts` for the full surface. Engine/reducer models belong to the engine/types packages, not the SDK. |
+| `PrincipalSchema`, `SeatObservationSchema`, `LegalActionSchema`, `CanonicalActionRequestSchema`, `CanonicalActionResultSchema`, `PublicWireStateSchema`, `ObservationMessageSchema`, `ServerMessageSchema`, `safeParseServerMessage`, `AssetSchema`, `BalanceSchema`, `DepositClaimSchema`, `DepositClaimRequestSchema`, `WithdrawalIntentSchema`, `WithdrawalSubmissionSchema`, `WithdrawalRecordSchema`, `withdrawalIntentTypedData`, `atomicAmountToBigInt`, `bigIntToAtomicAmount`, `LoginRequestSchema`, `LoginResponseSchema`, `NonceResponseSchema`, `LogoutResponseSchema`, `CompetitionSchema`, `CompetitionCancellationEntrySchema`, `CreateCompetitionRequestSchema`, `CreateCompetitionResponseSchema`, `GetCompetitionResponseSchema`, `OptInCompetitionRequestSchema`, `OptInCompetitionResponseSchema`, `StartCompetitionRequestSchema`, `StartCompetitionResponseSchema`, `SettleCompetitionRequestSchema`, `SettleCompetitionResponseSchema`, `CancelCompetitionRequestSchema`, `CancelCompetitionResponseSchema`, `IssueAgentCredentialRequestSchema`, `IssuedAgentCredentialSchema`, `UserProfileSchema`, `UserBalancesSchema`, `HandHistoryEntrySchema`, `HandHistoryResponseSchema`, `PlayerNoteSchema`, `PlayerNoteRequestSchema`, `GetNotesResponseSchema`, `GetNoteResponseSchema`, `SavePlayerNoteResponseSchema`, `DeleteNoteResponseSchema` | Schema / helper                                                                                                                                                     |
 
 #### `@pokertools/sdk/react` (React subpath)
 
@@ -721,9 +778,9 @@ Or from the package directory:
 cd packages/sdk && npx vitest run
 ```
 
-Suites include `auth`, `client`, `client-reliability`, `socket`, `react`,
-`edge-cases`, `types-regressions`, and `utils` (formatting, canonical-state view
-helpers, display helpers).
+Suites include `auth`, `client`, `client-reliability`, `competition-client`,
+`generic-endpoints`, `socket`, `react`, `edge-cases`, `types-regressions`, and
+`utils` (formatting, canonical-state view helpers, display helpers).
 
 ## 🔗 Related Packages
 

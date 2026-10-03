@@ -1,13 +1,19 @@
 import {
+  CancelCompetitionRequestSchema,
+  CancelCompetitionResponseSchema,
+  CompetitionEntryStateSchema,
   CompetitionSchema,
   CreateCompetitionRequestSchema,
   CreateCompetitionResponseSchema,
   GetCompetitionResponseSchema,
   IssueAgentCredentialRequestSchema,
   IssuedAgentCredentialSchema,
+  OptInCompetitionRequestSchema,
   OptInCompetitionResponseSchema,
   PositiveAtomicAmountSchema,
+  SettleCompetitionRequestSchema,
   SettleCompetitionResponseSchema,
+  StartCompetitionRequestSchema,
   StartCompetitionResponseSchema,
 } from "../src/canonical/competition";
 
@@ -235,6 +241,7 @@ describe("competition contracts", () => {
       createdAt: "2026-01-01T00:00:00.000Z",
       startedAt: null,
       finishedAt: null,
+      cancelledAt: null,
     });
     expect(competition.entrants[1].seat).toBe(1);
     expect(competition.entrants[1].entryState).toBe("NOT_REQUIRED");
@@ -266,6 +273,7 @@ describe("competition contracts", () => {
       createdAt: "2026-01-01T00:00:00.000Z",
       startedAt: null,
       finishedAt: null,
+      cancelledAt: null,
     });
 
     expect(
@@ -279,9 +287,21 @@ describe("competition contracts", () => {
         principalId: WALLET_A,
         entryState: "PAID",
         entry: { assetId: ASSET, amountAtomic: "1000000" },
-        conversionId: "conversion-1",
+        journalRequestId: "competition-entry-reserve:comp-1:wallet-a",
       })
     ).toBeTruthy();
+    // The immutable charge receipt replays after cancellation with the live
+    // REFUNDED entry state.
+    expect(
+      OptInCompetitionResponseSchema.parse({
+        success: true,
+        competitionId: "comp-1",
+        principalId: WALLET_A,
+        entryState: "REFUNDED",
+        entry: { assetId: ASSET, amountAtomic: "1000000" },
+        journalRequestId: "competition-entry-reserve:comp-1:wallet-a",
+      }).entryState
+    ).toBe("REFUNDED");
     expect(
       StartCompetitionResponseSchema.parse({
         success: true,
@@ -338,5 +358,126 @@ describe("competition contracts", () => {
         rotated: false,
       })
     ).toBeTruthy();
+  });
+
+  it("takes empty strict bodies for naturally idempotent mutations", () => {
+    for (const schema of [
+      OptInCompetitionRequestSchema,
+      StartCompetitionRequestSchema,
+      SettleCompetitionRequestSchema,
+      CancelCompetitionRequestSchema,
+    ]) {
+      expect(schema.safeParse({}).success).toBe(true);
+      // A stale idempotencyKey is rejected, never silently ignored.
+      expect(schema.safeParse({ idempotencyKey: "stale-1" }).success).toBe(false);
+      expect(schema.safeParse({ extra: true }).success).toBe(false);
+    }
+  });
+
+  it("models REFUNDED as a terminal prestart entry state", () => {
+    expect(CompetitionEntryStateSchema.parse("REFUNDED")).toBe("REFUNDED");
+    const competition = CompetitionSchema.parse({
+      id: "comp-cancelled",
+      name: "Cancelled table",
+      mode: "ASSET",
+      status: "CANCELLED",
+      tableId: "table-1",
+      organizerPrincipalId: "principal-orchestrator",
+      maxEntrants: 2,
+      startingStack: 1000,
+      smallBlind: 10,
+      bigBlind: 20,
+      entrants: [
+        entrant(WALLET_A, "WALLET", 0),
+        { principalId: SERVICE_A, kind: "SERVICE", seat: 1, entryState: "NOT_REQUIRED" },
+      ],
+      terms,
+      prizeStatus: "RELEASED",
+      settlementReady: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      startedAt: null,
+      finishedAt: null,
+      cancelledAt: "2026-01-01T00:05:00.000Z",
+    });
+    expect(competition.status).toBe("CANCELLED");
+    expect(competition.cancelledAt).toBe("2026-01-01T00:05:00.000Z");
+  });
+
+  it("parses a truthful cancellation response and rejects misreporting shapes", () => {
+    const response = CancelCompetitionResponseSchema.parse({
+      success: true,
+      competitionId: "comp-1",
+      status: "CANCELLED",
+      cancelledAt: "2026-01-01T00:05:00.000Z",
+      prizeStatus: "RELEASED",
+      prize: { assetId: ASSET, amountAtomic: terms.prize.amountAtomic },
+      entries: [
+        {
+          principalId: WALLET_A,
+          kind: "WALLET",
+          entryState: "REFUNDED",
+          refunded: true,
+          refundJournalId: "competition-entry-refund:comp-1:wallet-a",
+        },
+        {
+          principalId: SERVICE_A,
+          kind: "SERVICE",
+          entryState: "NOT_REQUIRED",
+          refunded: false,
+          refundJournalId: null,
+        },
+      ],
+    });
+    expect(response.entries[0].refunded).toBe(true);
+
+    // A successful cancellation never reports a PAID entry, and refunded must
+    // be backed by the exact refund journal.
+    for (const invalid of [
+      {
+        principalId: WALLET_A,
+        kind: "WALLET" as const,
+        entryState: "PAID" as const,
+        refunded: false,
+        refundJournalId: null,
+      },
+      {
+        principalId: WALLET_A,
+        kind: "WALLET" as const,
+        entryState: "REFUNDED" as const,
+        refunded: false,
+        refundJournalId: null,
+      },
+      {
+        principalId: WALLET_A,
+        kind: "WALLET" as const,
+        entryState: "REFUNDED" as const,
+        refunded: true,
+        refundJournalId: null,
+      },
+    ]) {
+      expect(
+        CancelCompetitionResponseSchema.safeParse({
+          success: true,
+          competitionId: "comp-1",
+          status: "CANCELLED",
+          cancelledAt: "2026-01-01T00:05:00.000Z",
+          prizeStatus: "RELEASED",
+          prize: { assetId: ASSET, amountAtomic: terms.prize.amountAtomic },
+          entries: [invalid],
+        }).success
+      ).toBe(false);
+    }
+
+    expect(
+      CancelCompetitionResponseSchema.safeParse({
+        success: true,
+        competitionId: "comp-1",
+        status: "CANCELLED",
+        cancelledAt: "2026-01-01T00:05:00.000Z",
+        prizeStatus: "RELEASED",
+        prize: null,
+        entries: [],
+      }).success
+    ).toBe(false);
   });
 });

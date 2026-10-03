@@ -173,7 +173,7 @@ describe("Canonical withdrawal endpoint (EIP-712)", () => {
   it("rejects an invalid signature", async () => {
     const response = await submit(makeIntent(), `0x${"0".repeat(130)}`);
     expect(response.statusCode).toBe(401);
-    expect(response.json().code).toBe("AUTH_FAILED");
+    expect(response.json().error).toBe("AUTH_FAILED");
   });
 
   it("rejects a signature from a different wallet", async () => {
@@ -181,14 +181,14 @@ describe("Canonical withdrawal endpoint (EIP-712)", () => {
     const intent = makeIntent();
     const response = await submit(intent, await signIntent(intent, other));
     expect(response.statusCode).toBe(401);
-    expect(response.json().code).toBe("AUTH_FAILED");
+    expect(response.json().error).toBe("AUTH_FAILED");
   });
 
   it("rejects an intent bound to a different principal", async () => {
     const intent = makeIntent({ principalId: "someone-else" });
     const response = await submit(intent, await signIntent(intent));
     expect(response.statusCode).toBe(403);
-    expect(response.json().code).toBe("FORBIDDEN");
+    expect(response.json().error).toBe("FORBIDDEN");
   });
 
   it("rejects a signature over a tampered amount", async () => {
@@ -197,7 +197,7 @@ describe("Canonical withdrawal endpoint (EIP-712)", () => {
     const tampered = { ...intent, amountAtomic: "200" };
     const response = await submit(tampered, signature);
     expect(response.statusCode).toBe(401);
-    expect(response.json().code).toBe("AUTH_FAILED");
+    expect(response.json().error).toBe("AUTH_FAILED");
   });
 
   it("rejects a signature over a mismatched chain id", async () => {
@@ -261,14 +261,14 @@ describe("Canonical withdrawal endpoint (EIP-712)", () => {
     };
     const conflict = await submit(conflicting, await signIntent(conflicting));
     expect(conflict.statusCode).toBe(409);
-    expect(conflict.json().code).toBe("CONFLICT");
+    expect(conflict.json().error).toBe("CONFLICT");
   });
 
   it("rejects a withdrawal above the available balance", async () => {
     const intent = makeIntent({ amountAtomic: "999999999" });
     const response = await submit(intent, await signIntent(intent));
     expect(response.statusCode).toBe(400);
-    expect(response.json().code).toBe("INSUFFICIENT_FUNDS");
+    expect(response.json().error).toBe("INSUFFICIENT_FUNDS");
   });
 
   it("lists the principal's durable withdrawal intents", async () => {

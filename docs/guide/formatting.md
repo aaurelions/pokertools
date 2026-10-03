@@ -1,6 +1,6 @@
 # Docs & Text Formatting
 
-These docs are built with [VitePress 2.0.0-alpha.20](https://vitepress.dev) and extended with
+These docs are built with [VitePress 1.6.4](https://vitepress.dev) and extended with
 custom markdown-it plugins. This page is the living reference for every formatting
 feature you can use in these pages.
 
@@ -115,15 +115,13 @@ contract BatchSweeper is Ownable {
 Every code block has a copy button; language labels auto-detect or come from the language tag.
 :::
 
-## Math (markdown-it-mathjax3)
+## Formulas as plain text
 
-Inline math: pot odds $\frac{20}{20 + 60} = 25\%$
+Math rendering is intentionally not part of this site; formulas stay readable
+as code or plain text without an extra renderer:
 
-Block math:
-
-$$
-EV = \sum_{i} P_i \times V_i
-$$
+- Pot odds: `call / (pot + call)` → `20 / (20 + 60) = 25%`
+- Expected value: `EV = Σ (P_i × V_i)`
 
 ## Layout niceties
 

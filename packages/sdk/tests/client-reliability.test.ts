@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PokerClient } from "../src/client";
+import { PokerHttpTransport } from "../src/transport";
 
 function setup() {
   const fetch = vi.fn();
@@ -104,6 +105,35 @@ describe("HTTP reliability", () => {
     await client.buyIn("t1", { amount: 100, seat: 0, idempotencyKey: "one-operation" });
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(fetch.mock.calls[0][1].body).toBe(fetch.mock.calls[1][1].body);
+  });
+
+  it("replays an identity-free mutation only when explicitly declared retry-safe", async () => {
+    const fetch = vi.fn();
+    const transport = new PokerHttpTransport({
+      baseUrl: "https://example.com",
+      fetch,
+      retry: { count: 2, delay: 1 },
+      timeout: 100,
+    });
+
+    // Without the explicit flag, an empty-body mutation is never replayed.
+    fetch.mockRejectedValue(new Error("Connection lost after server committed"));
+    await expect(transport.request("POST", "/competitions/comp-1/opt-in", {})).rejects.toThrow(
+      /Connection lost/
+    );
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    // With the flag, the naturally idempotent operation replays identical bytes.
+    fetch.mockReset();
+    fetch
+      .mockRejectedValueOnce(new Error("Lost response"))
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ success: true }) });
+    await expect(
+      transport.request("POST", "/competitions/comp-1/opt-in", {}, { retrySafe: true })
+    ).resolves.toEqual({ success: true });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls[0][1].body).toBe("{}");
+    expect(fetch.mock.calls[1][1].body).toBe("{}");
   });
 
   it("replays a canonical action with the identical serialized body and requestId", async () => {

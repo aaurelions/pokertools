@@ -323,6 +323,19 @@ function validateSitAction(state: GameState, action: SitAction): void {
     }
   }
 
+  // A principal can only hold one seat on a table: SIT must never silently
+  // duplicate (and double-stack) an already seated player at a second seat.
+  const alreadySeatedAt = state.players.findIndex(
+    (player) => player !== null && player.id === action.playerId
+  );
+  if (alreadySeatedAt !== -1 && alreadySeatedAt !== action.seat) {
+    throw new IllegalActionError(
+      ErrorCodes.SEAT_OCCUPIED,
+      `Player ${action.playerId} is already seated at seat ${alreadySeatedAt}`,
+      { seat: action.seat, currentSeat: alreadySeatedAt }
+    );
+  }
+
   if (action.stack <= 0) {
     throw new IllegalActionError(
       ErrorCodes.INVALID_STACK,

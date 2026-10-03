@@ -46,7 +46,11 @@ import { createIncidentReadinessCheck } from "./services/incident-readiness.js";
  * or auth-operator access).
  */
 function serviceRequiredScope(method: string, routeUrl: string): ServiceScopeName | null {
-  if (routeUrl === "/tables" || routeUrl === "/tables/:id") {
+  // The global table collection is not part of the SERVICE surface: a bound
+  // credential reaches only its own room through GET /tables/:id, so the
+  // collection listing can never leak other rooms.
+  if (routeUrl === "/tables") return null;
+  if (routeUrl === "/tables/:id") {
     return method === "GET" ? "table:observe" : null;
   }
   if (routeUrl === "/tables/:id/action") {
@@ -68,6 +72,7 @@ function serviceRequiredScope(method: string, routeUrl: string): ServiceScopeNam
     [
       "/competitions/:id",
       "/competitions/:id/start",
+      "/competitions/:id/cancel",
       "/competitions/:id/reconcile",
       "/competitions/:id/settle",
       "/competitions/:id/agent-credentials",
@@ -331,20 +336,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
     }
   });
 
-  // Routes
-  await app.register(authRoutes, { prefix: "/auth" });
-  await app.register(tableRoutes, { prefix: "/tables" });
-  await app.register(tournamentRoutes, { prefix: "/tournaments" });
-  await app.register(competitionRoutes, { prefix: "/competitions" });
-  await app.register(userRoutes, { prefix: "/user" });
-  await app.register(wsRoutes, { prefix: "/ws" });
-  await app.register(financeRoutes, { prefix: "/finance" });
-  await app.register(notesRoutes, { prefix: "/notes" });
-  await app.register(chipRoutes, { prefix: "/chips" });
-  if (config.NODE_ENV === "test" && config.ENABLE_TEST_ROUTES === "true") {
-    await app.register(testRoutesPlugin);
-  }
-
+  // Encapsulated route plugins inherit their parent's handler at registration.
+  // Install the sanitized canonical boundary before registering any routes.
   app.setErrorHandler((error, request, reply) => {
     const err = error as Error & { statusCode?: number; code?: string };
     const statusCode = err.statusCode ? Number(err.statusCode) : 500;
@@ -362,6 +355,20 @@ export async function buildApp(options: BuildAppOptions = {}) {
     }
     return reply.code(statusCode).send({ error: code, message: err.message });
   });
+
+  // Routes
+  await app.register(authRoutes, { prefix: "/auth" });
+  await app.register(tableRoutes, { prefix: "/tables" });
+  await app.register(tournamentRoutes, { prefix: "/tournaments" });
+  await app.register(competitionRoutes, { prefix: "/competitions" });
+  await app.register(userRoutes, { prefix: "/user" });
+  await app.register(wsRoutes, { prefix: "/ws" });
+  await app.register(financeRoutes, { prefix: "/finance" });
+  await app.register(notesRoutes, { prefix: "/notes" });
+  await app.register(chipRoutes, { prefix: "/chips" });
+  if (config.NODE_ENV === "test" && config.ENABLE_TEST_ROUTES === "true") {
+    await app.register(testRoutesPlugin);
+  }
 
   app.get("/health", () => HealthResponseSchema.parse({ status: "ok", timestamp: Date.now() }));
 

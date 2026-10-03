@@ -41,15 +41,18 @@ describe("canonical acceptance harness on real PostgreSQL + Redis", () => {
     app = ctx.app;
     operator = await loginWallet(ctx.baseUrl);
     await promoteToOperator(app, operator.id);
-    service = await createServicePrincipal(ctx.baseUrl, operator.token, {
-      name: "smoke-service",
-      scopes: ["table:observe", "table:act"],
-    });
     tableId = await createTable(ctx.baseUrl, operator.token, {
       name: "smoke-table",
       smallBlind: 1,
       bigBlind: 2,
       maxPlayers: 4,
+    });
+    // SERVICE table credentials are always resource-bound: mint it for the room
+    // it will observe.
+    service = await createServicePrincipal(ctx.baseUrl, operator.token, {
+      name: "smoke-service",
+      scopes: ["table:observe", "table:act"],
+      tableId,
     });
     // Seat the operator wallet through the public route. SERVICE principals are
     // currently denied on /buy-in by the SERVICE scope boundary; SERVICE seating

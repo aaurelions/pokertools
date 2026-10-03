@@ -6,7 +6,7 @@ import {
 } from "@pokertools/types";
 import type { DepositClaimRecord, PrismaClient } from "../../generated/prisma/index.js";
 import { AtomicLedger } from "./atomic-ledger.js";
-import { FinancialIntentService } from "./financial-intents.js";
+import { DepositAssetFrozenError, FinancialIntentService } from "./financial-intents.js";
 import { AppError } from "../utils/errors.js";
 
 /**
@@ -141,10 +141,11 @@ export class CanonicalDepositService {
     if (!asset) {
       throw new DepositClaimRejected("ASSET_NOT_FOUND", "Unknown asset");
     }
-    if (asset.status === "FROZEN") {
-      throw new DepositClaimRejected("ASSET_FROZEN", "Asset is frozen for financial activity");
-    }
 
+    // Replay of the durable credited claim is risk-reducing and remains
+    // available even while the asset is frozen. It must be the EXACT claim
+    // (same asset and principal); any other existing row is a conflict and is
+    // never adopted or returned.
     const existing = await this.prisma.depositClaimRecord.findUnique({
       where: {
         chainId_txHash_logIndex: {
@@ -155,10 +156,18 @@ export class CanonicalDepositService {
       },
     });
     if (existing) {
-      if (existing.status === "CREDITED") {
+      if (
+        existing.status === "CREDITED" &&
+        existing.assetId === asset.id &&
+        existing.principalId === input.principalId
+      ) {
         return toClaimResult(existing, true);
       }
       throw new DepositClaimRejected("DUPLICATE_CLAIM", "Deposit claim already exists");
+    }
+
+    if (asset.status === "FROZEN") {
+      throw new DepositClaimRejected("ASSET_FROZEN", "Asset is frozen for financial activity");
     }
 
     const verifier = this.options.verifier;
@@ -192,18 +201,28 @@ export class CanonicalDepositService {
       ? DepositProvenanceSchema.parse(verification.provenance)
       : undefined;
 
-    const claim = await this.intents.creditDepositClaim({
-      principalId: input.principalId,
-      assetId: asset.id,
-      chainId: asset.chainId,
-      txHash: parsed.data.txHash,
-      logIndex: parsed.data.logIndex,
-      amountAtomic: amount.data,
-      blockNumber: verification.blockNumber ?? null,
-      blockHash: verification.blockHash ?? null,
-      confirmations: verification.confirmations ?? 0,
-      provenance,
-    });
+    let claim: DepositClaimRecord;
+    try {
+      claim = await this.intents.creditDepositClaim({
+        principalId: input.principalId,
+        assetId: asset.id,
+        chainId: asset.chainId,
+        txHash: parsed.data.txHash,
+        logIndex: parsed.data.logIndex,
+        amountAtomic: amount.data,
+        blockNumber: verification.blockNumber ?? null,
+        blockHash: verification.blockHash ?? null,
+        confirmations: verification.confirmations ?? 0,
+        provenance,
+      });
+    } catch (error) {
+      // The credit lost the race to a freeze: surface the stable claim code so
+      // the route keeps returning 409 ASSET_FROZEN rather than a generic 500.
+      if (error instanceof DepositAssetFrozenError) {
+        throw new DepositClaimRejected("ASSET_FROZEN", error.message);
+      }
+      throw error;
+    }
 
     return toClaimResult(claim, false);
   }

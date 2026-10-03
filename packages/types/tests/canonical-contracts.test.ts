@@ -7,9 +7,7 @@ import {
   bigIntToAtomicAmount,
   // principal / auth
   PrincipalSchema,
-  ServiceCredentialSchema,
   ServiceScopeSchema,
-  AuthContextSchema,
   // public wire state + adapter
   PublicWireStateSchema,
   MaskedPublicStateSchema,
@@ -227,66 +225,11 @@ describe("canonical principal contracts", () => {
     ).toBe(false);
   });
 
-  test("validates scoped service credentials with table/seat restrictions", () => {
-    expect(ServiceScopeSchema.safeParse("table:observe").success).toBe(true);
-    expect(ServiceScopeSchema.safeParse("table:chat").success).toBe(true);
+  test("service scopes stay closed", () => {
+    for (const scope of ["table:observe", "table:act", "table:chat", "competition:orchestrate"]) {
+      expect(ServiceScopeSchema.safeParse(scope).success).toBe(true);
+    }
     expect(ServiceScopeSchema.safeParse("table:admin").success).toBe(false);
-    expect(
-      ServiceCredentialSchema.safeParse({
-        principalId: "svc",
-        grants: [
-          { scope: "table:observe", restriction: { tableId: "t1", seat: null } },
-          { scope: "table:act", restriction: { tableId: "t1", seat: 3 } },
-          { scope: "table:chat" },
-        ],
-        expiresAt: 2000000000,
-      }).success
-    ).toBe(true);
-    // duplicate scope+restriction rejected
-    expect(
-      ServiceCredentialSchema.safeParse({
-        principalId: "svc",
-        grants: [
-          { scope: "table:observe", restriction: { tableId: "t1", seat: null } },
-          { scope: "table:observe", restriction: { tableId: "t1", seat: null } },
-        ],
-        expiresAt: 2000000000,
-      }).success
-    ).toBe(false);
-  });
-
-  test("keeps richer context in AuthContext, not Principal", () => {
-    const walletAuth = {
-      principal: { id: "u1", kind: "WALLET", walletAddress: ADDRESS_A },
-      sessionId: "s1",
-      issuedAt: 1,
-      expiresAt: 100,
-      role: "ADMIN",
-      serviceCredential: null,
-      restrictions: null,
-    };
-    expect(AuthContextSchema.safeParse(walletAuth).success).toBe(true);
-    // SERVICE cannot hold an operator role
-    expect(
-      AuthContextSchema.safeParse({
-        ...walletAuth,
-        principal: { id: "svc", kind: "SERVICE", walletAddress: null },
-        role: "ADMIN",
-        serviceCredential: {
-          principalId: "svc",
-          grants: [{ scope: "table:observe" }],
-          expiresAt: 100,
-        },
-      }).success
-    ).toBe(false);
-    // SERVICE requires a credential
-    expect(
-      AuthContextSchema.safeParse({
-        ...walletAuth,
-        principal: { id: "svc", kind: "SERVICE", walletAddress: null },
-        role: null,
-      }).success
-    ).toBe(false);
   });
 });
 

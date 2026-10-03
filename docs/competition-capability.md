@@ -1,8 +1,8 @@
 # Competition capability (generic, public contract)
 
 Status: **contract frozen; API implemented and verified on PostgreSQL + Redis.**
-The SDK competition client lives on the separate public subpath and is owned by
-the SDK surface.
+The SDK competition client is exported from the root `@pokertools/sdk` entry
+(`CompetitionClient`) and is owned by the SDK surface.
 
 This document is the public interface any external product orchestrator can
 build against. The runtime contracts live in `@pokertools/types`
@@ -33,9 +33,17 @@ platform invariant.
 
 ## HTTP surface
 
-All routes are JSON. Mutations are idempotent on `idempotencyKey`; replaying a
-mutation returns the original result and never creates a second entry, charge or
-prize.
+All routes are JSON. Only `POST /competitions` (create) carries a client
+`idempotencyKey`; it is persisted with a request hash so a retry can never
+create a second competition. Every other mutation is **naturally idempotent
+from durable state** and accepts an empty strict object body — a stale
+`idempotencyKey` is rejected (`400 VALIDATION_FAILED`), never silently ignored:
+
+- opt-in: the durable PAID marker plus the exact entry journal;
+- start: the durable `startedAt` marker (replayable while `RUNNING` and after
+  settlement);
+- settle: the durable `FINISHED` status and prize disposition;
+- cancel: the durable `CANCELLED` status, `cancelledAt` and refund journals.
 
 | Method | Path                                  | Authority                                                         |
 | ------ | ------------------------------------- | ----------------------------------------------------------------- |
@@ -43,6 +51,7 @@ prize.
 | GET    | `/competitions/:id`                   | authenticated (privacy-preserving projection)                     |
 | POST   | `/competitions/:id/opt-in`            | a configured WALLET entry payer only                              |
 | POST   | `/competitions/:id/start`             | orchestration SERVICE or ADMIN wallet                             |
+| POST   | `/competitions/:id/cancel`            | orchestration SERVICE or ADMIN wallet (`REGISTRATION` only)       |
 | POST   | `/competitions/:id/settle`            | orchestration SERVICE or ADMIN wallet                             |
 | POST   | `/competitions/:id/agent-credentials` | orchestration SERVICE or ADMIN wallet                             |
 
@@ -77,7 +86,12 @@ prize.
 ```
 
 Response: `{ success, competition, replayed }` where `competition.entrants[*].seat`
-is the authoritative assignment.
+is the authoritative assignment. Seats are assigned by the server with a CSPRNG
+Fisher-Yates permutation of `0..n-1` at creation; the order of the `entrants`
+array never controls any seat, and the same permutation is written to the
+backing tournament entries and used by the engine at start. Orchestrators must
+read seats from the projection/start response, never infer them from roster
+order.
 
 Rules enforced at create (fail closed):
 
@@ -99,39 +113,56 @@ Rules enforced at create (fail closed):
 ### Opt-in
 
 ```jsonc
-// POST /competitions/:id/opt-in
-{ "idempotencyKey": "optin-1" }
+// POST /competitions/:id/opt-in  — empty strict body
+{}
 ```
 
 Only a configured WALLET payer may call it. The payer's explicit entry is
-charged atomically to the authorized sponsor's account; the asset is re-checked
-`ACTIVE` inside the charging transaction and the operation requires the same
-paid-readiness gate as create. Insufficient funds or any mismatch fails the
-whole request closed (no partial seat/charge). Replays return the original
-journal conversion, and the durable PAID marker makes a retry after a crash a
-no-op rather than a second charge.
+charged atomically into the competition's own entry reserve
+(`competition-entry:<competitionId>`, `TOURNAMENT_RESERVE` class) — never
+directly to the sponsor — so a sponsor can never spend value that is still
+refundable before start. The asset is re-checked `ACTIVE` inside the charging
+transaction and the operation requires the same paid-readiness gate as create.
+Insufficient funds or any mismatch fails the whole request closed (no partial
+seat/charge).
+
+Natural idempotency: the durable entry marker plus the exact reserve-credit
+journal is the identity. The accepted charge receipt (`journalRequestId`) is
+replayed for the authenticated payer before the registration gate, so a lost
+response stays replayable after start and after a prestart cancellation. The
+response reports the **live** durable `entryState` at response time (`PAID`
+while the entry is held, `REFUNDED` after a cancellation) while the journal
+receipt stays immutable historical evidence — read `GET /competitions/:id` for
+the authoritative projection. A refunded entry is never charged again. The
+transaction locks the competition row and re-reads status/entrant, so a
+concurrent start or cancellation can never be followed by a charge (no
+pay-after-start / pay-after-cancel).
 
 ### Start
 
 ```jsonc
-// POST /competitions/:id/start
-{ "idempotencyKey": "start-1" }
+// POST /competitions/:id/start  — empty strict object body
+{}
 ```
 
 Fails closed unless the competition is `REGISTRATION`, has ≥2 entrants, and
 every configured entry payer has paid (and, for `ASSET`, assets are still
 `ACTIVE` and the prize reservation is intact). Starting is one database
-transaction: the server seats every entrant at their assigned engine seat, deals
-the first hand, and only then makes the competition `RUNNING`. Before that
-commit no seat or hand is publicly observable, and public gameplay on a
-competition table is rejected until the competition is fully seated and
-`RUNNING` (and after settlement).
+transaction: the transaction locks the competition row and re-reads entries, so
+`REGISTRATION -> RUNNING` and `REGISTRATION -> CANCELLED` have exactly one
+winner; it then transfers every held entry to the sponsor's operator account
+exactly once, seats every entrant at their assigned engine seat, deals the first
+hand, and only then makes the competition `RUNNING`. Before that commit no seat
+or hand is publicly observable, and public gameplay on a competition table is
+rejected until the competition is fully seated and `RUNNING` (and after
+settlement). A durable `startedAt` makes start replayable from durable state,
+including after settlement.
 
 ### Settle
 
 ```jsonc
-// POST /competitions/:id/settle
-{ "idempotencyKey": "settle-1" }
+// POST /competitions/:id/settle  — empty strict object body
+{}
 ```
 
 Every competition projection (create response and `GET /competitions/:id`)
@@ -155,6 +186,95 @@ ledger requestId makes a divergent second disposition impossible. Retries are
 idempotent. Settlement is deliberately **not** readiness-gated: a provider
 outage must never trap a reserved prize or block releasing value.
 
+### Cancel (prestart)
+
+```jsonc
+// POST /competitions/:id/cancel  — empty strict object body
+{}
+```
+
+Orchestration only, and only while the competition is `REGISTRATION`. One
+transaction locks the competition row (serializing pay/start/cancel), refunds
+every PAID entry from the competition entry reserve to its payer with the exact
+atomic amount, releases the reserved prize to the sponsor, marks the backing
+tournament `CANCELLED` and closes its table, then flips the competition
+`CANCELLED` with `cancelledAt`. Cancellation is deliberately **risk-reducing**:
+it never requires financial readiness or `ACTIVE` assets, so a frozen or
+degraded platform can still return value.
+
+Cancellation is **all-or-nothing**: every PAID entry must resolve to the
+competition entry reserve. If any paid value cannot be accounted for, the whole
+cancellation is refused with `409 COMPETITION_ENTRY_UNRESOLVED` and the
+competition stays `REGISTRATION` — there is no partial refund, no false
+cancellation and no stranded PAID balance. A durably started competition can
+never be cancelled (`409 COMPETITION_NOT_CANCELLABLE`).
+
+The response is the canonical cancellation schema; it reports only durable
+facts:
+
+```jsonc
+{
+  "success": true,
+  "competitionId": "comp-1",
+  "status": "CANCELLED",
+  "cancelledAt": "2026-01-01T00:05:00.000Z",
+  "prizeStatus": "RELEASED", // NOT_APPLICABLE for NONFINANCIAL
+  "prize": { "assetId": "eip155:8453/erc20:0x…", "amountAtomic": "5000000" },
+  "entries": [
+    {
+      "principalId": "user-wallet-1",
+      "kind": "WALLET",
+      "entryState": "REFUNDED",
+      "refunded": true,
+      "refundJournalId": "competition-entry-refund:comp-1:user-wallet-1",
+    },
+    {
+      "principalId": "user-agent-1",
+      "kind": "SERVICE",
+      "entryState": "NOT_REQUIRED",
+      "refunded": false,
+      "refundJournalId": null,
+    },
+  ],
+}
+```
+
+`refunded` is true only when this cancellation returned the exact entry and
+`refundJournalId` is the exact journal that did it; `PENDING`/`NOT_REQUIRED`
+entrants are reported unchanged. Replaying an accepted cancellation returns the
+same durable facts and never moves value twice.
+
+### Data safety and migration posture
+
+The competition ledger is canonical-only: a PAID entry is always evidenced by
+its exact reserve-credit journal (`entryJournalId`), start transfers it from
+the reserve to the sponsor (`entrySettlementJournalId`), and cancellation
+refunds it from the reserve to the payer (`refundJournalId`). There is no
+legacy account path and no fallback identity: a missing, unsealed or foreign
+journal (for example one that credited the sponsor directly) refuses the whole
+cancellation (`409 COMPETITION_ENTRY_UNRESOLVED`) and the competition stays
+`REGISTRATION`. No value is ever moved from a non-canonical account.
+
+The platform is versioned forward-only: settings and databases can be reset and
+there is no cross-version data compatibility promise. The canonical fresh
+PostgreSQL baseline (`001_initial_schema`..`004_competitions`) already contains
+the `REFUNDED` state, the cancellation timestamp and the canonical lifecycle
+journals; there is no upgrade path from pre-consolidation databases.
+
+### Retry and seat semantics (summary)
+
+- Create: real `idempotencyKey` + request hash; identical replay returns the
+  original competition, a different request under the same key is `409`.
+- Opt-in: exact reserve-credit journal identity; the accepted charge receipt
+  replays before the registration gate, including after start and after
+  cancellation (live state is then `REFUNDED`).
+- Start: durable `startedAt` identity; replayable while `RUNNING` and after
+  settlement; unpaid entries re-checked under the row lock.
+- Settle: durable `FINISHED` identity; one shared disposition journal.
+- Cancel: durable `CANCELLED` identity; exact refund journals; all-or-nothing.
+- Seats: CSPRNG Fisher-Yates `0..n-1` at creation, never roster order; derive
+  seats from the projection or the start response.
+
 ### Agent credentials
 
 ```jsonc
@@ -174,7 +294,9 @@ table and only carries table scopes: it can observe, act and chat at its
 assigned table, and nothing else. `seat` is optional and defaults to a
 table-only restriction (no seat); an explicit `seat` must match the entrant's
 authoritative assigned seat. Pass `credentialId` to rotate that credential in
-place; omit it to mint a fresh one (safe after a restart).
+place; omit it to mint a fresh one (safe after a restart). Rotation never
+broadens implicitly: omitted `scopes` preserve the credential's current scopes,
+and an omitted `seat` preserves its current seat restriction.
 
 ## Principal / credential model
 
@@ -217,11 +339,11 @@ place; omit it to mint a fresh one (safe after a restart).
 
 ## SDK
 
-Consumers import the separate public subpath, which does not touch the main
-`PokerClient`:
+Consumers import `CompetitionClient` from the root entry; it is a separate
+client and does not touch the main `PokerClient`:
 
 ```ts
-import { CompetitionClient } from "@pokertools/sdk/competitions";
+import { CompetitionClient } from "@pokertools/sdk";
 
 const competitions = new CompetitionClient({
   baseUrl: "https://api.example.com",

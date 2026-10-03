@@ -6,6 +6,7 @@
  * API/custody code can resolve treasury address, RPC pool and finality depths.
  */
 import type { Address } from "viem";
+import type { PrismaClient } from "../../../../api/generated/prisma/index.js";
 
 export interface AssetFixtureInput {
   assetId: string;
@@ -38,7 +39,7 @@ export function assetRow(input: AssetFixtureInput) {
 }
 
 export async function createAssetFixture(
-  prisma: { asset: { create: (args: { data: unknown }) => Promise<unknown> } },
+  prisma: Pick<PrismaClient, "asset">,
   input: AssetFixtureInput
 ): Promise<unknown> {
   return prisma.asset.create({ data: assetRow(input) });
@@ -50,9 +51,9 @@ export async function createAssetFixture(
  * checks (`Asset or chain has an open critical incident`) do not bleed across
  * independent scenarios. Never touches journal history or balances.
  */
-export async function resolveAllOpenIncidents(prisma: {
-  financialIncident: { updateMany: (args: unknown) => Promise<unknown> };
-}): Promise<void> {
+export async function resolveAllOpenIncidents(
+  prisma: Pick<PrismaClient, "financialIncident">
+): Promise<void> {
   await prisma.financialIncident.updateMany({
     where: { status: { not: "RESOLVED" } },
     data: {

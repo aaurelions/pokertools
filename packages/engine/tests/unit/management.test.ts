@@ -421,4 +421,42 @@ describe("Management Actions", () => {
       expect(charlie.sitInOption).toBe(SitInOption.WAIT_FOR_BB);
     });
   });
+
+  describe("SIT seat safety", () => {
+    test("rejects a SIT that would overwrite an occupied seat", () => {
+      const engine = new PokerEngine({ smallBlind: 10, bigBlind: 20, maxPlayers: 6 });
+      engine.sit(0, "p1", "Alice", 1000);
+
+      expect(() => engine.sit(0, "p2", "Bob", 1000)).toThrow(/already occupied/i);
+      expect(engine.state.players[0]!.id).toBe("p1");
+      expect(engine.state.players[1]).toBeNull();
+    });
+
+    test("rejects a SIT that would duplicate a principal at a second seat", () => {
+      const engine = new PokerEngine({ smallBlind: 10, bigBlind: 20, maxPlayers: 6 });
+      engine.sit(0, "p1", "Alice", 1000);
+
+      expect(() => engine.sit(1, "p1", "Alice", 1000)).toThrow(/already seated/i);
+      expect(engine.state.players[0]!.id).toBe("p1");
+      expect(engine.state.players[1]).toBeNull();
+      // The original stack is untouched: no silent double-seat.
+      expect(engine.state.players[0]!.stack).toBe(1000);
+    });
+
+    test("allows a reserved player to claim their own reservation", () => {
+      const engine = new PokerEngine({ smallBlind: 10, bigBlind: 20, maxPlayers: 6 });
+      engine.act({
+        type: ActionType.RESERVE_SEAT,
+        playerId: "p1",
+        playerName: "Alice",
+        seat: 2,
+        expiryTimestamp: Date.now() + 30000,
+        timestamp: Date.now(),
+      });
+
+      engine.sit(2, "p1", "Alice", 1000);
+      expect(engine.state.players[2]!.id).toBe("p1");
+      expect(engine.state.players[2]!.status).toBe(PlayerStatus.WAITING);
+    });
+  });
 });

@@ -42,7 +42,7 @@ services:
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?err: POSTGRES_PASSWORD must be set}"
       POSTGRES_DB: "${POSTGRES_DB:?err: POSTGRES_DB must be set}"
     volumes:
-      - pg_data:/var/lib/postgresql/data
+      - pg_data:/var/lib/postgresql
     networks:
       - internal
     deploy:
@@ -142,6 +142,8 @@ services:
       RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-100}
       AUTH_NONCE_RATE_LIMIT_MAX: ${AUTH_NONCE_RATE_LIMIT_MAX:-5}
       AUTH_LOGIN_RATE_LIMIT_MAX: ${AUTH_LOGIN_RATE_LIMIT_MAX:-10}
+      COMPETITION_PAID_ENABLED: ${COMPETITION_PAID_ENABLED:-false}
+      COMPETITION_SPONSOR_PRINCIPAL_IDS: ${COMPETITION_SPONSOR_PRINCIPAL_IDS:-}
       TABLE_REDIS_TTL_SECONDS: ${TABLE_REDIS_TTL_SECONDS:-86400}
       TABLE_LOCK_TTL_MS: ${TABLE_LOCK_TTL_MS:-10000}
       ACTION_TIMEOUT_SECONDS: ${ACTION_TIMEOUT_SECONDS:-30}
@@ -209,6 +211,7 @@ services:
       JWT_SECRET: "${JWT_SECRET:?err: JWT_SECRET must be set}"
       COOKIE_SECRET: "${COOKIE_SECRET:?err: COOKIE_SECRET must be set}"
       ALLOWED_SIWE_CHAIN_IDS: ${ALLOWED_SIWE_CHAIN_IDS:-1,31337}
+      CORS_ORIGIN: ${CORS_ORIGIN:-}
       TABLE_REDIS_TTL_SECONDS: ${TABLE_REDIS_TTL_SECONDS:-86400}
       TABLE_LOCK_TTL_MS: ${TABLE_LOCK_TTL_MS:-10000}
       ACTION_TIMEOUT_SECONDS: ${ACTION_TIMEOUT_SECONDS:-30}
@@ -296,7 +299,15 @@ services:
     tmpfs:
       - /tmp:size=64M,mode=1777
     healthcheck:
-      test: ["CMD", "sh", "-c", "pgrep -f 'node dist/index.js' >/dev/null || exit 1"]
+      # node:24-slim does not include procps/pgrep. The custody command execs
+      # Node as PID 1; financial readiness separately verifies its heartbeat.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "process.exit(require('node:fs').readFileSync('/proc/1/cmdline', 'utf8').includes('dist/index.js') ? 0 : 1)",
+        ]
       interval: 30s
       timeout: 5s
       start_period: 15s

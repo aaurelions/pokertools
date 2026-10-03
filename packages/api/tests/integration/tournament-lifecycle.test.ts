@@ -392,7 +392,7 @@ describe("Tournament - Full Lifecycle Integration Test", () => {
       entries.map((entry) => ({
         userId: entry.userId,
         placement: entry.placement,
-        prize: entry.prize,
+        prize: Number(entry.prize),
       }))
     ).toEqual([
       { userId: player1.id, placement: 1, prize: 2100 },
@@ -1028,7 +1028,7 @@ describe("Tournament - Management and Financial Regression Coverage", () => {
     const secondPlaceEntry = await rctx.app.prisma.tournamentEntry.findUniqueOrThrow({
       where: { tournamentId_userId: { tournamentId, userId: secondPlace.id } },
     });
-    expect(secondPlaceEntry.prize).toBe(1200);
+    expect(secondPlaceEntry.prize).toBe(1200n);
   });
 
   it("rejects tournament creation with invalid blind structure (non-increasing levels)", async () => {

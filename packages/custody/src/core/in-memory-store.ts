@@ -7,6 +7,7 @@
  * store enforces.
  */
 /* eslint-disable @typescript-eslint/require-await -- in-memory doubles implement Promise-returning ports without real async I/O */
+import { createHash } from "node:crypto";
 import type { AssetStatus } from "@pokertools/types";
 import type {
   AssetRegistry,
@@ -17,10 +18,13 @@ import type {
   NewWithdrawalRecord,
   OpenIncidentInput,
   ReconciliationEvidence,
+  ReorgObligationEvidence,
+  ReorgReversalEvidence,
   TreasuryAccounting,
   TreasuryAsset,
   TransitionRequest,
   WithdrawalRecord,
+  WithdrawalScanCursor,
   WithdrawalState,
   WithdrawalStore,
 } from "./types.js";
@@ -56,6 +60,22 @@ let sequence = 0;
 export function nextId(prefix: string): string {
   sequence += 1;
   return `${prefix}_${Date.now().toString(36)}_${sequence.toString(36)}`;
+}
+
+/**
+ * Deterministic incident id for the `(kind, assetId, affectedId)` dedupe key.
+ * Because the id is the durable primary key, a concurrent find/create race
+ * collapses onto a single `upsert` row instead of two incidents.
+ */
+export function stableIncidentId(
+  kind: string,
+  assetId: string | null,
+  affectedId: string | null
+): string {
+  const digest = createHash("sha256")
+    .update(`${kind}\u0000${assetId ?? ""}\u0000${affectedId ?? ""}`)
+    .digest("hex");
+  return `inc_${digest.slice(0, 40)}`;
 }
 
 export class InMemoryWithdrawalStore implements WithdrawalStore {
@@ -120,12 +140,33 @@ export class InMemoryWithdrawalStore implements WithdrawalStore {
     return { ...updated };
   }
 
-  async listByStates(states: WithdrawalState[], limit: number): Promise<WithdrawalRecord[]> {
+  async listByStates(
+    states: WithdrawalState[],
+    limit: number,
+    after?: WithdrawalScanCursor
+  ): Promise<WithdrawalRecord[]> {
     const matches = [...this.records.values()]
       .filter((record) => states.includes(record.state))
-      .sort((a, b) => a.createdAt - b.createdAt)
+      .filter(
+        (record) =>
+          !after ||
+          record.updatedAt > after.updatedAt ||
+          (record.updatedAt === after.updatedAt && record.intentId > after.intentId)
+      )
+      .sort((a, b) =>
+        a.updatedAt === b.updatedAt
+          ? a.intentId.localeCompare(b.intentId)
+          : a.updatedAt - b.updatedAt
+      )
       .slice(0, limit);
     return matches.map((record) => ({ ...record }));
+  }
+
+  async markScanned(intentIds: string[], at: number): Promise<void> {
+    for (const intentId of intentIds) {
+      const record = this.records.get(intentId);
+      if (record) this.records.set(intentId, { ...record, updatedAt: at });
+    }
   }
 
   async maxPersistedTreasuryNonce(chainId: number, treasuryAddress: string): Promise<number> {
@@ -158,29 +199,25 @@ export class InMemoryIncidentStore implements IncidentStore {
   constructor(private readonly clock: Clock) {}
 
   async open(input: OpenIncidentInput): Promise<IncidentRecord> {
-    for (const existing of this.incidents.values()) {
-      if (
-        existing.status !== "RESOLVED" &&
-        existing.kind === input.kind &&
-        (existing.intentId ?? null) === (input.intentId ?? null) &&
-        (existing.assetId ?? null) === (input.assetId ?? null)
-      ) {
-        return { ...existing, detail: { ...existing.detail, ...(input.detail ?? {}) } };
-      }
-    }
+    // Stable key (kind, assetId, intentId) -> deterministic id. Concurrent
+    // opens therefore converge on one record instead of racing a find/create.
+    const affectedId = input.intentId ?? input.assetId ?? null;
+    const incidentId = stableIncidentId(input.kind, input.assetId ?? null, affectedId);
+    const existing = this.incidents.get(incidentId);
+    const detail = { ...(existing?.detail ?? {}), ...(input.detail ?? {}) };
     const record: IncidentRecord = {
-      incidentId: nextId("inc"),
+      incidentId,
       kind: input.kind,
       severity: input.severity,
       status: "OPEN",
-      assetId: input.assetId,
-      chainId: input.chainId,
-      principalId: input.principalId,
-      intentId: input.intentId,
-      detail: input.detail ?? {},
-      openedAt: this.clock.now(),
+      assetId: input.assetId ?? existing?.assetId,
+      chainId: input.chainId ?? existing?.chainId,
+      principalId: input.principalId ?? existing?.principalId,
+      intentId: input.intentId ?? existing?.intentId,
+      detail,
+      openedAt: existing?.openedAt ?? this.clock.now(),
     };
-    this.incidents.set(record.incidentId, record);
+    this.incidents.set(incidentId, record);
     return { ...record };
   }
 
@@ -254,12 +291,16 @@ export class InMemoryAssetRegistry implements AssetRegistry {
 }
 
 export interface RecordedJournalEntry {
-  kind: "WITHDRAWAL_CONFIRMED" | "INCIDENT_OBLIGATION" | "RECONCILIATION";
+  kind:
+    | "WITHDRAWAL_CONFIRMED"
+    | "INCIDENT_OBLIGATION"
+    | "INCIDENT_OBLIGATION_REVERSED"
+    | "RECONCILIATION";
   intentId?: string;
   assetId: string;
   amountAtomic: string;
   journalId: string;
-  evidence?: ReconciliationEvidence;
+  evidence?: ReconciliationEvidence | ReorgReversalEvidence;
   at: number;
 }
 
@@ -286,13 +327,28 @@ export class InMemoryTreasuryAccounting implements TreasuryAccounting {
 
   async recordObligation(
     record: WithdrawalRecord,
-    _incident: IncidentRecord
+    _incident: IncidentRecord,
+    _evidence?: ReorgObligationEvidence
   ): Promise<{ journalId: string }> {
     return this.record({
       kind: "INCIDENT_OBLIGATION",
       intentId: record.intentId,
       assetId: record.assetId,
       amountAtomic: record.amountAtomic,
+    });
+  }
+
+  async reverseObligation(
+    record: WithdrawalRecord,
+    evidence: ReorgReversalEvidence
+  ): Promise<{ journalId: string | null }> {
+    if (record.reorgJournalId === null) return { journalId: null };
+    return this.record({
+      kind: "INCIDENT_OBLIGATION_REVERSED",
+      intentId: record.intentId,
+      assetId: record.assetId,
+      amountAtomic: record.amountAtomic,
+      evidence,
     });
   }
 

@@ -33,6 +33,7 @@ import {
   getAccount,
   mine,
   mintToken,
+  safeAddress,
   transferToken,
   type DeployedToken,
   type LocalChain,
@@ -107,7 +108,10 @@ describe("finance route contract acceptance", () => {
     const amount = parseUnits("20", 6);
     await mintToken(chain, token.address, ALICE_ADDRESS as Address, amount);
     const receipt = await transferToken(chain, token.address, ALICE_INDEX, TREASURY, amount);
-    const [log] = findTransferLogs(receipt, token.address, { from: ALICE_ADDRESS, to: TREASURY });
+    const [log] = findTransferLogs(receipt, token.address, {
+      from: safeAddress(ALICE_ADDRESS, "alice address"),
+      to: TREASURY,
+    });
     await mine(chain, 1);
     await settle();
     const claim = await claimDeposit(app, alice, {
@@ -175,7 +179,10 @@ describe("finance route contract acceptance", () => {
     const amount = parseUnits("11", 6);
     await mintToken(chain, token.address, ALICE_ADDRESS as Address, amount);
     const receipt = await transferToken(chain, token.address, ALICE_INDEX, TREASURY, amount);
-    const [log] = findTransferLogs(receipt, token.address, { from: ALICE_ADDRESS, to: TREASURY });
+    const [log] = findTransferLogs(receipt, token.address, {
+      from: safeAddress(ALICE_ADDRESS, "alice address"),
+      to: TREASURY,
+    });
     await mine(chain, 1);
     await settle();
 

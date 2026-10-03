@@ -40,9 +40,15 @@ state is a distinct access boundary. Engine chips are safe integers, not currenc
 
 WALLET principals use SIWE and revocable database-backed sessions. SERVICE
 credentials are opaque random bearers stored by digest, scoped by resource and
-expiry. Both use the same gameplay protocol. SERVICE gameplay authority grants
-neither withdrawals nor operator privileges; fake wallets are unnecessary.
-HTTP and WebSocket revalidate authorization, including revocation.
+expiry. Every SERVICE table grant is resource-bound to its own room: an unbound
+table grant is invalid, never a cross-room wildcard, and legacy unbound rows are
+durably revoked by migration. A bound credential reaches its room through
+`GET /tables/:id`; the global table collection is intentionally not part of the
+SERVICE surface. `competition:orchestrate` is the only unrestricted shape and
+never mixes with table scopes. Both principal kinds use the same gameplay
+protocol. SERVICE gameplay authority grants neither withdrawals nor operator
+privileges; fake wallets are unnecessary. HTTP and WebSocket revalidate
+authorization, including revocation.
 
 ## Accounting
 

@@ -36,11 +36,11 @@ features:
     link: /packages/sdk
   - icon: 🚀
     title: Scalable API
-    details: Fastify REST + WebSocket, Redis-backed table state, BullMQ workers and Prisma persistence (SQLite or PostgreSQL).
+    details: Fastify REST + WebSocket, PostgreSQL-authoritative table state, Redis cache/queue coordination, BullMQ workers and Prisma persistence.
     link: /packages/api
   - icon: 🛡️
     title: Isolated Custody Worker
-    details: Per-chain treasury signing, multi-RPC quorum, persist-before-broadcast and treasury reconciliation — keys never reach the API.
+    details: Isolated per-chain treasury signing, multi-RPC quorum, persist-before-broadcast and treasury reconciliation — signing keys never reach the API.
     link: /packages/custody
 ---
 
@@ -110,16 +110,16 @@ Every example above is expanded with tables and API references on its package pa
 
 ## Packages
 
-| Package                                      | Description                                       | Published |
-| :------------------------------------------- | :------------------------------------------------ | :-------- |
-| [@pokertools/types](/packages/types)         | Domain contracts, actions, DTOs, Zod schemas      | ✅ npm    |
-| [@pokertools/evaluator](/packages/evaluator) | 5/6/7-card evaluation — integer scores, zero deps | ✅ npm    |
-| [@pokertools/engine](/packages/engine)       | Immutable Texas Hold'em state machine             | ✅ npm    |
-| [@pokertools/sdk](/packages/sdk)             | HTTP + WebSocket client and React 19 hooks        | ✅ npm    |
-| [@pokertools/api](/packages/api)             | Fastify REST/WS API, Redis state, BullMQ, Prisma  | 🐳 Docker |
-| [@pokertools/custody](/packages/custody)     | Isolated withdrawal signer and reconciliation     | 🐳 Docker |
-| [@pokertools/bench](/packages/bench)         | Evaluator/API/worker/socket benchmarks            | local     |
-| [@pokertools/e2e](/packages/e2e)             | Docker + Anvil end-to-end scenarios               | local     |
+| Package                                      | Description                                                                   | Published |
+| :------------------------------------------- | :---------------------------------------------------------------------------- | :-------- |
+| [@pokertools/types](/packages/types)         | Domain contracts, actions, DTOs, Zod schemas                                  | ✅ npm    |
+| [@pokertools/evaluator](/packages/evaluator) | 5/6/7-card evaluation — integer scores, zero deps                             | ✅ npm    |
+| [@pokertools/engine](/packages/engine)       | Immutable Texas Hold'em state machine                                         | ✅ npm    |
+| [@pokertools/sdk](/packages/sdk)             | HTTP + WebSocket client and React 19 hooks                                    | ✅ npm    |
+| [@pokertools/api](/packages/api)             | Fastify REST/WS API, PostgreSQL authority, Redis coordination, BullMQ, Prisma | 🐳 Docker |
+| [@pokertools/custody](/packages/custody)     | Isolated withdrawal signer and reconciliation                                 | 🐳 Docker |
+| [@pokertools/bench](/packages/bench)         | Evaluator/API/worker/socket benchmarks                                        | local     |
+| [@pokertools/e2e](/packages/e2e)             | Docker + Anvil end-to-end scenarios                                           | local     |
 
 ## Explore the docs
 

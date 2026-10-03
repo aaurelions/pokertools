@@ -1,14 +1,19 @@
 import { expectTypeOf, describe, it } from "vitest";
 import type {
   AssetBalance,
+  CancelCompetitionResponse,
   CanonicalActionRequest,
   CanonicalActionResult,
   ChatMessage,
   ChatPage,
+  Competition,
+  CompetitionCancellationEntry,
+  CompetitionClient,
   CreatedServiceCredential,
   DepositClaimRequest,
   HandHistoryEntry,
   LegalAction,
+  OptInCompetitionResponse,
   PlayerNote,
   Principal,
   PublicWireState,
@@ -16,6 +21,8 @@ import type {
   ReplayFrame,
   SeatObservation,
   ServiceCredentialSummary,
+  SettleCompetitionResponse,
+  StartCompetitionResponse,
   UserBalances,
   UserProfile,
   WithdrawalIntent,
@@ -145,6 +152,54 @@ describe("SDK generic endpoint type surface", () => {
       createdAt: string;
     }>();
     expectTypeOf<ServiceCredentialSummary>().not.toHaveProperty("token");
+  });
+});
+
+describe("SDK competition type surface", () => {
+  it("binds lifecycle mutations to id-only signatures", () => {
+    expectTypeOf<CompetitionClient["optIn"]>().parameters.toEqualTypeOf<[competitionId: string]>();
+    expectTypeOf<CompetitionClient["start"]>().parameters.toEqualTypeOf<[competitionId: string]>();
+    expectTypeOf<CompetitionClient["settle"]>().parameters.toEqualTypeOf<[competitionId: string]>();
+    expectTypeOf<CompetitionClient["cancel"]>().parameters.toEqualTypeOf<[competitionId: string]>();
+
+    expectTypeOf<
+      ReturnType<CompetitionClient["optIn"]>
+    >().resolves.toEqualTypeOf<OptInCompetitionResponse>();
+    expectTypeOf<
+      ReturnType<CompetitionClient["start"]>
+    >().resolves.toEqualTypeOf<StartCompetitionResponse>();
+    expectTypeOf<
+      ReturnType<CompetitionClient["settle"]>
+    >().resolves.toEqualTypeOf<SettleCompetitionResponse>();
+    expectTypeOf<
+      ReturnType<CompetitionClient["cancel"]>
+    >().resolves.toEqualTypeOf<CancelCompetitionResponse>();
+  });
+
+  it("binds opt-in receipts to the immutable journal id and live entry state", () => {
+    expectTypeOf<OptInCompetitionResponse>().toMatchTypeOf<{
+      entryState: "PAID" | "REFUNDED";
+      entry: { assetId: string; amountAtomic: string };
+      journalRequestId: string;
+    }>();
+    expectTypeOf<OptInCompetitionResponse>().not.toHaveProperty("conversionId");
+  });
+
+  it("exposes cancellation as a terminal status with per-entry refund facts", () => {
+    expectTypeOf<Competition["status"]>().toEqualTypeOf<
+      "REGISTRATION" | "RUNNING" | "FINISHED" | "CANCELLED"
+    >();
+    expectTypeOf<CompetitionCancellationEntry>().toMatchTypeOf<{
+      principalId: string;
+      kind: "WALLET" | "SERVICE";
+      refunded: boolean;
+      refundJournalId: string | null;
+    }>();
+    expectTypeOf<CancelCompetitionResponse>().toMatchTypeOf<{
+      status: "CANCELLED";
+      cancelledAt: string;
+      entries: CompetitionCancellationEntry[];
+    }>();
   });
 });
 

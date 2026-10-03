@@ -31,10 +31,12 @@ describe("tournament utilities", () => {
   });
 
   it("distributes all prize chips and awards rounding remainders to first place", () => {
-    expect(computeTournamentPayouts(0, [100])).toEqual([0]);
-    expect(computeTournamentPayouts(1, [50, 50])).toEqual([1, 0]);
-    expect(computeTournamentPayouts(3, [50, 50])).toEqual([2, 1]);
-    expect(computeTournamentPayouts(1001, [50, 30, 20])).toEqual([501, 300, 200]);
+    expect(computeTournamentPayouts(0, [100])).toEqual([0n]);
+    expect(computeTournamentPayouts(1, [50, 50])).toEqual([1n, 0n]);
+    expect(computeTournamentPayouts(3, [50, 50])).toEqual([2n, 1n]);
+    expect(computeTournamentPayouts(1001, [50, 30, 20])).toEqual([501n, 300n, 200n]);
+    // 64-bit pools stay exact (three valid int32 buy-ins).
+    expect(computeTournamentPayouts(3_000_000_000n, [100])).toEqual([3_000_000_000n]);
   });
 
   describe("blind structure validation", () => {

@@ -7,8 +7,8 @@
  *   - the durable Prisma custody stores (`PrismaWithdrawalStore`,
  *     `PrismaIncidentStore`, `PrismaAssetRegistry`) over the fresh acceptance
  *     PostgreSQL, and
- *   - the real viem ports: `ViemTreasurySigner`, `ViemQuorumReader`,
- *     `ViemTreasuryBroadcaster` against the live Anvil chain.
+ *   - the real viem ports: `ViemTreasurySigner`, `ViemTreasuryBroadcaster`
+ *     against the live Anvil chain.
  *
  * Accounting and quorum use the same finance-core adapters as custody runtime.
  * Every value movement is a real ERC-20 transaction and

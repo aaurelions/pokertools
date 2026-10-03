@@ -31,6 +31,7 @@ import {
   type WalletPrincipal,
 } from "./harness.js";
 import { AtomicLedger } from "../../../src/services/atomic-ledger.js";
+import { setSettlementCommitFaultInjector } from "../../../src/services/tournament-lifecycle.js";
 
 const ASSET_ID = "eip155:31337/erc20:0x3333333333333333333333333333333333333333";
 const TOKEN_ADDRESS = "0x3333333333333333333333333333333333333333";
@@ -373,7 +374,6 @@ describe("competition acceptance (PostgreSQL + Redis)", () => {
       `/competitions/${competition.id}/start`,
       {
         token: orchestrator.token,
-        body: { idempotencyKey: crypto.randomUUID() },
       }
     );
     expect(started.status).toBe(200);
@@ -452,23 +452,26 @@ describe("competition acceptance (PostgreSQL + Redis)", () => {
       booted.baseUrl,
       "POST",
       `/competitions/${competition.id}/start`,
-      { token: operator.token, body: { idempotencyKey: crypto.randomUUID() } }
+      { token: operator.token }
     );
     expect(prematureStart.status).toBe(409);
     expect((prematureStart.body as { error?: string }).error).toBe("COMPETITION_ENTRY_UNPAID");
 
-    const optInKey = crypto.randomUUID();
     const optIn = await apiRequest<{ entry: { amountAtomic: string } }>(
       booted.baseUrl,
       "POST",
       `/competitions/${competition.id}/opt-in`,
-      { token: payer.token, body: { idempotencyKey: optInKey } }
+      { token: payer.token }
     );
     expect(optIn.status).toBe(200);
     expect(optIn.body.entry.amountAtomic).toBe("1000");
+    // The entry is held by the competition, not credited to the sponsor: the
+    // sponsor cannot spend value that is still refundable before start.
     expect(await atomicBalance(booted.app, payer.id, "USER_AVAILABLE")).toBe(payerBefore - 1000n);
-    expect(await atomicBalance(booted.app, operator.id, "OPERATOR")).toBe(
-      sponsorBefore - 5000n + 1000n
+    expect(await atomicBalance(booted.app, operator.id, "OPERATOR")).toBe(sponsorBefore - 5000n);
+    const entryReserveKey = `competition-entry:${competition.id}`;
+    expect(await atomicBalance(booted.app, null, "TOURNAMENT_RESERVE", entryReserveKey)).toBe(
+      1000n
     );
 
     const replay = await apiRequest(
@@ -477,7 +480,6 @@ describe("competition acceptance (PostgreSQL + Redis)", () => {
       `/competitions/${competition.id}/opt-in`,
       {
         token: payer.token,
-        body: { idempotencyKey: optInKey },
       }
     );
     expect(replay.status).toBe(200);
@@ -487,9 +489,14 @@ describe("competition acceptance (PostgreSQL + Redis)", () => {
       booted.baseUrl,
       "POST",
       `/competitions/${competition.id}/start`,
-      { token: operator.token, body: { idempotencyKey: crypto.randomUUID() } }
+      { token: operator.token }
     );
     expect(started.status).toBe(200);
+    // Start transfers every held entry to the sponsor exactly once.
+    expect(await atomicBalance(booted.app, operator.id, "OPERATOR")).toBe(
+      sponsorBefore - 5000n + 1000n
+    );
+    expect(await atomicBalance(booted.app, null, "TOURNAMENT_RESERVE", entryReserveKey)).toBe(0n);
     expect(started.body.seats.map((seat) => seat.seat).sort()).toEqual([0, 1]);
 
     // The zero-entry SERVICE agent folds; the paying wallet wins the prize.
@@ -515,7 +522,6 @@ describe("competition acceptance (PostgreSQL + Redis)", () => {
       prize: { amountAtomic: string } | null;
     }>(booted.baseUrl, "POST", `/competitions/${competition.id}/settle`, {
       token: operator.token,
-      body: { idempotencyKey: crypto.randomUUID() },
     });
     expect(settled.status, JSON.stringify(settled.body)).toBe(200);
     expect(settled.body.winnerPrincipalId).toBe(payer.id);
@@ -531,7 +537,7 @@ describe("competition acceptance (PostgreSQL + Redis)", () => {
       booted.baseUrl,
       "POST",
       `/competitions/${competition.id}/settle`,
-      { token: operator.token, body: { idempotencyKey: crypto.randomUUID() } }
+      { token: operator.token }
     );
     expect(replayed.status).toBe(200);
     expect(replayed.body.prizeStatus).toBe("PAID");
@@ -580,7 +586,6 @@ describe("competition acceptance (PostgreSQL + Redis)", () => {
       `/competitions/${competition.id}/opt-in`,
       {
         token: payer.token,
-        body: { idempotencyKey: crypto.randomUUID() },
       }
     );
     expect(optIn.status).toBe(200);
@@ -590,7 +595,6 @@ describe("competition acceptance (PostgreSQL + Redis)", () => {
       `/competitions/${competition.id}/start`,
       {
         token: operator.token,
-        body: { idempotencyKey: crypto.randomUUID() },
       }
     );
     expect(started.status).toBe(200);
@@ -608,7 +612,7 @@ describe("competition acceptance (PostgreSQL + Redis)", () => {
       booted.baseUrl,
       "POST",
       `/competitions/${competition.id}/settle`,
-      { token: operator.token, body: { idempotencyKey: crypto.randomUUID() } }
+      { token: operator.token }
     );
     expect(settled.status, JSON.stringify(settled.body)).toBe(200);
     expect(settled.body.winnerKind).toBe("SERVICE");
@@ -710,7 +714,6 @@ describe("competition acceptance (PostgreSQL + Redis)", () => {
       `/competitions/${competition.id}/opt-in`,
       {
         token: payer.token,
-        body: { idempotencyKey: crypto.randomUUID() },
       }
     );
     expect(optIn.status).toBe(200);
@@ -720,7 +723,6 @@ describe("competition acceptance (PostgreSQL + Redis)", () => {
       `/competitions/${competition.id}/start`,
       {
         token: operator.token,
-        body: { idempotencyKey: crypto.randomUUID() },
       }
     );
     expect(started.status).toBe(200);
@@ -739,25 +741,42 @@ describe("competition acceptance (PostgreSQL + Redis)", () => {
     );
     expect(reconciled.status).toBe(200);
 
-    // Crash-equivalent durable state: the authoritative tournament settlement
-    // committed, but the process died before the competition prize disposition.
+    // Crash-equivalent durable state: the authoritative backing-tournament
+    // settlement commits, then the process dies before the competition prize
+    // disposition. The seam fires exactly in that window, so no public legacy
+    // route and no fabricated winner are involved.
     const row = await booted.app.prisma.competition.findUniqueOrThrow({
       where: { id: competition.id },
       select: { tournamentId: true },
     });
-    const tournamentSettle = await apiRequest(
-      booted.baseUrl,
-      "POST",
-      `/tournaments/${row.tournamentId}/settle`,
-      { token: operator.token }
-    );
-    expect(tournamentSettle.status, JSON.stringify(tournamentSettle.body)).toBe(200);
+    setSettlementCommitFaultInjector(() => {
+      throw new Error("acceptance: simulated crash after tournament settlement");
+    });
+    let crashed: Awaited<ReturnType<typeof apiRequest>>;
+    try {
+      crashed = await apiRequest(booted.baseUrl, "POST", `/competitions/${competition.id}/settle`, {
+        token: operator.token,
+      });
+    } finally {
+      setSettlementCommitFaultInjector(null);
+    }
+    expect(crashed.status).toBe(500);
+    // The backing tournament settlement is durably committed and the reserve
+    // is still held: exactly the crash window the retry must resolve.
+    expect(
+      (
+        await booted.app.prisma.tournament.findUniqueOrThrow({
+          where: { id: row.tournamentId },
+          select: { status: true },
+        })
+      ).status
+    ).toBe("FINISHED");
 
     const reserveKey = `competition-prize:${competition.id}`;
     expect(await atomicBalance(booted.app, null, "TOURNAMENT_RESERVE", reserveKey)).toBe(5000n);
 
     // Concurrent retries must both replay the same settlement and pay once.
-    const settleBody = { idempotencyKey: crypto.randomUUID() };
+    const settleBody = {};
     const [settled, replayedSettle] = await Promise.all([
       apiRequest<{ prizeStatus?: string; error?: string }>(
         booted.baseUrl,
@@ -833,7 +852,6 @@ describe("competition acceptance (PostgreSQL + Redis)", () => {
       `/competitions/${competition.id}/opt-in`,
       {
         token: payer.token,
-        body: { idempotencyKey: crypto.randomUUID() },
       }
     );
     expect(optIn.status).toBe(200);
@@ -843,7 +861,6 @@ describe("competition acceptance (PostgreSQL + Redis)", () => {
       `/competitions/${competition.id}/start`,
       {
         token: operator.token,
-        body: { idempotencyKey: crypto.randomUUID() },
       }
     );
     expect(started.status).toBe(200);
@@ -866,7 +883,6 @@ describe("competition acceptance (PostgreSQL + Redis)", () => {
       Array.from({ length: 6 }, () =>
         apiRequest(booted.baseUrl, "POST", `/competitions/${competition.id}/settle`, {
           token: operator.token,
-          body: { idempotencyKey: crypto.randomUUID() },
         })
       )
     );
@@ -936,7 +952,6 @@ describe("competition acceptance (PostgreSQL + Redis)", () => {
       `/competitions/${competition.id}/opt-in`,
       {
         token: payer.token,
-        body: { idempotencyKey: crypto.randomUUID() },
       }
     );
     expect(optIn.status).toBe(200);
@@ -946,7 +961,6 @@ describe("competition acceptance (PostgreSQL + Redis)", () => {
       `/competitions/${competition.id}/start`,
       {
         token: operator.token,
-        body: { idempotencyKey: crypto.randomUUID() },
       }
     );
     expect(started.status).toBe(200);
@@ -962,7 +976,6 @@ describe("competition acceptance (PostgreSQL + Redis)", () => {
       Array.from({ length: 6 }, () =>
         apiRequest(booted.baseUrl, "POST", `/competitions/${competition.id}/settle`, {
           token: operator.token,
-          body: { idempotencyKey: crypto.randomUUID() },
         })
       )
     );
@@ -1027,7 +1040,6 @@ describe("competition acceptance (PostgreSQL + Redis)", () => {
       `/competitions/${competition.id}/opt-in`,
       {
         token: payer.token,
-        body: { idempotencyKey: crypto.randomUUID() },
       }
     );
     expect(optIn.status).toBe(200);
@@ -1037,7 +1049,6 @@ describe("competition acceptance (PostgreSQL + Redis)", () => {
       `/competitions/${competition.id}/start`,
       {
         token: operator.token,
-        body: { idempotencyKey: crypto.randomUUID() },
       }
     );
     expect(started.status).toBe(200);
@@ -1056,19 +1067,34 @@ describe("competition acceptance (PostgreSQL + Redis)", () => {
       where: { id: competition.id },
       select: { tournamentId: true },
     });
-    const tournamentSettle = await apiRequest(
-      booted.baseUrl,
-      "POST",
-      `/tournaments/${row.tournamentId}/settle`,
-      { token: operator.token }
-    );
-    expect(tournamentSettle.status, JSON.stringify(tournamentSettle.body)).toBe(200);
+    // Simulated crash exactly after the backing-tournament settlement commit
+    // and before the competition prize disposition; the retries below must
+    // resolve the crash window and dispose exactly once.
+    setSettlementCommitFaultInjector(() => {
+      throw new Error("acceptance: simulated crash after tournament settlement");
+    });
+    let crashed: Awaited<ReturnType<typeof apiRequest>>;
+    try {
+      crashed = await apiRequest(booted.baseUrl, "POST", `/competitions/${competition.id}/settle`, {
+        token: operator.token,
+      });
+    } finally {
+      setSettlementCommitFaultInjector(null);
+    }
+    expect(crashed.status).toBe(500);
+    expect(
+      (
+        await booted.app.prisma.tournament.findUniqueOrThrow({
+          where: { id: row.tournamentId },
+          select: { status: true },
+        })
+      ).status
+    ).toBe("FINISHED");
 
     const responses = await Promise.all(
       Array.from({ length: 4 }, () =>
         apiRequest(booted.baseUrl, "POST", `/competitions/${competition.id}/settle`, {
           token: operator.token,
-          body: { idempotencyKey: crypto.randomUUID() },
         })
       )
     );
@@ -1264,7 +1290,6 @@ describe("competition acceptance (PostgreSQL + Redis)", () => {
       `/competitions/${competition.id}/start`,
       {
         token: orchestrator.token,
-        body: { idempotencyKey: crypto.randomUUID() },
       }
     );
     expect(started.status).toBe(200);

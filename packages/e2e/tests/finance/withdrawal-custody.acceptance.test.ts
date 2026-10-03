@@ -37,6 +37,8 @@ import {
   mintToken,
   readTokenBalance,
   revertSnapshot,
+  safeAddress,
+  safeHex,
   setNativeBalance,
   snapshot,
   transferToken,
@@ -48,6 +50,8 @@ import { createAssetFixture, resolveAllOpenIncidents } from "./helpers/finance-f
 import { requireInfra } from "./helpers/infra.js";
 // @ts-ignore - cross-package source import resolved by vitest
 import { createPrismaClient } from "../../../api/src/utils/prisma-client.js";
+// @ts-ignore - cross-package source import resolved by vitest
+import { AtomicLedger } from "../../../api/src/services/atomic-ledger.js";
 import {
   bootFinanceApi,
   claimDeposit,
@@ -109,7 +113,10 @@ describe("withdrawal custody acceptance (real API + Prisma stores + real Anvil)"
     const amount = parseUnits("50", 6);
     await mintToken(chain, token.address, ALICE_ADDRESS as Address, amount);
     const receipt = await transferToken(chain, token.address, ALICE_INDEX, TREASURY, amount);
-    const [log] = findTransferLogs(receipt, token.address, { from: ALICE_ADDRESS, to: TREASURY });
+    const [log] = findTransferLogs(receipt, token.address, {
+      from: safeAddress(ALICE_ADDRESS, "alice address"),
+      to: TREASURY,
+    });
     await mine(chain, 1);
     await settle();
 
@@ -266,13 +273,21 @@ describe("withdrawal custody acceptance (real API + Prisma stores + real Anvil)"
       persistedBeforeBroadcast: spy.persistedBeforeBroadcast,
     });
 
-    const receipt = await chain.publicClient.waitForTransactionReceipt({ hash: record!.txHash! });
+    const receipt = await chain.publicClient.waitForTransactionReceipt({
+      hash: safeHex(record!.txHash!, "persisted withdrawal tx hash"),
+    });
     const [log] = findTransferLogs(receipt, token.address, {
-      to: intent.destination,
+      to: safeAddress(intent.destination, "withdrawal destination"),
       value: amount,
     });
     expect(log).toBeDefined();
-    expect(await readTokenBalance(chain, token.address, intent.destination)).toBe(amount);
+    expect(
+      await readTokenBalance(
+        chain,
+        token.address,
+        safeAddress(intent.destination, "withdrawal destination")
+      )
+    ).toBe(amount);
 
     await mine(chain, 1);
     await settle();
@@ -362,9 +377,18 @@ describe("withdrawal custody acceptance (real API + Prisma stores + real Anvil)"
       await mine(chain, 1);
       const receipt = await chain.publicClient.waitForTransactionReceipt({ hash: expectedHash });
       expect(
-        findTransferLogs(receipt, token.address, { to: intent.destination, value: amount })
+        findTransferLogs(receipt, token.address, {
+          to: safeAddress(intent.destination, "withdrawal destination"),
+          value: amount,
+        })
       ).toHaveLength(1);
-      expect(await readTokenBalance(chain, token.address, intent.destination)).toBe(amount);
+      expect(
+        await readTokenBalance(
+          chain,
+          token.address,
+          safeAddress(intent.destination, "withdrawal destination")
+        )
+      ).toBe(amount);
     } finally {
       await chain.testClient.setAutomine(true);
     }
@@ -409,10 +433,13 @@ describe("withdrawal custody acceptance (real API + Prisma stores + real Anvil)"
       expect(recovered.state).toBe("BROADCAST");
 
       const receipt = await chain.publicClient.waitForTransactionReceipt({
-        hash: recovered.txHash!,
+        hash: safeHex(recovered.txHash!, "recovered withdrawal tx hash"),
       });
       expect(
-        findTransferLogs(receipt, token.address, { to: intent.destination, value: amount })
+        findTransferLogs(receipt, token.address, {
+          to: safeAddress(intent.destination, "withdrawal destination"),
+          value: amount,
+        })
       ).toHaveLength(1);
     } finally {
       await setNativeBalance(chain, TREASURY, original);
@@ -456,13 +483,17 @@ describe("withdrawal custody acceptance (real API + Prisma stores + real Anvil)"
       });
       expect(
         findTransferLogs(receipt, token.address, {
-          to: intents[index].destination,
+          to: safeAddress(intents[index].destination, "withdrawal destination"),
           value: 1_000_000n,
         })
       ).toHaveLength(1);
-      expect(await readTokenBalance(chain, token.address, intents[index].destination)).toBe(
-        1_000_000n
-      );
+      expect(
+        await readTokenBalance(
+          chain,
+          token.address,
+          safeAddress(intents[index].destination, "withdrawal destination")
+        )
+      ).toBe(1_000_000n);
     }
   });
 
@@ -484,7 +515,13 @@ describe("withdrawal custody acceptance (real API + Prisma stores + real Anvil)"
     await settle();
     const after = await harness.workflow.processIntent(intent.intentId);
     expect(["confirmed", "finalized"]).toContain(after.action);
-    expect(await readTokenBalance(chain, token.address, intent.destination)).toBe(amount);
+    expect(
+      await readTokenBalance(
+        chain,
+        token.address,
+        safeAddress(intent.destination, "withdrawal destination")
+      )
+    ).toBe(amount);
 
     const persisted = await harness.store.get(intent.intentId);
     expect(persisted?.confirmedJournalId).toBeTruthy();
@@ -530,5 +567,317 @@ describe("withdrawal custody acceptance (real API + Prisma stores + real Anvil)"
 
     const assetState = await harness.assets.get(assetId);
     expect(assetState?.status).toBe("FROZEN");
+  });
+
+  it("reverses the reorg obligation when the exact same payout is re-included, and supports repeat cycles without a second payout", async () => {
+    const amount = parseUnits("4", 6);
+    const intent = makeIntent(amount);
+    await reserveViaApi(intent);
+
+    const harness = buildCustodyHarness(baseOptions());
+    const snapBeforeBroadcast = await snapshot(chain);
+    const broadcast = await harness.workflow.processIntent(intent.intentId);
+    expect(broadcast.action).toBe("signed_broadcast");
+    const exactBytes = (await harness.store.get(intent.intentId))!.signedRawTx;
+    const txHash = broadcast.txHash!;
+    expect(keccak256(exactBytes!)).toBe(txHash);
+
+    await mine(chain, 1);
+    await settle();
+    await harness.workflow.processIntent(intent.intentId);
+    await settle();
+    const confirmed = await harness.workflow.processIntent(intent.intentId);
+    expect(confirmed.action).toBe("confirmed");
+    const settledRecord = await harness.store.get(intent.intentId);
+    const settleJournalId = settledRecord!.confirmedJournalId!;
+    expect(settleJournalId).toBeTruthy();
+    expect(
+      await readTokenBalance(
+        chain,
+        token.address,
+        safeAddress(intent.destination, "withdrawal destination")
+      )
+    ).toBe(amount);
+
+    // Deep reorg: the inclusion block is reverted and the payout disappears.
+    await revertSnapshot(chain, snapBeforeBroadcast);
+    await mine(chain, 1);
+    await settle();
+    const reorged = await harness.workflow.runOnce();
+    expect(reorged.reorged).toBe(1);
+    let record = await harness.store.get(intent.intentId);
+    expect(record?.state).toBe("REORGED");
+    const firstObligationJournalId = record!.reorgJournalId!;
+    expect(firstObligationJournalId).toBeTruthy();
+    const firstObligation = await prisma.journalTransaction.findUnique({
+      where: { requestId: `withdrawal-reorg:${intent.intentId}` },
+    });
+    expect(firstObligation?.id).toBe(firstObligationJournalId);
+    const firstObligationPostings = await prisma.journalPosting.findMany({
+      where: { transactionId: firstObligationJournalId },
+      include: { account: true },
+    });
+    const firstObligationByClass = new Map(
+      firstObligationPostings.map((posting) => [posting.account.class, posting.amountAtomic])
+    );
+    expect(firstObligationByClass.get("INCIDENT_OBLIGATION")).toBe(amount.toString());
+    expect(firstObligationByClass.get("TREASURY_RESERVE")).toBe(`-${amount.toString()}`);
+
+    // Rebroadcast the exact same bytes; Anvil re-includes them in a new block.
+    const snapBeforeReinclusion = await snapshot(chain);
+    const rebroadcast = await harness.workflow.processIntent(intent.intentId);
+    expect(rebroadcast.action).toBe("rebroadcast");
+    await settle();
+    const reincluded = await harness.workflow.processIntent(intent.intentId);
+    expect(reincluded.action).toBe("pending_confirmation");
+    const reconfirmed = await harness.workflow.processIntent(intent.intentId);
+    expect(reconfirmed.action).toBe("confirmed");
+
+    // Balanced reversal: exactly the inverse of the obligation, keyed to it.
+    record = await harness.store.get(intent.intentId);
+    expect(record?.state).toBe("CONFIRMED");
+    expect(record?.confirmedJournalId).toBe(settleJournalId);
+    expect(record?.reorgJournalId).toBe(firstObligationJournalId);
+    expect(record?.signedRawTx).toBe(exactBytes);
+    expect(record?.txHash).toBe(txHash);
+    const firstReversal = await prisma.journalTransaction.findUnique({
+      where: { requestId: `withdrawal-reorg-reverse:${firstObligationJournalId}` },
+    });
+    expect(firstReversal).toBeTruthy();
+    const firstReversalPostings = await prisma.journalPosting.findMany({
+      where: { transactionId: firstReversal!.id },
+      include: { account: true },
+    });
+    const firstReversalByClass = new Map(
+      firstReversalPostings.map((posting) => [posting.account.class, posting.amountAtomic])
+    );
+    expect(firstReversalByClass.get("INCIDENT_OBLIGATION")).toBe(`-${amount.toString()}`);
+    expect(firstReversalByClass.get("TREASURY_RESERVE")).toBe(amount.toString());
+
+    // The settlement is never replayed and the exact same payout is on chain
+    // exactly once: one Transfer log, destination balance unchanged.
+    expect(
+      await prisma.journalTransaction.count({
+        where: { requestId: `withdrawal-settle:${intent.intentId}` },
+      })
+    ).toBe(1);
+    const reincludedReceipt = await chain.publicClient.getTransactionReceipt({
+      hash: safeHex(txHash, "reorg replacement tx hash"),
+    });
+    expect(
+      findTransferLogs(reincludedReceipt, token.address, {
+        to: safeAddress(intent.destination, "withdrawal destination"),
+        value: amount,
+      })
+    ).toHaveLength(1);
+    expect(
+      await readTokenBalance(
+        chain,
+        token.address,
+        safeAddress(intent.destination, "withdrawal destination")
+      )
+    ).toBe(amount);
+
+    // Repeat cycle: reorg the re-included payout away again and re-include it.
+    await revertSnapshot(chain, snapBeforeReinclusion);
+    await mine(chain, 1);
+    await settle();
+    const secondReorg = await harness.workflow.runOnce();
+    expect(secondReorg.reorged).toBe(1);
+    record = await harness.store.get(intent.intentId);
+    expect(record?.state).toBe("REORGED");
+    const secondObligationJournalId = record!.reorgJournalId!;
+    expect(secondObligationJournalId).not.toBe(firstObligationJournalId);
+    expect(
+      await prisma.journalTransaction.findUnique({
+        where: { requestId: `withdrawal-reorg:${intent.intentId}:after:${firstReversal!.id}` },
+      })
+    ).toBeTruthy();
+
+    const secondRebroadcast = await harness.workflow.processIntent(intent.intentId);
+    expect(secondRebroadcast.action).toBe("rebroadcast");
+    await settle();
+    await harness.workflow.processIntent(intent.intentId);
+    const secondReconfirmed = await harness.workflow.processIntent(intent.intentId);
+    expect(secondReconfirmed.action).toBe("confirmed");
+
+    record = await harness.store.get(intent.intentId);
+    expect(record?.state).toBe("CONFIRMED");
+    expect(record?.reorgJournalId).toBe(secondObligationJournalId);
+    expect(
+      await prisma.journalTransaction.findUnique({
+        where: { requestId: `withdrawal-reorg-reverse:${secondObligationJournalId}` },
+      })
+    ).toBeTruthy();
+    expect(
+      await prisma.journalTransaction.count({
+        where: { requestId: `withdrawal-settle:${intent.intentId}` },
+      })
+    ).toBe(1);
+    expect(
+      await readTokenBalance(
+        chain,
+        token.address,
+        safeAddress(intent.destination, "withdrawal destination")
+      )
+    ).toBe(amount);
+
+    // The whole asset journal is internally balanced and consistent after the
+    // reorg/re-inclusion cycles.
+    await new AtomicLedger(prisma).assertAssetBalanced(prisma, assetId);
+
+    // Durable incident identity: resolving and reopening the same condition
+    // converges on one row (existing unique constraint + upsert) with the
+    // per-cycle evidence preserved.
+    const openReorgIncidents = await harness.incidents.listOpen({ kind: "WITHDRAWAL_REORG" });
+    const reorgIncident = openReorgIncidents.find(
+      (incident) => incident.intentId === intent.intentId
+    );
+    expect(reorgIncident).toBeTruthy();
+    await harness.incidents.resolve(reorgIncident!.incidentId, {
+      resolvedBy: "acceptance-operator",
+      note: "resolved between cycles",
+    });
+    const reopened = await harness.incidents.open({
+      kind: "WITHDRAWAL_REORG",
+      severity: "CRITICAL",
+      assetId,
+      chainId: CHAIN_A_ID,
+      intentId: intent.intentId,
+      detail: { reason: "operator_reopened_for_evidence" },
+    });
+    expect(reopened.incidentId).toBe(reorgIncident!.incidentId);
+    expect(reopened.status).toBe("OPEN");
+    expect(reopened.detail[`reorgReversal:${firstObligationJournalId}`]).toBeTruthy();
+    expect(reopened.detail[`reorgReversal:${secondObligationJournalId}`]).toBeTruthy();
+  });
+
+  it("serializes parallel real-PostgreSQL obligation/reversal cycles per asset and never forks liability", async () => {
+    const amount = parseUnits("1", 6);
+    const intent = makeIntent(amount);
+    await reserveViaApi(intent);
+    const harness = buildCustodyHarness(baseOptions());
+    const reserved = await harness.store.get(intent.intentId);
+    expect(reserved?.state).toBe("RESERVED");
+
+    // Real settlement journal through the real adapter + AtomicLedger.
+    await harness.accounting.completeWithdrawal(reserved!);
+    const txHash = "0x" + "ab".repeat(32);
+    const priorReceipt = { number: "100", hash: "0x" + "cd".repeat(32) };
+    // Custody-owned CAS into the reorged state (as handleReorg does) with the
+    // durable receipt identity an obligation must bind to.
+    await harness.store.transition({
+      intentId: intent.intentId,
+      from: ["RESERVED"],
+      to: "REORGED",
+      patch: {
+        txHash,
+        receiptBlockNumber: priorReceipt.number,
+        receiptBlockHash: priorReceipt.hash,
+      },
+    });
+    const incident = {
+      incidentId: `inc_${intent.intentId}`,
+      kind: "WITHDRAWAL_REORG" as const,
+      severity: "CRITICAL" as const,
+      status: "OPEN" as const,
+      detail: {},
+      openedAt: Date.now(),
+    };
+    const obligationEvidence = {
+      txHash,
+      priorReceiptBlockNumber: priorReceipt.number,
+      priorReceiptBlockHash: priorReceipt.hash,
+    };
+
+    // Parallel obligation posts for one cycle: the durable asset lock plus
+    // journal idempotency must yield exactly one obligation and one pointer.
+    const beforeObligation = await prisma.journalTransaction.count({ where: { assetId } });
+    const obligations = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        harness.accounting.recordObligation(reserved!, incident, obligationEvidence)
+      )
+    );
+    const obligationIds = new Set(obligations.map((result) => result.journalId));
+    expect(obligationIds.size).toBe(1);
+    const obligationJournalId = [...obligationIds][0]!;
+    expect(obligationJournalId).toBeTruthy();
+    expect(await prisma.journalTransaction.count({ where: { assetId } })).toBe(
+      beforeObligation + 1
+    );
+    expect(
+      await prisma.journalTransaction.findUnique({
+        where: { requestId: `withdrawal-reorg:${intent.intentId}` },
+      })
+    ).toBeTruthy();
+    expect((await harness.store.get(intent.intentId))?.reorgJournalId).toBe(obligationJournalId);
+
+    // Re-inclusion observed: PENDING_CONFIRMATION with the new receipt identity.
+    const reincluded = { number: "200", hash: "0x" + "ef".repeat(32) };
+    await harness.store.transition({
+      intentId: intent.intentId,
+      from: ["REORGED"],
+      to: "PENDING_CONFIRMATION",
+      patch: { receiptBlockNumber: reincluded.number, receiptBlockHash: reincluded.hash },
+    });
+    const reversalEvidence = {
+      txHash,
+      receiptBlockNumber: reincluded.number,
+      receiptBlockHash: reincluded.hash,
+    };
+
+    // Concurrent stale obligation (must be refused) + parallel reversals (must
+    // produce exactly one reversal, never a second liability).
+    const beforeRace = await prisma.journalTransaction.count({ where: { assetId } });
+    const [stale, ...reversals] = await Promise.all([
+      harness.accounting.recordObligation(reserved!, incident, obligationEvidence),
+      ...Array.from({ length: 6 }, () =>
+        harness.accounting.reverseObligation(reserved!, reversalEvidence)
+      ),
+    ]);
+    expect(stale).toEqual({ journalId: null });
+    const reversalIds = new Set(reversals.map((result) => result.journalId));
+    expect(reversalIds.size).toBe(1);
+    expect(await prisma.journalTransaction.count({ where: { assetId } })).toBe(beforeRace + 1);
+    const reversalJournal = await prisma.journalTransaction.findUnique({
+      where: { requestId: `withdrawal-reorg-reverse:${obligationJournalId}` },
+    });
+    expect(reversalJournal).toBeTruthy();
+    expect((await harness.store.get(intent.intentId))?.reorgJournalId).toBe(obligationJournalId);
+
+    // Repeat cycle: reorged again from the re-included receipt; parallel posts
+    // chain off the reversal journal id and still yield one new obligation.
+    await harness.store.transition({
+      intentId: intent.intentId,
+      from: ["PENDING_CONFIRMATION"],
+      to: "REORGED",
+      patch: { receiptBlockNumber: reincluded.number, receiptBlockHash: reincluded.hash },
+    });
+    const secondEvidence = {
+      txHash,
+      priorReceiptBlockNumber: reincluded.number,
+      priorReceiptBlockHash: reincluded.hash,
+    };
+    const beforeSecond = await prisma.journalTransaction.count({ where: { assetId } });
+    const secondObligations = await Promise.all(
+      Array.from({ length: 6 }, () =>
+        harness.accounting.recordObligation(reserved!, incident, secondEvidence)
+      )
+    );
+    const secondIds = new Set(secondObligations.map((result) => result.journalId));
+    expect(secondIds.size).toBe(1);
+    const secondObligationId = [...secondIds][0]!;
+    expect(secondObligationId).not.toBe(obligationJournalId);
+    expect(await prisma.journalTransaction.count({ where: { assetId } })).toBe(beforeSecond + 1);
+    expect(
+      await prisma.journalTransaction.findUnique({
+        where: {
+          requestId: `withdrawal-reorg:${intent.intentId}:after:${reversalJournal!.id}`,
+        },
+      })
+    ).toBeTruthy();
+
+    // The whole asset journal stays internally balanced and consistent.
+    await new AtomicLedger(prisma).assertAssetBalanced(prisma, assetId);
   });
 });

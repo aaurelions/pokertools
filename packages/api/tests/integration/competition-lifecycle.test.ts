@@ -389,7 +389,6 @@ describe("competition capability", () => {
 
     const started = await inject(ctx.app, "POST", `/competitions/${competitionId}/start`, {
       token: orchestrator.token,
-      payload: { idempotencyKey: crypto.randomUUID() },
     });
     expect(started.statusCode).toBe(200);
 
@@ -416,7 +415,7 @@ describe("competition capability", () => {
       where: { id: table.tournamentId! },
       select: { buyIn: true, fee: true, prizePool: true },
     });
-    expect(tournament).toEqual({ buyIn: 0, fee: 0, prizePool: 0 });
+    expect(tournament).toEqual({ buyIn: 0, fee: 0, prizePool: 0n });
 
     // Outsiders cannot use table-level admission/exit on a competition roster.
     const outsiderBuyIn = await inject(ctx.app, "POST", `/tables/${tableId}/buy-in`, {
@@ -447,7 +446,7 @@ describe("competition capability", () => {
       ctx.app,
       "POST",
       `/competitions/${competitionId}/settle`,
-      { token: orchestrator.token, payload: { idempotencyKey: crypto.randomUUID() } }
+      { token: orchestrator.token }
     );
     expect(settled.statusCode).toBe(200);
     expect(settled.body.prizeStatus).toBe("NOT_APPLICABLE");
@@ -581,6 +580,15 @@ describe("competition capability", () => {
     }
 
     // A table-scoped credential can never reach competition orchestration.
+    // Table-scoped credentials are always bound to a real table.
+    const scopeTableId = await createTable(ctx.app, payer.token, {
+      name: "Scope table",
+      mode: "CASH",
+      smallBlind: 10,
+      bigBlind: 20,
+      maxPlayers: 4,
+    });
+    createdTableIds.push(scopeTableId);
     const agent = await provisionServicePrincipal(
       ctx.app,
       operator.token,
@@ -594,7 +602,12 @@ describe("competition capability", () => {
       "/auth/service-credentials",
       {
         token: operator.token,
-        payload: { principalId: agent, name: "plain-table", scopes: ["table:observe"] },
+        payload: {
+          principalId: agent,
+          name: "plain-table",
+          scopes: ["table:observe"],
+          tableId: scopeTableId,
+        },
       }
     );
     expect(tableCredential.statusCode).toBe(201);
@@ -636,7 +649,6 @@ describe("competition capability", () => {
     // authoritative persisted seat.
     const started = await inject(ctx.app, "POST", `/competitions/${competitionId}/start`, {
       token: orchestrator.token,
-      payload: { idempotencyKey: crypto.randomUUID() },
     });
     expect(started.statusCode).toBe(200);
 
@@ -696,7 +708,6 @@ describe("competition capability", () => {
     createdTableIds.push(tableId);
     const started = await inject(ctx.app, "POST", `/competitions/${competitionId}/start`, {
       token: orchestrator.token,
-      payload: { idempotencyKey: crypto.randomUUID() },
     });
     expect(started.statusCode).toBe(200);
     const agentSeat = created.body.competition.entrants.find(
@@ -752,5 +763,41 @@ describe("competition capability", () => {
     );
     expect(mismatch.statusCode).toBe(400);
     expect(mismatch.body.error).toBe("COMPETITION_AGENT_CREDENTIAL_SEAT_MISMATCH");
+
+    // Rotation preserves omitted scopes instead of broadening to the default.
+    const observeOnly = await inject<{ token: string; credentialId: string; scopes: string[] }>(
+      ctx.app,
+      "POST",
+      `/competitions/${competitionId}/agent-credentials`,
+      {
+        token: orchestrator.token,
+        payload: { principalId: agent, name: "observe-only", scopes: ["table:observe"] },
+      }
+    );
+    expect(observeOnly.statusCode).toBe(201);
+    expect(observeOnly.body.scopes).toEqual(["table:observe"]);
+    const rotatedObserve = await inject<{ token: string; scopes: string[] }>(
+      ctx.app,
+      "POST",
+      `/competitions/${competitionId}/agent-credentials`,
+      {
+        token: orchestrator.token,
+        payload: {
+          principalId: agent,
+          name: "observe-only",
+          credentialId: observeOnly.body.credentialId,
+        },
+      }
+    );
+    expect(rotatedObserve.statusCode).toBe(200);
+    expect(rotatedObserve.body.scopes).toEqual(["table:observe"]);
+    const rotatedObserveAccess = await inject(ctx.app, "GET", `/tables/${tableId}/observation`, {
+      token: rotatedObserve.body.token,
+    });
+    expect(rotatedObserveAccess.statusCode).toBe(200);
+    const oldObserveToken = await inject(ctx.app, "GET", `/tables/${tableId}/observation`, {
+      token: observeOnly.body.token,
+    });
+    expect(oldObserveToken.statusCode).toBe(401);
   });
 });

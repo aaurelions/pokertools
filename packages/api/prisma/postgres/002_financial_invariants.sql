@@ -120,7 +120,7 @@ ALTER TABLE "JournalPosting" ADD CONSTRAINT "JournalPosting_amount_nonzero"
 
 -- Same-asset composite foreign keys: a posting, its transaction and its account
 -- must all share one assetId. Present in the generated baseline; re-asserted
--- idempotently (drop + identical re-add) so an older baseline is upgraded too.
+-- idempotently (drop + identical re-add) so 002 is self-contained.
 ALTER TABLE "JournalPosting" DROP CONSTRAINT IF EXISTS "JournalPosting_transactionId_assetId_fkey";
 ALTER TABLE "JournalPosting" ADD CONSTRAINT "JournalPosting_transactionId_assetId_fkey"
     FOREIGN KEY ("transactionId", "assetId") REFERENCES "JournalTransaction" ("id", "assetId")
@@ -141,7 +141,7 @@ ALTER TABLE "DepositClaimRecord" ADD CONSTRAINT "DepositClaimRecord_status_domai
 
 ALTER TABLE "DepositClaimRecord" DROP CONSTRAINT IF EXISTS "DepositClaimRecord_provenance_domain";
 ALTER TABLE "DepositClaimRecord" ADD CONSTRAINT "DepositClaimRecord_provenance_domain"
-    CHECK (("provenance")::text IN ('DIRECT_TREASURY', 'SWEEP', 'MIGRATION'));
+    CHECK (("provenance")::text IN ('DIRECT_TREASURY'));
 
 ALTER TABLE "DepositClaimRecord" DROP CONSTRAINT IF EXISTS "DepositClaimRecord_amount_canonical";
 ALTER TABLE "DepositClaimRecord" ADD CONSTRAINT "DepositClaimRecord_amount_canonical"

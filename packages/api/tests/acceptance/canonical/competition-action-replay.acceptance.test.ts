@@ -144,7 +144,7 @@ describe("competition canonical action replay (PostgreSQL + Redis)", () => {
       `/competitions/${competition.id}/start`,
       {
         token: orchestrator.token,
-        body: { idempotencyKey: crypto.randomUUID() },
+        body: {},
       }
     );
     expect(started.status).toBe(200);
@@ -236,7 +236,7 @@ describe("competition canonical action replay (PostgreSQL + Redis)", () => {
       booted.baseUrl,
       "POST",
       `/competitions/${competition.id}/settle`,
-      { token: orchestrator.token, body: { idempotencyKey: crypto.randomUUID() } }
+      { token: orchestrator.token, body: {} }
     );
     expect(settled.status, JSON.stringify(settled.body)).toBe(200);
 

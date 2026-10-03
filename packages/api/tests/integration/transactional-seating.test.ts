@@ -129,7 +129,7 @@ describe("Transactional seating / financial race regressions", () => {
     });
 
     expect(response.statusCode).toBe(400);
-    expect(JSON.parse(response.body).code).toBe("SEAT_OCCUPIED");
+    expect(JSON.parse(response.body).error).toBe("SEAT_OCCUPIED");
 
     // The financial mutation and the engine SIT are one transaction: the SIT
     // rejection must leave no debit and no table reserve behind.
@@ -138,6 +138,46 @@ describe("Transactional seating / financial race regressions", () => {
     expect(after.inPlay).toBe(before.inPlay);
     expect(await reserveFor(ctx.app, player2.id, tableId)).toBe(0n);
 
+    const state = await getTableState(ctx.app, player1.token, tableId);
+    expect(state.players[0]?.id).toBe(player1.id);
+    expect(state.players[1]).toBeNull();
+
+    await cleanupTestTable(ctx.app, tableId);
+  });
+
+  it("rejects a duplicate SIT for an already seated principal without changing engine state", async () => {
+    const [player1] = ctx.users;
+    const tableId = await createTable(ctx.app, player1.token, {
+      name: "Duplicate Principal Atomic",
+      mode: "CASH",
+      smallBlind: 5,
+      bigBlind: 10,
+    });
+
+    await buyIn(ctx.app, player1.token, tableId, 1000, 0);
+    const before = await ctx.app.prisma.table.findUniqueOrThrow({
+      where: { id: tableId },
+      select: { stateVersion: true, eventSeq: true },
+    });
+
+    await expect(
+      ctx.app.prisma.$transaction(async (tx) => {
+        await ctx.app.gameManager.applyManagementMutationInTx(tx, tableId, player1.id, {
+          type: "SIT",
+          playerId: player1.id,
+          playerName: "duplicate",
+          seat: 1,
+          stack: 1000,
+        });
+      })
+    ).rejects.toMatchObject({ code: "SEAT_OCCUPIED" });
+
+    const after = await ctx.app.prisma.table.findUniqueOrThrow({
+      where: { id: tableId },
+      select: { stateVersion: true, eventSeq: true },
+    });
+    expect(after.stateVersion).toBe(before.stateVersion);
+    expect(after.eventSeq).toBe(before.eventSeq);
     const state = await getTableState(ctx.app, player1.token, tableId);
     expect(state.players[0]?.id).toBe(player1.id);
     expect(state.players[1]).toBeNull();

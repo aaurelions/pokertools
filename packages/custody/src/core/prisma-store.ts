@@ -16,14 +16,14 @@
  * reading, signing and the persistence writes. Non-PostgreSQL datasources use a
  * process-local mutex and are refused in production.
  */
-import type {
-  Asset,
-  FinancialIncident,
+import {
   Prisma,
-  PrismaClient,
-  WithdrawalIntentRecord,
+  type Asset,
+  type FinancialIncident,
+  type PrismaClient,
+  type WithdrawalIntentRecord,
 } from "@pokertools/api/database";
-import { KeyedMutex } from "./in-memory-store.js";
+import { KeyedMutex, stableIncidentId } from "./in-memory-store.js";
 import type { AssetStatus } from "@pokertools/types";
 import type {
   AssetRegistry,
@@ -34,6 +34,7 @@ import type {
   OpenIncidentInput,
   TreasuryAsset,
   WithdrawalRecord,
+  WithdrawalScanCursor,
   WithdrawalState,
   WithdrawalStore,
   TransitionRequest,
@@ -245,13 +246,32 @@ export class PrismaWithdrawalStore implements WithdrawalStore {
     return this.get(request.intentId);
   }
 
-  async listByStates(states: WithdrawalState[], limit: number): Promise<WithdrawalRecord[]> {
+  async listByStates(
+    states: WithdrawalState[],
+    limit: number,
+    after?: WithdrawalScanCursor
+  ): Promise<WithdrawalRecord[]> {
+    const where: Prisma.WithdrawalIntentRecordWhereInput = { state: { in: states } };
+    if (after) {
+      const at = new Date(after.updatedAt);
+      where.OR = [{ updatedAt: { gt: at } }, { updatedAt: at, id: { gt: after.intentId } }];
+    }
     const rows = await this.prisma.withdrawalIntentRecord.findMany({
-      where: { state: { in: states } },
-      orderBy: { createdAt: "asc" },
+      where,
+      orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
       take: limit,
     });
     return rows.map(mapWithdrawalRow);
+  }
+
+  async markScanned(intentIds: string[], at: number): Promise<void> {
+    if (intentIds.length === 0) return;
+    // Explicit `updatedAt` is the durable rotation position: scanned records go
+    // behind unscanned ones so a blocked record cannot hold the front forever.
+    await this.prisma.withdrawalIntentRecord.updateMany({
+      where: { id: { in: intentIds } },
+      data: { updatedAt: new Date(at) },
+    });
   }
 
   async maxPersistedTreasuryNonce(chainId: number, treasuryAddress: string): Promise<number> {
@@ -290,19 +310,20 @@ export class PrismaIncidentStore implements IncidentStore {
   constructor(private readonly prisma: PrismaClient) {}
 
   async open(input: OpenIncidentInput): Promise<IncidentRecord> {
+    const affectedId = input.intentId ?? input.assetId ?? null;
+    const incidentId = stableIncidentId(input.kind, input.assetId ?? null, affectedId);
+
+    // Keep merging into an open incident created by any writer (the API's
+    // FinancialIncidentService also opens incidents with random ids), so the
+    // deterministic upsert below is the race-safe fallback, not a second
+    // incident for the same condition.
     const openRows = await this.prisma.financialIncident.findMany({
       where: { kind: input.kind, status: { not: "RESOLVED" } },
     });
     const existing = openRows.find(
       (row) =>
-        (row.assetId ?? null) === (input.assetId ?? null) &&
-        (row.affectedId ?? null) === (input.intentId ?? null)
+        (row.assetId ?? null) === (input.assetId ?? null) && (row.affectedId ?? null) === affectedId
     );
-    const evidence = toInputJson({
-      ...(input.detail ?? {}),
-      principalId: input.principalId,
-      intentId: input.intentId,
-    });
     if (existing) {
       const merged = toInputJson({
         ...asJsonObject(existing.evidence),
@@ -316,18 +337,45 @@ export class PrismaIncidentStore implements IncidentStore {
       });
       return mapIncidentRow(updated);
     }
-    const created = await this.prisma.financialIncident.create({
-      data: {
+
+    // Deterministic primary key: concurrent opens converge on one row via the
+    // existing unique constraint + upsert instead of racing find/create. A
+    // previously resolved incident is reopened with its evidence preserved.
+    const prior = await this.prisma.financialIncident.findUnique({
+      where: { id: incidentId },
+    });
+    const evidence = toInputJson({
+      ...(prior ? asJsonObject(prior.evidence) : {}),
+      ...(input.detail ?? {}),
+      principalId: input.principalId,
+      intentId: input.intentId,
+    });
+    const row = await this.prisma.financialIncident.upsert({
+      where: { id: incidentId },
+      create: {
+        id: incidentId,
         kind: input.kind,
         severity: input.severity,
         status: "OPEN",
         assetId: input.assetId ?? null,
         chainId: input.chainId ?? null,
-        affectedId: input.intentId ?? input.assetId ?? null,
+        affectedId,
         evidence,
       },
+      update: {
+        kind: input.kind,
+        severity: input.severity,
+        status: "OPEN",
+        assetId: input.assetId ?? null,
+        chainId: input.chainId ?? null,
+        affectedId,
+        evidence,
+        resolvedAt: null,
+        operatorId: null,
+        operatorEvidence: Prisma.DbNull,
+      },
     });
-    return mapIncidentRow(created);
+    return mapIncidentRow(row);
   }
 
   async get(incidentId: string): Promise<IncidentRecord | null> {

@@ -19,7 +19,7 @@ disposable coordination, queues and delivery.
 
 ## Development
 
-Requires Node.js 24+, npm 10+ and Redis. Docker and Foundry are required for
+Requires Node.js ^24.15.0 || >=26.0.0, npm 12.2+ and Redis. Docker and Foundry are required for
 infrastructure acceptance and Solidity tests.
 
 ```sh

@@ -56,6 +56,18 @@ export interface ReserveWithdrawalResult {
 }
 
 /**
+ * A new deposit credit lost the race to an asset freeze: the fresh asset read
+ * under the durable ledger lock observed FROZEN. No claim row and no journal
+ * were written. Exact replays of already-credited claims are unaffected.
+ */
+export class DepositAssetFrozenError extends ConflictError {
+  constructor() {
+    super("Asset is frozen for financial activity");
+    this.name = "DepositAssetFrozenError";
+  }
+}
+
+/**
  * Canonical fingerprint of the authenticated actor bound to a signed intent.
  *
  * The idempotent replay lookup compares this over the authenticated principal,
@@ -381,6 +393,11 @@ export class FinancialIntentService {
    * Credit a verified deposit claim into USER_AVAILABLE, debiting the system
    * TREASURY_RESERVE. Idempotent on exact log identity. `verified` data is
    * supplied by the chain agent's verifier; this method does no RPC.
+   *
+   * New credits take the durable per-asset ledger lock and re-read the fresh
+   * asset status/route under it: a freeze that landed after the pre-flight or
+   * verifier read must never admit a new credit. An exact replay of the durable
+   * credited claim is risk-reducing and returns that claim without re-locking.
    */
   async creditDepositClaim(params: {
     principalId: string;
@@ -408,17 +425,41 @@ export class FinancialIntentService {
         },
       });
       if (existing) {
-        if (existing.status === "CREDITED") return existing;
+        // Only an exact replay of the durable credited claim may reuse the row
+        // (same asset, principal, chain and on-chain amount). Anything else is
+        // a different claim and must not silently adopt this credit.
+        const exactReplay =
+          existing.status === "CREDITED" &&
+          existing.assetId === assetId &&
+          existing.principalId === params.principalId &&
+          existing.chainId === params.chainId &&
+          existing.amountAtomic === params.amountAtomic;
+        if (exactReplay) return existing;
         throw new ConflictError("Deposit claim exists without a credited journal");
       }
 
-      await this.ledger.lockAsset(tx, assetId);
+      // Asset-first lock ordering: the durable lock serializes this credit with
+      // freezes and every other ledger writer for the asset.
+      const locked = await this.ledger.lockAsset(tx, assetId);
+      if (!locked) throw new NotFoundError("Asset");
+
+      // Authoritative re-check under the lock. A freeze or route change that
+      // landed after the pre-flight/verification read blocks the new credit.
+      const fresh = await tx.asset.findUnique({
+        where: { id: assetId },
+        select: { status: true, chainId: true },
+      });
+      if (!fresh) throw new NotFoundError("Asset");
+      if (fresh.status === "FROZEN") throw new DepositAssetFrozenError();
+      if (fresh.chainId !== params.chainId) {
+        throw new ConflictError("Deposit chainId does not match the asset chain");
+      }
 
       const claim = await tx.depositClaimRecord.create({
         data: {
           assetId,
           principalId: params.principalId,
-          chainId: params.chainId,
+          chainId: fresh.chainId,
           txHash: params.txHash,
           logIndex: params.logIndex,
           amountAtomic: params.amountAtomic,
@@ -493,6 +534,12 @@ export class FinancialIntentService {
 
       const incident = await tx.financialIncident.create({
         data: {
+          // Deterministic id derived from the durable natural key
+          // (kind = DEPOSIT_REORG, affectedId = claim.id): the primary key
+          // constraint makes concurrent duplicate creation impossible without a
+          // new schema or migration. A losing writer receives P2002, retries the
+          // transaction and returns the incident from the lookup above.
+          id: `deposit-reorg:${claim.id}`,
           kind: "DEPOSIT_REORG",
           severity: "CRITICAL",
           assetId: claim.assetId,
@@ -509,171 +556,6 @@ export class FinancialIntentService {
       });
 
       return { claim: orphaned, incident };
-    });
-  }
-
-  /**
-   * Ledger-only settlement: PENDING_WITHDRAWAL -a, TREASURY_RESERVE +a.
-   *
-   * This posts the confirmed-payout journal and records the confirmed journal id
-   * (and optional broadcast provenance) WITHOUT touching the lifecycle state.
-   * The custody workflow owns the withdrawal lifecycle, so the accounting
-   * adapter must use this helper rather than `settleWithdrawal`. Idempotent on
-   * `withdrawal-settle:<intentId>`.
-   */
-  async postWithdrawalSettlementLedger(params: {
-    intentId: string;
-    txHash?: string | null;
-    broadcastNonce?: bigint | null;
-  }): Promise<{ record: WithdrawalIntentRecord; journal: PostedJournal }> {
-    return runTransactionWithRetry(this.prisma, async (tx: Prisma.TransactionClient) => {
-      const record = await tx.withdrawalIntentRecord.findUnique({ where: { id: params.intentId } });
-      if (!record) {
-        throw new NotFoundError("Withdrawal intent");
-      }
-      if (record.state === "FAILED" || record.state === "REORGED") {
-        throw new ConflictError(`Cannot settle withdrawal in state ${record.state}`);
-      }
-
-      await this.ledger.lockAsset(tx, record.assetId);
-
-      const pending = await this.ledger.ensureAccount(tx, {
-        assetId: record.assetId,
-        ownerId: record.principalId,
-        class: "PENDING_WITHDRAWAL",
-      });
-      const treasury = await this.ledger.ensureAccount(tx, {
-        assetId: record.assetId,
-        ownerId: null,
-        class: "TREASURY_RESERVE",
-      });
-
-      const journal = await this.ledger.post(tx, {
-        requestId: `withdrawal-settle:${record.id}`,
-        assetId: record.assetId,
-        postings: [
-          { accountId: pending.accountId, amountAtomic: `-${record.amountAtomic}` },
-          { accountId: treasury.accountId, amountAtomic: record.amountAtomic },
-        ],
-      });
-
-      const updated = await tx.withdrawalIntentRecord.update({
-        where: { id: record.id },
-        data: {
-          ...(params.txHash !== undefined ? { txHash: params.txHash } : {}),
-          ...(params.broadcastNonce !== undefined ? { broadcastNonce: params.broadcastNonce } : {}),
-          confirmedJournalId: journal.id,
-        },
-      });
-
-      return { record: updated, journal };
-    });
-  }
-
-  /**
-   * Confirmed withdrawal payout convenience wrapper.
-   *
-   * Posts the settlement journal, then advances the state to FINALIZED ONLY
-   * when the record is still in an API-owned pre-custody state (RESERVED /
-   * BLOCKED_GAS). A state the custody workflow already advanced
-   * (SIGNED/PERSISTED/BROADCAST/AMBIGUOUS/PENDING_CONFIRMATION/CONFIRMED/
-   * FINALIZED) is preserved so custody's deep-finality lifecycle is never
-   * clobbered.
-   */
-  async settleWithdrawal(params: {
-    intentId: string;
-    txHash?: string | null;
-    broadcastNonce?: bigint | null;
-  }): Promise<WithdrawalIntentRecord> {
-    const { record } = await this.postWithdrawalSettlementLedger(params);
-    if (record.state === "RESERVED" || record.state === "BLOCKED_GAS") {
-      return this.prisma.withdrawalIntentRecord.update({
-        where: { id: record.id },
-        data: { state: "FINALIZED" },
-      });
-    }
-    return record;
-  }
-
-  /**
-   * Withdrawal reorg.
-   * - Post-completion: restores the economic obligation exactly once with
-   *   INCIDENT_OBLIGATION +a / TREASURY_RESERVE -a (never debits the user).
-   * - Pre-completion: retains the existing PENDING_WITHDRAWAL obligation and
-   *   posts no journal.
-   * Both paths open durable evidence.
-   */
-  async recordWithdrawalReorg(params: {
-    intentId: string;
-    evidence: Record<string, unknown>;
-  }): Promise<{ record: WithdrawalIntentRecord; incident: FinancialIncident }> {
-    return runTransactionWithRetry(this.prisma, async (tx: Prisma.TransactionClient) => {
-      const record = await tx.withdrawalIntentRecord.findUnique({ where: { id: params.intentId } });
-      if (!record) {
-        throw new NotFoundError("Withdrawal intent");
-      }
-
-      const existingIncident = await tx.financialIncident.findFirst({
-        where: { kind: "WITHDRAWAL_REORG", affectedId: record.id },
-      });
-      if (existingIncident) {
-        return { record, incident: existingIncident };
-      }
-
-      const postCompletion = record.state === "FINALIZED" || record.state === "CONFIRMED";
-      let reorgJournalId: string | undefined;
-      if (postCompletion) {
-        await this.ledger.lockAsset(tx, record.assetId);
-        const obligation = await this.ledger.ensureAccount(tx, {
-          assetId: record.assetId,
-          ownerId: null,
-          class: "INCIDENT_OBLIGATION",
-        });
-        const treasury = await this.ledger.ensureAccount(tx, {
-          assetId: record.assetId,
-          ownerId: null,
-          class: "TREASURY_RESERVE",
-        });
-        const journal = await this.ledger.post(tx, {
-          requestId: `withdrawal-reorg:${record.id}`,
-          assetId: record.assetId,
-          postings: [
-            { accountId: obligation.accountId, amountAtomic: record.amountAtomic },
-            { accountId: treasury.accountId, amountAtomic: `-${record.amountAtomic}` },
-          ],
-        });
-        reorgJournalId = journal.id;
-      }
-
-      const updated = await tx.withdrawalIntentRecord.update({
-        where: { id: record.id },
-        data: {
-          state: "REORGED",
-          ...(reorgJournalId !== undefined ? { reorgJournalId } : {}),
-        },
-      });
-
-      const incident = await tx.financialIncident.create({
-        data: {
-          kind: "WITHDRAWAL_REORG",
-          severity: "CRITICAL",
-          assetId: record.assetId,
-          chainId: record.chainId,
-          affectedId: record.id,
-          evidence: {
-            ...params.evidence,
-            amountAtomic: record.amountAtomic,
-            principalId: record.principalId,
-            priorState: record.state,
-            postCompletion,
-            note: postCompletion
-              ? "Obligation restored once via INCIDENT_OBLIGATION; user not debited"
-              : "Pending obligation retained; no duplicate liability",
-          },
-        },
-      });
-
-      return { record: updated, incident };
     });
   }
 }

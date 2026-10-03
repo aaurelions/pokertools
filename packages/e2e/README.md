@@ -12,7 +12,7 @@ separate Vitest configs:
 
 - Docker with Compose v2
 - Foundry (`anvil`, `forge`) on `PATH`
-- Node.js >= 24.0.0, npm >= 10.0.0
+- Node.js ^24.15.0 || >=26.0.0, npm >= 12.2.0
 
 ## Docker E2E
 

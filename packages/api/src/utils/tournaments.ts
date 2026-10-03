@@ -9,6 +9,19 @@ export interface BlindLevel {
 /** Maximum number of tables allowed in a multi-table tournament. */
 export const MAX_TOURNAMENT_TABLES = config.MAX_TOURNAMENT_TABLES;
 
+/**
+ * Exact conversion of a persisted BigInt chip amount to the public wire
+ * number. Values above `Number.MAX_SAFE_INTEGER` cannot be represented exactly
+ * and are rejected rather than silently rounded. A bounded roster of int32
+ * configuration amounts always stays below the safe range.
+ */
+export function toSafeChipNumber(value: bigint): number {
+  if (value > BigInt(Number.MAX_SAFE_INTEGER) || value < -BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(`Chip amount ${value} exceeds the safe integer range`);
+  }
+  return Number(value);
+}
+
 /** Maximum reconciliation iterations before aborting. */
 export const MAX_RECONCILE_ITERATIONS = 5;
 
@@ -83,18 +96,24 @@ export function computeTournamentTableDistribution(
 }
 
 export function computeTournamentPayouts(
-  prizePool: number,
+  prizePool: bigint | number,
   payoutPercentages: readonly number[]
-): number[] {
-  if (!Number.isInteger(prizePool) || prizePool < 0) {
+): bigint[] {
+  const pool = typeof prizePool === "bigint" ? prizePool : BigInt(prizePool);
+  if (pool < 0n) {
     throw new Error("Prize pool must be a non-negative integer");
   }
 
-  const payouts = payoutPercentages.map((percentage) => Math.floor((prizePool * percentage) / 100));
-  const distributed = payouts.reduce((sum, payout) => sum + payout, 0);
-  const remainder = prizePool - distributed;
+  const payouts = payoutPercentages.map((percentage) => {
+    if (!Number.isInteger(percentage) || percentage < 0) {
+      throw new Error("Payout percentages must be non-negative integers");
+    }
+    return (pool * BigInt(percentage)) / 100n;
+  });
+  const distributed = payouts.reduce((sum, payout) => sum + payout, 0n);
+  const remainder = pool - distributed;
   // Poker tournaments commonly award indivisible-chip rounding remainders to
   // the highest finishing position so total payouts always equal the prize pool.
-  if (remainder > 0 && payouts.length > 0) payouts[0] += remainder;
+  if (remainder > 0n && payouts.length > 0) payouts[0] += remainder;
   return payouts;
 }

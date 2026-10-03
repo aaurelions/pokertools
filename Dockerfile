@@ -3,6 +3,10 @@
 # =============================================================================
 FROM node:24-slim AS build
 
+# Enforce the reviewed install-script allowlist consistently with local/CI
+# installs; the Node image's bundled npm may still use warning-only policy.
+RUN npm install --global npm@12.2.0
+
 # openssl required by Prisma engines (especially for PostgreSQL TLS connections)
 RUN apt-get update -y && \
     apt-get install -y --no-install-recommends openssl python3 make g++ && \
@@ -170,6 +174,8 @@ RUN rm -rf \
 # Stage 2: Production runtime — minimal, non-root, read-only rootfs
 # =============================================================================
 FROM node:24-slim
+
+RUN npm install --global npm@12.2.0
 
 # System packages: openssl (Prisma engines), curl (healthcheck), ca-certificates
 # Clean apt cache in same layer to keep image small.

@@ -1,7 +1,7 @@
 /**
  * Custody runtime assembly.
  *
- * Builds the canonical, Telegram-independent withdrawal workflow from the
+ * Builds the canonical withdrawal workflow from the
  * shared generated Prisma client plus the API-owned finance-core adapters:
  *
  *  - accounting: `createCustodyAccounting` (canonical AtomicLedger journal,
@@ -14,7 +14,6 @@
  * loaded (e.g. for configuration parsing) without requiring the API build.
  * Callers may still inject fakes for tests.
  */
-/* eslint-disable @typescript-eslint/require-await -- fail-closed stub intentionally rejects without async I/O */
 import type { CustodyLogger } from "./core/types.js";
 import {
   PrismaAssetRegistry,
@@ -32,27 +31,6 @@ import {
 import { WithdrawalWorkflow } from "./core/withdrawal-workflow.js";
 import { CustodyWorker } from "./workers/custody-worker.js";
 import { CustodyHeartbeatWriter } from "./workers/heartbeat-writer.js";
-
-export const FINANCE_CORE_NOT_INTEGRATED = "FINANCE_CORE_NOT_INTEGRATED";
-
-/**
- * Fail-closed accounting port. Retained for explicit test/edge injection; the
- * runtime default is the real API-owned ledger adapter.
- */
-export class FailClosedTreasuryAccounting implements TreasuryAccounting {
-  async completeWithdrawal(): Promise<{ journalId: string }> {
-    throw new Error(FINANCE_CORE_NOT_INTEGRATED);
-  }
-  async recordObligation(): Promise<{ journalId: string }> {
-    throw new Error(FINANCE_CORE_NOT_INTEGRATED);
-  }
-  async recordReconciliation(): Promise<{ journalId: string }> {
-    throw new Error(FINANCE_CORE_NOT_INTEGRATED);
-  }
-  async expectedTreasuryAtomic(): Promise<string> {
-    throw new Error(FINANCE_CORE_NOT_INTEGRATED);
-  }
-}
 
 export interface CustodyRuntimeConfig {
   databaseUrl: string;

@@ -19,15 +19,29 @@ import { PrincipalKindSchema } from "./principal";
  * - No open registration and no client-chosen seats: the orchestrator supplies
  *   the roster, PokerTools assigns authoritative registration seats and engine
  *   seats (the roster is provisioned into the authoritative tournament/game
- *   machinery; there is no second poker runner).
+ *   machinery; there is no second poker runner). Registration seats are a
+ *   server-side CSPRNG Fisher-Yates permutation of `0..n-1`, so the order of
+ *   the roster array never controls any seat.
  * - `NONFINANCIAL`: zero entry, zero prize, mixed WALLET/SERVICE entrants.
  *   Nothing in this mode touches the asset ledger or the chip journal.
  * - `ASSET`: explicit asset economics. The roster may configure one or more
  *   WALLET entry payers, each of whom must explicitly opt in and pay their
  *   configured amount. SERVICE entrants are always zero-entry and are never
- *   financial owners. The fixed prize is reserved up front from an authorized
- *   sponsor account and paid only to a WALLET winner; when no WALLET can be a
- *   financial winner the reservation is released back to the sponsor.
+ *   financial owners. A paid entry is held in the competition's own reserve
+ *   account until the competition starts, when it is transferred once to the
+ *   authorized sponsor's operator account. The fixed prize is reserved up
+ *   front from that sponsor account and paid only to a WALLET winner; when no
+ *   WALLET can be a financial winner the reservation is released back to the
+ *   sponsor.
+ *
+ * Cancellation (prestart only) is a first-class terminal transition: it refunds
+ * every entry still held in the competition reserve, releases the prize
+ * reservation to the sponsor, and durably cancels the backing tournament and
+ * closes its table. It is deliberately risk-reducing: it never requires
+ * financial readiness or ACTIVE assets, and it is naturally idempotent from
+ * durable state. A competition that has durably started can never be
+ * cancelled; `REGISTRATION -> RUNNING` and `REGISTRATION -> CANCELLED` are
+ * serialized so exactly one wins.
  *
  * Public HTTP surface (implemented by the API package):
  *
@@ -35,11 +49,21 @@ import { PrincipalKindSchema } from "./principal";
  *   ADMIN wallet). Strict create request, idempotent on `idempotencyKey`.
  * - `GET /competitions/:id` — authenticated privacy-preserving projection.
  * - `POST /competitions/:id/opt-in` — a configured WALLET payer only; charges
- *   that payer's explicit entry atomically. Idempotent.
+ *   that payer's explicit entry atomically into the competition reserve.
+ *   Naturally idempotent: the durable PAID marker and the exact entry journal
+ *   are the identity, so the request body is an empty strict object. The
+ *   accepted charge receipt stays replayable for the authenticated payer even
+ *   after a prestart cancellation (live entry state is then `REFUNDED`).
  * - `POST /competitions/:id/start` — orchestration only. Fails closed until the
- *   roster is complete and every entry obligation is settled.
- * - `POST /competitions/:id/settle` — orchestration only. Idempotent; settles
- *   the prize reservation exactly once.
+ *   roster is complete and every entry obligation is settled; releases every
+ *   held entry to the sponsor exactly once and is replayable from the durable
+ *   start marker even after settlement. Empty strict object body.
+ * - `POST /competitions/:id/settle` — orchestration only. Settles the prize
+ *   reservation exactly once and replays durably. Empty strict object body.
+ * - `POST /competitions/:id/cancel` — orchestration only, `REGISTRATION` only.
+ *   Refunds every held entry, releases the prize, cancels the backing
+ *   tournament and closes its table in one transaction. Empty strict object
+ *   body; idempotent from durable state.
  * - `POST /competitions/:id/agent-credentials` — orchestration only. Issues or
  *   rotates a table-scoped agent credential for a SERVICE entrant of this
  *   competition; the credential is confined to the competition table (and
@@ -64,10 +88,18 @@ import { PrincipalKindSchema } from "./principal";
  * - All amounts are canonical atomic decimal strings for one `assetId`.
  * - Assets must be provisioned in the database and ACTIVE. There is no public
  *   asset or rate provisioning route.
- * - Entry moves atomic value from a configured WALLET payer to the authorized
- *   sponsor's operator account. The prize is reserved from the sponsor's
- *   operator account before admission and held until settlement. Every
- *   movement is a balanced, idempotent atomic journal.
+ * - A paid entry moves atomic value from a configured WALLET payer into a
+ *   competition-scoped reserve account (`competition-entry:<competitionId>`,
+ *   `TOURNAMENT_RESERVE` class). The sponsor's operator account is credited
+ *   exactly once, when the competition starts. The prize is reserved from the
+ *   sponsor's operator account before admission and held until settlement.
+ *   Every movement is a balanced, idempotent atomic journal.
+ * - Cancellation refunds each held entry from that reserve to its payer and
+ *   releases the prize reservation, so a sponsor can never spend value that is
+ *   still refundable. Every PAID entry must be evidenced by its exact
+ *   reserve-credit journal; malformed evidence refuses the whole cancellation
+ *   and the competition stays in `REGISTRATION` — there is no partial or false
+ *   cancellation, and no value is ever moved from a non-canonical account.
  * - The sponsor is authorized delegation: either the organizer itself (when the
  *   organizer is a WALLET) or a fixed platform sponsor account. An orchestrator
  *   can never direct arbitrary wallets to fund a prize.
@@ -89,9 +121,12 @@ export type CompetitionMode = z.infer<typeof CompetitionModeSchema>;
  * Per-entrant economic state. `NOT_REQUIRED` is every SERVICE entrant and any
  * WALLET entrant that is not a configured payer. `PENDING` is a configured
  * WALLET payer that has not opted in yet. `PAID` means the exact atomic entry
- * has been committed.
+ * has been committed (held in the competition reserve, or already transferred
+ * to the sponsor when the competition started). `REFUNDED` means cancellation
+ * returned the exact atomic entry to the payer before start; a REFUNDED
+ * entrant is never charged again.
  */
-export const CompetitionEntryStateSchema = z.enum(["NOT_REQUIRED", "PENDING", "PAID"]);
+export const CompetitionEntryStateSchema = z.enum(["NOT_REQUIRED", "PENDING", "PAID", "REFUNDED"]);
 export type CompetitionEntryState = z.infer<typeof CompetitionEntryStateSchema>;
 
 /**
@@ -181,7 +216,7 @@ export const CompetitionEntrantSchema = z.strictObject({
   principalId: PrincipalIdSchema,
   kind: PrincipalKindSchema,
   /** Authoritative server-assigned registration seat (0..9). */
-  seat: CounterSchema,
+  seat: CounterSchema.max(9),
   entryState: CompetitionEntryStateSchema,
 });
 export type CompetitionEntrant = z.infer<typeof CompetitionEntrantSchema>;
@@ -197,9 +232,9 @@ export const CompetitionSchema = z.strictObject({
   /** Durable identity of the provisioning principal (SERVICE or ADMIN wallet). */
   organizerPrincipalId: PrincipalIdSchema,
   maxEntrants: z.number().int().min(2).max(10),
-  startingStack: PositiveChipAmountSchema,
-  smallBlind: PositiveChipAmountSchema,
-  bigBlind: PositiveChipAmountSchema,
+  startingStack: PositiveChipAmountSchema.max(2_147_483_647),
+  smallBlind: PositiveChipAmountSchema.max(2_147_483_647),
+  bigBlind: PositiveChipAmountSchema.max(2_147_483_647),
   entrants: z.array(CompetitionEntrantSchema).min(2).max(10),
   /** Null for `NONFINANCIAL`; the validated explicit economics for `ASSET`. */
   terms: CompetitionTermsSchema.nullable(),
@@ -217,6 +252,8 @@ export const CompetitionSchema = z.strictObject({
   createdAt: z.string().datetime(),
   startedAt: z.string().datetime().nullable(),
   finishedAt: z.string().datetime().nullable(),
+  /** Set exactly when the competition was cancelled before start. */
+  cancelledAt: z.string().datetime().nullable(),
 });
 export type Competition = z.infer<typeof CompetitionSchema>;
 
@@ -231,9 +268,9 @@ export const CreateCompetitionRequestSchema = z
     mode: CompetitionModeSchema,
     entrants: z.array(CompetitionEntrantSpecSchema).min(2).max(10),
     /** Optional engine configuration; server defaults: 1000 / 10 / 20. */
-    startingStack: PositiveChipAmountSchema.optional(),
-    smallBlind: PositiveChipAmountSchema.optional(),
-    bigBlind: PositiveChipAmountSchema.optional(),
+    startingStack: PositiveChipAmountSchema.max(2_147_483_647).optional(),
+    smallBlind: PositiveChipAmountSchema.max(2_147_483_647).optional(),
+    bigBlind: PositiveChipAmountSchema.max(2_147_483_647).optional(),
     terms: CompetitionTermsSchema.optional(),
     idempotencyKey: z.string().min(1).max(128),
   })
@@ -325,27 +362,39 @@ export type GetCompetitionResponse = z.infer<typeof GetCompetitionResponseSchema
  * `POST /competitions/:id/opt-in` (configured WALLET payer only). The route
  * resolves the payer from the authenticated principal; no principal id is
  * accepted from the body.
+ *
+ * Natural idempotency: the durable PAID marker plus the exact entry journal is
+ * the operation identity, so the body is an empty strict object and an unknown
+ * key (including a stale `idempotencyKey`) is rejected.
  */
-export const OptInCompetitionRequestSchema = z.strictObject({
-  idempotencyKey: z.string().min(1).max(128),
-});
+export const OptInCompetitionRequestSchema = z.strictObject({});
 export type OptInCompetitionRequest = z.infer<typeof OptInCompetitionRequestSchema>;
 
+/**
+ * `POST /competitions/:id/opt-in` response.
+ *
+ * The accepted charge is immutable: `journalRequestId` is the exact atomic
+ * journal that credited the entry into the competition reserve and stays
+ * replayable for the authenticated payer even after a prestart cancellation.
+ * `entryState` is the live durable entry state at response time (`PAID` while
+ * the entry is held, `REFUNDED` after a cancellation); read
+ * `GET /competitions/:id` for the authoritative competition projection. The
+ * receipt is historical charge evidence, not a claim about current state.
+ */
 export const OptInCompetitionResponseSchema = z.strictObject({
   success: z.literal(true),
   competitionId: IdSchema,
   principalId: PrincipalIdSchema,
-  entryState: z.literal("PAID"),
+  /** Live durable entry state at response time. */
+  entryState: z.enum(["PAID", "REFUNDED"]),
   entry: CompetitionAssetAmountSchema,
-  /** Persisted exact journal/conversion evidence (idempotent on replay). */
-  conversionId: IdSchema,
+  /** Immutable accepted charge receipt: the exact reserve-credit journal. */
+  journalRequestId: IdSchema,
 });
 export type OptInCompetitionResponse = z.infer<typeof OptInCompetitionResponseSchema>;
 
-/** `POST /competitions/:id/start` (orchestration only). */
-export const StartCompetitionRequestSchema = z.strictObject({
-  idempotencyKey: z.string().min(1).max(128),
-});
+/** `POST /competitions/:id/start` (orchestration only). Empty strict object. */
+export const StartCompetitionRequestSchema = z.strictObject({});
 export type StartCompetitionRequest = z.infer<typeof StartCompetitionRequestSchema>;
 
 export const CompetitionSeatAssignmentSchema = z.strictObject({
@@ -372,9 +421,7 @@ export const CompetitionPlacementSchema = z.strictObject({
 export type CompetitionPlacement = z.infer<typeof CompetitionPlacementSchema>;
 
 /** `POST /competitions/:id/settle` (orchestration only, idempotent). */
-export const SettleCompetitionRequestSchema = z.strictObject({
-  idempotencyKey: z.string().min(1).max(128),
-});
+export const SettleCompetitionRequestSchema = z.strictObject({});
 export type SettleCompetitionRequest = z.infer<typeof SettleCompetitionRequestSchema>;
 
 export const SettleCompetitionResponseSchema = z.strictObject({
@@ -388,6 +435,76 @@ export const SettleCompetitionResponseSchema = z.strictObject({
   placements: z.array(CompetitionPlacementSchema).min(2).max(10),
 });
 export type SettleCompetitionResponse = z.infer<typeof SettleCompetitionResponseSchema>;
+
+// ============================================================================
+// Prestart cancellation
+// ============================================================================
+
+/**
+ * `POST /competitions/:id/cancel` (orchestration only, `REGISTRATION` only).
+ * Empty strict object: cancellation is naturally idempotent from durable
+ * state, so it accepts no request identity.
+ */
+export const CancelCompetitionRequestSchema = z.strictObject({});
+export type CancelCompetitionRequest = z.infer<typeof CancelCompetitionRequestSchema>;
+
+/**
+ * Truthful per-entrant cancellation outcome.
+ *
+ * - `refunded` is true only when this cancellation returned the exact entry to
+ *   the payer and `refundJournalId` is the exact journal that did it;
+ * - `PENDING`/`NOT_REQUIRED` entrants never paid and are reported unchanged;
+ * - a successful cancellation never reports a `PAID` entry: every charged
+ *   entry is `REFUNDED`, otherwise the whole cancellation was refused
+ *   (`409 COMPETITION_ENTRY_UNRESOLVED`) and this response was never returned.
+ */
+export const CompetitionCancellationEntrySchema = z
+  .strictObject({
+    principalId: PrincipalIdSchema,
+    kind: PrincipalKindSchema,
+    entryState: CompetitionEntryStateSchema,
+    refunded: z.boolean(),
+    refundJournalId: IdSchema.nullable(),
+  })
+  .superRefine((entry, ctx) => {
+    if (entry.entryState === "PAID") {
+      ctx.addIssue({
+        code: "custom",
+        message: "A cancelled competition cannot report a PAID entry",
+      });
+    }
+    if (entry.refunded !== (entry.entryState === "REFUNDED")) {
+      ctx.addIssue({
+        code: "custom",
+        message: "refunded must match the REFUNDED entry state",
+      });
+    }
+    if (entry.refunded !== (entry.refundJournalId !== null)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "refunded requires the exact refund journal",
+      });
+    }
+  });
+export type CompetitionCancellationEntry = z.infer<typeof CompetitionCancellationEntrySchema>;
+
+/**
+ * Durable cancellation result. A replay of an accepted cancellation returns
+ * the same durable facts: no second refund, no second prize release, and no
+ * entry is ever reported as refunded unless its refund journal exists.
+ */
+export const CancelCompetitionResponseSchema = z.strictObject({
+  success: z.literal(true),
+  competitionId: IdSchema,
+  status: z.literal("CANCELLED"),
+  cancelledAt: z.string().datetime(),
+  /** `RELEASED` for ASSET; `NOT_APPLICABLE` for NONFINANCIAL. */
+  prizeStatus: CompetitionPrizeStatusSchema,
+  /** Exact asset amount returned to the sponsor; null when no prize existed. */
+  prize: CompetitionAssetAmountSchema.nullable(),
+  entries: z.array(CompetitionCancellationEntrySchema).min(2).max(10),
+});
+export type CancelCompetitionResponse = z.infer<typeof CancelCompetitionResponseSchema>;
 
 // ============================================================================
 // Agent credential provisioning (orchestration-scoped)

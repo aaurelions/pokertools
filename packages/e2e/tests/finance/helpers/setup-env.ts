@@ -35,6 +35,10 @@ process.env.JWT_SECRET = process.env.JWT_SECRET ?? "test-jwt-secret-finance-acce
 process.env.COOKIE_SECRET = process.env.COOKIE_SECRET ?? "test-cookie-secret-finance-acceptance";
 process.env.ENABLE_TEST_ROUTES = "false";
 process.env.ALLOWED_SIWE_CHAIN_IDS = "31337,31338,1";
+// Paid ASSET competition admission is explicitly enabled for this suite; the
+// central financial readiness gate is still evaluated independently and must
+// come from real evidence.
+process.env.COMPETITION_PAID_ENABLED = "true";
 process.env.LOG_LEVEL = "error";
 delete process.env.WALLET_XPRIV_ENCRYPTION_SECRET;
 delete process.env.MASTER_MNEMONIC;

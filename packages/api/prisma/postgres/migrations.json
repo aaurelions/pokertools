@@ -3,26 +3,26 @@
     {
       "name": "001_initial_schema",
       "file": "001_initial_schema.sql",
-      "sha256": "4a31fe18a885866eb0d62203aa005ad4d955585f52b45229fea092bd299c3338",
-      "description": "PostgreSQL relational baseline generated from prisma/schema.prisma: native enums, tables, indexes and composite foreign keys. Immutable; future schema changes require new migrations."
+      "sha256": "04ef73e497510f5986423c8b02ca08d0334651a5e51ad8b2ad89cd3e3411d95e",
+      "description": "Fresh canonical PostgreSQL relational baseline generated from prisma/schema.prisma with prisma migrate diff --from-empty: native enums, tables, indexes and composite foreign keys, including the REFUNDED entry state, cancellation timestamp, canonical entry lifecycle journals, unique tournament placements and 64-bit tournament prize amounts. Immutable; future changes require new migrations."
     },
     {
       "name": "002_financial_invariants",
       "file": "002_financial_invariants.sql",
-      "sha256": "07fb3ba405138c04a1754d69af2c5feb71a35c3cfe1d00b110b904bcabf77ec9",
+      "sha256": "d704a219ce957dfef2a813a8a6f9a1515998915b16907bf20168bcd092baa49e",
       "description": "Non-Prisma financial invariants: canonical decimal-string CHECKs, asset/custody domain + canonicality CHECKs, same-asset composite FK targets, sealed-journal + append-only triggers, deferred per-journal sum-zero/sealed/>=2-postings constraint trigger, AtomicAccount nonnegative-for-owner trigger, EconomicPolicy one-chip representability, FinancialIncident resolution consistency, TreasuryReconciliation amount canonicality. Immutable/append-only: never edit after release."
     },
     {
       "name": "003_audit_invariants",
       "file": "003_audit_invariants.sql",
-      "sha256": "bf6aae547626518facfa25fdc5ba198c410bf5e50751ca8502843ba4ea7eba1f",
+      "sha256": "2238c77359595ead7f5cb6fdc807e4ad93abdd8c03ab9fb474ad64b8cda3731d",
       "description": "Append-only audit invariants: GameEvent and TournamentEvent immutability (no UPDATE; DELETE only via owning-row cascade), GameActionRequest one-way terminal transition with frozen identity/response, and re-assertion of the ordered/state-fingerprint unique indexes. Immutable/append-only: never edit after release."
     },
     {
       "name": "004_competitions",
       "file": "004_competitions.sql",
-      "sha256": "05e85390f62d8fbf9f7db82c4811479647bdf200f8ac0bebcaa2d479b85602ad",
-      "description": "Generic competition provisioning (NONFINANCIAL/ASSET modes), explicit canonical atomic entry/prize terms with mode-consistency, zero-entry SERVICE entrants, reserved prize status and multi-credential SERVICE principals with operator-delegated orchestration. Immutable/append-only: never edit after release."
+      "sha256": "202213a804d88beacd42847af8c267b0c8c5107f7a613b47a1381bab986d3c9e",
+      "description": "Competition economic invariants: mode-consistent terms, canonical entry lifecycle journals (PAID/REFUNDED reserve-credit entry journal, refund journal, PAID-only settlement journal), prestart cancellation timestamp, SERVICE zero-entry entrants and durable non-revoked table-scoped credential binding. Immutable: never edit after release."
     }
   ]
 }

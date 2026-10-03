@@ -8,7 +8,7 @@ import {
   PositiveChipAmountSchema,
 } from "./primitives";
 import { BalanceSchema } from "./finance";
-import { PrincipalRoleSchema, ServiceScopeSchema } from "./principal";
+import { PrincipalRoleSchema, ServiceScopeSchema, type ServiceScope } from "./principal";
 import { PublicTableConfigSchema, PublicWireStateSchema } from "./masked-state";
 
 /**
@@ -91,48 +91,120 @@ export const CreateServiceCredentialRequestSchema = z
     principalId: IdSchema.optional(),
     name: ServiceCredentialNameSchema,
     scopes: z.array(ServiceScopeSchema).min(1).max(4),
+    /**
+     * Required for every table-scoped credential: SERVICE table grants are
+     * always resource-bound and can never act as a wildcard across rooms.
+     * Must be absent for an orchestration credential.
+     */
     tableId: ServiceCredentialTableIdSchema.optional(),
     seat: z.number().int().min(0).max(9).optional(),
+    /** Must be in the future when supplied; omitted means no expiry. */
     expiresAt: IsoDateTimeSchema.optional(),
   })
   .refine((value) => value.seat === undefined || value.tableId !== undefined, {
     message: "seat restriction requires tableId",
     path: ["seat"],
-  });
+  })
+  .refine(
+    (value) =>
+      !value.scopes.includes("competition:orchestrate") ||
+      (value.scopes.length === 1 && value.tableId === undefined && value.seat === undefined),
+    {
+      message:
+        "competition:orchestrate is exclusive: it cannot be combined with table scopes or resource restrictions",
+      path: ["scopes"],
+    }
+  )
+  .refine(
+    (value) =>
+      !value.scopes.some((scope) => scope.startsWith("table:")) || value.tableId !== undefined,
+    {
+      message: "table credentials must be bound to a tableId",
+      path: ["tableId"],
+    }
+  );
 export type CreateServiceCredentialRequestWire = z.infer<
   typeof CreateServiceCredentialRequestSchema
 >;
 
 /**
+ * Shape invariant shared by every credential response: an orchestration
+ * credential carries exactly `competition:orchestrate` and no resource binding,
+ * while every other credential carries table scopes only and is bound to a
+ * non-empty `tableId`. This mirrors the API's create/rotate guards so a
+ * response can never describe a wildcard or mixed-authority credential.
+ */
+function refineServiceCredentialShape(
+  credential: { scopes: readonly ServiceScope[]; tableId: string | null; seat: number | null },
+  ctx: z.RefinementCtx
+): void {
+  if (credential.scopes.includes("competition:orchestrate")) {
+    if (credential.scopes.length !== 1) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["scopes"],
+        message: "competition:orchestrate is exclusive: it cannot be combined with table scopes",
+      });
+    }
+    if (credential.tableId !== null) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["tableId"],
+        message: "Orchestration credentials cannot be bound to a table",
+      });
+    }
+    if (credential.seat !== null) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["seat"],
+        message: "Orchestration credentials cannot be seat-restricted",
+      });
+    }
+    return;
+  }
+  if (credential.tableId === null) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["tableId"],
+      message: "Table credentials must be bound to a table",
+    });
+  }
+}
+
+/**
  * `POST /auth/service-credentials` response. The plaintext `token` is returned
  * exactly once; only its digest is persisted.
  */
-export const CreatedServiceCredentialSchema = z.strictObject({
-  id: CredentialIdSchema,
-  userId: IdSchema,
-  name: z.string().min(1),
-  scopes: z.array(ServiceScopeSchema).min(1),
-  tableId: ServiceCredentialTableIdSchema.nullable(),
-  seat: z.number().int().min(0).max(9).nullable(),
-  expiresAt: NullableIsoDateTimeSchema,
-  token: z.string().min(1),
-});
+export const CreatedServiceCredentialSchema = z
+  .strictObject({
+    id: CredentialIdSchema,
+    userId: IdSchema,
+    name: z.string().min(1),
+    scopes: z.array(ServiceScopeSchema).min(1),
+    tableId: ServiceCredentialTableIdSchema.nullable(),
+    seat: z.number().int().min(0).max(9).nullable(),
+    expiresAt: NullableIsoDateTimeSchema,
+    token: z.string().min(1),
+  })
+  .superRefine(refineServiceCredentialShape);
 export type CreatedServiceCredentialWire = z.infer<typeof CreatedServiceCredentialSchema>;
 
 /** `GET /auth/service-credentials` row (never carries the plaintext token). */
-export const ServiceCredentialSummarySchema = z.strictObject({
-  id: CredentialIdSchema,
-  userId: IdSchema,
-  name: z.string().min(1),
-  scopes: z.array(ServiceScopeSchema),
-  tableId: ServiceCredentialTableIdSchema.nullable(),
-  seat: z.number().int().min(0).max(9).nullable(),
-  revoked: z.boolean(),
-  expiresAt: NullableIsoDateTimeSchema,
-  lastUsedAt: NullableIsoDateTimeSchema,
-  revokedAt: NullableIsoDateTimeSchema,
-  createdAt: IsoDateTimeSchema,
-});
+export const ServiceCredentialSummarySchema = z
+  .strictObject({
+    id: CredentialIdSchema,
+    userId: IdSchema,
+    name: z.string().min(1),
+    scopes: z.array(ServiceScopeSchema),
+    tableId: ServiceCredentialTableIdSchema.nullable(),
+    seat: z.number().int().min(0).max(9).nullable(),
+    revoked: z.boolean(),
+    expiresAt: NullableIsoDateTimeSchema,
+    lastUsedAt: NullableIsoDateTimeSchema,
+    revokedAt: NullableIsoDateTimeSchema,
+    createdAt: IsoDateTimeSchema,
+  })
+  .superRefine(refineServiceCredentialShape);
 export type ServiceCredentialSummaryWire = z.infer<typeof ServiceCredentialSummarySchema>;
 
 export const ListServiceCredentialsResponseSchema = z.strictObject({

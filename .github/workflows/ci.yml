@@ -38,12 +38,30 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: "npm"
 
+      - name: Install Supported Package Manager
+        run: npm install --global npm@12.2.0
+
       - name: Install Dependencies
         run: npm ci --no-audit --no-fund --loglevel=error
 
-      - name: Security Audit (advisory)
-        continue-on-error: true
-        run: npm audit --audit-level=critical
+      - name: Production Dependency Security Audit
+        run: npm audit --omit=dev
+
+      - name: Install Pinned Secret Scanner
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/gitleaks_8.30.1_linux_x64.tar.gz"
+          curl -fsSL -o "$archive" https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP" gitleaks
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Secret Scan and Policy Canaries
+        env:
+          POKERTOOLS_TEST_TMPDIR: ${{ runner.temp }}
+        run: |
+          gitleaks dir . --config .gitleaks.toml --redact
+          node scripts/test-secret-policy.mjs
 
       - name: Install Redis CLI
         run: sudo apt-get update && sudo apt-get install -y redis-tools
@@ -65,6 +83,9 @@ jobs:
       - name: Check Architecture Boundaries
         run: npm run check:boundaries
 
+      - name: Check Public Package Contents
+        run: node scripts/check-publish-contents.mjs
+
       - name: Validate Schema & Migrations
         run: |
           cd packages/api
@@ -73,6 +94,7 @@ jobs:
       - name: Run Tests (coverage gates)
         env:
           NODE_ENV: "test"
+          ENABLE_HEAVY_TESTS: "true"
           REDIS_URL: "redis://localhost:6379"
           JWT_SECRET: "test-jwt-secret-key-for-ci-minimum-32-chars"
           COOKIE_SECRET: "test-cookie-secret-key-for-ci"
@@ -82,6 +104,12 @@ jobs:
         run: |
           npm run test:postgres:migrations -w @pokertools/api
           npm run test:postgres:ledger -w @pokertools/api
+
+      - name: Canonical PostgreSQL, Redis and HTTP Acceptance
+        run: npm run test:canonical -w @pokertools/api
+
+      - name: Local-chain Financial Acceptance
+        run: npm run e2e:finance
 
       - name: Run Benchmarks
         if: matrix.node-version == '24.x'

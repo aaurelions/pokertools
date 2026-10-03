@@ -140,6 +140,7 @@ CREATE TABLE IF NOT EXISTS "Competition" (
     "prizeSettlementJournalId" TEXT,
     "startedAt" DATETIME,
     "finishedAt" DATETIME,
+    "cancelledAt" DATETIME,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL,
     CONSTRAINT "Competition_organizerId_fkey" FOREIGN KEY ("organizerId") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
@@ -156,6 +157,8 @@ CREATE TABLE IF NOT EXISTS "CompetitionEntrant" (
     "entryState" TEXT NOT NULL DEFAULT 'NOT_REQUIRED',
     "entryAmountAtomic" TEXT,
     "entryJournalId" TEXT,
+    "entrySettlementJournalId" TEXT,
+    "refundJournalId" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL,
     CONSTRAINT "CompetitionEntrant_competitionId_fkey" FOREIGN KEY ("competitionId") REFERENCES "Competition" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
@@ -398,7 +401,7 @@ CREATE TABLE IF NOT EXISTS "Tournament" (
     "maxPlayers" INTEGER NOT NULL,
     "tableMaxPlayers" INTEGER NOT NULL DEFAULT 10,
     "balancingTolerance" INTEGER NOT NULL DEFAULT 2,
-    "prizePool" INTEGER NOT NULL DEFAULT 0,
+    "prizePool" BIGINT NOT NULL DEFAULT 0,
     "blindStructure" JSONB NOT NULL,
     "payoutPercentages" JSONB NOT NULL,
     "economicPolicyId" TEXT,
@@ -420,7 +423,7 @@ CREATE TABLE IF NOT EXISTS "TournamentEntry" (
     "seat" INTEGER NOT NULL,
     "status" TEXT NOT NULL DEFAULT 'REGISTERED',
     "placement" INTEGER,
-    "prize" INTEGER NOT NULL DEFAULT 0,
+    "prize" BIGINT NOT NULL DEFAULT 0,
     "currentTableId" TEXT,
     "currentSeat" INTEGER,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -561,7 +564,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS "CompetitionEntrant_competitionId_seat_key" ON
 
 CREATE UNIQUE INDEX IF NOT EXISTS "CompetitionEntrant_entryJournalId_key" ON "CompetitionEntrant"("entryJournalId");
 
+CREATE UNIQUE INDEX IF NOT EXISTS "CompetitionEntrant_entrySettlementJournalId_key" ON "CompetitionEntrant"("entrySettlementJournalId");
+
 CREATE INDEX IF NOT EXISTS "CompetitionEntrant_principalId_idx" ON "CompetitionEntrant"("principalId");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "CompetitionEntrant_refundJournalId_key" ON "CompetitionEntrant"("refundJournalId");
 
 CREATE UNIQUE INDEX IF NOT EXISTS "Competition_organizerId_idempotencyKey_key" ON "Competition"("organizerId", "idempotencyKey");
 
@@ -676,6 +683,8 @@ CREATE INDEX IF NOT EXISTS "Table_status_idx" ON "Table"("status");
 CREATE INDEX IF NOT EXISTS "Table_tournamentId_idx" ON "Table"("tournamentId");
 
 CREATE INDEX IF NOT EXISTS "TournamentEntry_currentTableId_idx" ON "TournamentEntry"("currentTableId");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "TournamentEntry_tournamentId_placement_key" ON "TournamentEntry"("tournamentId", "placement");
 
 CREATE UNIQUE INDEX IF NOT EXISTS "TournamentEntry_tournamentId_seat_key" ON "TournamentEntry"("tournamentId", "seat");
 

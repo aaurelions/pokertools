@@ -1,7 +1,9 @@
 import type { FastifyInstance } from "fastify";
+import { randomInt } from "node:crypto";
 import { ActionType } from "@pokertools/types";
 import type { Prisma } from "../../generated/prisma/index.js";
 import type {
+  CancelCompetitionResponse,
   Competition,
   CompetitionEntrant,
   CompetitionPlacement,
@@ -17,7 +19,7 @@ import { competitionSponsorPrincipalIds, config } from "../config.js";
 import { defaultBlindStructure } from "../utils/tournaments.js";
 import { settleTournament } from "./tournament-lifecycle.js";
 import { recordTournamentEvent } from "./tournament-events.js";
-import { reconcileTournament } from "../routes/tournaments/index.js";
+import { reconcileTournament } from "./tournament-director.js";
 import type { AuthenticatedPrincipal } from "./principal-manager.js";
 
 /**
@@ -26,19 +28,32 @@ import type { AuthenticatedPrincipal } from "./principal-manager.js";
  * A competition is provisioned into the authoritative tournament/game
  * machinery: it owns exactly one backing Tournament (zero buy-in/fee for
  * NONFINANCIAL) and the roster is inserted as authoritative TournamentEntry
- * rows with server-assigned seats. Start seats every entrant and deals inside
- * one database transaction; there is no second poker runner and no partially
- * seated public table.
+ * rows with server-assigned seats. Registration seats are a server CSPRNG
+ * Fisher-Yates permutation of `0..n-1`, so the order of the roster array never
+ * controls a seat. Start seats every entrant and deals inside one database
+ * transaction; there is no second poker runner and no partially seated public
+ * table.
  *
  * ASSET economics are explicit atomic journals only:
  * - each configured WALLET payer opts in and pays their entry into the
- *   authorized sponsor's operator account;
+ *   competition's own entry reserve (never directly to the sponsor), so the
+ *   sponsor cannot spend value that is still refundable;
+ * - start transfers every held entry to the authorized sponsor's operator
+ *   account exactly once;
  * - the fixed sponsor prize is reserved before admission and settled once
  *   (paid to a WALLET winner, released when no financial winner exists);
+ * - prestart cancellation refunds every held entry, releases the prize
+ *   reservation and cancels the backing tournament/table durably. It is
+ *   risk-reducing: never gated on readiness or ACTIVE assets;
  * - SERVICE entrants never move value and are never financial owners;
- * - all paid admission (create/opt-in/start) fails closed unless the central
+ * - paid admission (create/opt-in/start) fails closed unless the central
  *   platform readiness reports financial READY and the explicit feature flag
- *   is enabled. Settlement is risk-reducing and never traps reserved value.
+ *   is enabled. Settlement and cancellation are risk-reducing and never trap
+ *   reserved value.
+ *
+ * `REGISTRATION -> RUNNING` and `REGISTRATION -> CANCELLED` are serialized on
+ * the competition row (fresh reads inside the transaction), so exactly one
+ * wins; a start or cancel that loses reports the winner's durable state.
  */
 
 interface CompetitionRow {
@@ -59,13 +74,16 @@ interface CompetitionRow {
   prizeStatus: CompetitionPrizeStatus;
   startedAt: Date | null;
   finishedAt: Date | null;
+  cancelledAt: Date | null;
   createdAt: Date;
   entrants: Array<{
     principalId: string;
     kind: "WALLET" | "SERVICE";
     seat: number;
-    entryState: "NOT_REQUIRED" | "PENDING" | "PAID";
+    entryState: "NOT_REQUIRED" | "PENDING" | "PAID" | "REFUNDED";
     entryAmountAtomic: string | null;
+    entryJournalId: string | null;
+    refundJournalId: string | null;
   }>;
 }
 
@@ -129,6 +147,7 @@ export function toWireCompetition(
     createdAt: competition.createdAt.toISOString(),
     startedAt: competition.startedAt ? competition.startedAt.toISOString() : null,
     finishedAt: competition.finishedAt ? competition.finishedAt.toISOString() : null,
+    cancelledAt: competition.cancelledAt ? competition.cancelledAt.toISOString() : null,
   };
 }
 
@@ -193,6 +212,94 @@ async function assertPaidAdmissionReady(fastify: FastifyInstance): Promise<void>
 
 function isUniqueViolation(error: unknown): boolean {
   return (error as { code?: string } | null)?.code === "P2002";
+}
+
+function isPostgresDatabase(): boolean {
+  return (config.DATABASE_URL ?? "").startsWith("postgres");
+}
+
+/**
+ * Serialize lifecycle transitions for one competition on its durable row.
+ * PostgreSQL takes an explicit row lock; SQLite serializes writers at the
+ * database level. Every caller MUST re-read and re-check state after this.
+ */
+async function lockCompetitionRow(
+  tx: Prisma.TransactionClient,
+  competitionId: string
+): Promise<void> {
+  if (isPostgresDatabase()) {
+    await tx.$queryRawUnsafe(
+      'SELECT "id" FROM "Competition" WHERE "id" = $1 FOR UPDATE',
+      competitionId
+    );
+  }
+}
+
+/**
+ * Best-effort post-commit audit. An accepted, already-committed mutation is
+ * never reported as failed because audit persistence was unavailable.
+ */
+async function recordAcceptedAudit(
+  fastify: FastifyInstance,
+  input: Parameters<FastifyInstance["auditManager"]["record"]>[0]
+): Promise<void> {
+  try {
+    await fastify.auditManager.record(input);
+  } catch {
+    // The mutation is durable; audit is observability, not the commit.
+  }
+}
+
+/**
+ * Server-assigned registration seats: an unbiased CSPRNG Fisher-Yates
+ * permutation of `0..count-1`. The roster array order never controls a seat.
+ */
+export function shuffledSeats(count: number): number[] {
+  const seats = Array.from({ length: count }, (_, index) => index);
+  for (let index = seats.length - 1; index > 0; index--) {
+    const swap = randomInt(index + 1);
+    const current = seats[index];
+    seats[index] = seats[swap];
+    seats[swap] = current;
+  }
+  return seats;
+}
+
+/**
+ * Truthful cancellation projection from durable rows. A refund is reported only
+ * when the entrant's durable REFUNDED state and exact refund journal exist; a
+ * successful cancellation never reports a PAID entry.
+ */
+function buildCancellationResponse(competition: CompetitionRow): CancelCompetitionResponse {
+  if (competition.status !== "CANCELLED" || competition.cancelledAt === null) {
+    throw new AppError(
+      "Competition cancellation is incomplete",
+      409,
+      "COMPETITION_CANCELLATION_INCOMPLETE"
+    );
+  }
+  const prize =
+    competition.mode === "ASSET" &&
+    competition.prizeStatus === "RELEASED" &&
+    competition.prizeAssetId !== null &&
+    competition.prizeAmountAtomic !== null
+      ? { assetId: competition.prizeAssetId, amountAtomic: competition.prizeAmountAtomic }
+      : null;
+  return {
+    success: true as const,
+    competitionId: competition.id,
+    status: "CANCELLED" as const,
+    cancelledAt: competition.cancelledAt.toISOString(),
+    prizeStatus: competition.prizeStatus,
+    prize,
+    entries: competition.entrants.map((entrant) => ({
+      principalId: entrant.principalId,
+      kind: entrant.kind,
+      entryState: entrant.entryState,
+      refunded: entrant.entryState === "REFUNDED",
+      refundJournalId: entrant.refundJournalId,
+    })),
+  };
 }
 
 const COMPETITION_INCLUDE = {
@@ -415,6 +522,11 @@ export async function createCompetition(
   }
 
   const engineMax = request.entrants.length;
+  // Server CSPRNG Fisher-Yates seating: the roster array order never controls
+  // any registration/engine seat. Assigned before the transaction so the same
+  // permutation is inserted into both the competition roster and the backing
+  // tournament entries.
+  const seats = shuffledSeats(engineMax);
   let created: { competitionId: string; tableId: string; snapshot: unknown };
   try {
     created = await fastify.prisma.$transaction(
@@ -474,8 +586,9 @@ export async function createCompetition(
           select: { id: true },
         });
 
-        for (let seat = 0; seat < request.entrants.length; seat++) {
-          const entrant = request.entrants[seat];
+        for (let index = 0; index < request.entrants.length; index++) {
+          const entrant = request.entrants[index];
+          const seat = seats[index];
           const entryAmount = payerAmounts.get(entrant.principalId) ?? null;
           await tx.competitionEntrant.create({
             data: {
@@ -578,7 +691,7 @@ export async function createCompetition(
   const row = await loadCompetition(fastify, created.competitionId);
   if (!row) throw new AppError("Competition not found", 404, "COMPETITION_NOT_FOUND");
 
-  await fastify.auditManager.record({
+  await recordAcceptedAudit(fastify, {
     actorId: organizer.id,
     action: "COMPETITION_CREATE",
     resource: `competition:${row.id}`,
@@ -608,14 +721,22 @@ export async function getCompetition(fastify: FastifyInstance, id: string): Prom
 }
 
 /**
- * Configured WALLET payer opt-in: charges the explicit entry exactly once.
- * Idempotency is derived from durable state (the entrant's PAID marker and the
- * ledger requestId), not an ephemeral record, so a retry after a crash can
- * never double-charge. Paid admission is readiness-gated.
+ * Configured WALLET payer opt-in: charges the explicit entry exactly once into
+ * the competition's own entry reserve (never the sponsor's account).
+ *
+ * Natural idempotency: the durable entry marker plus the exact reserve-credit
+ * journal is the operation identity — there is no request idempotency key. The
+ * accepted charge receipt is replayed for the authenticated payer before the
+ * registration gate, so a lost response stays replayable after start and even
+ * after a prestart cancellation (the live entry state is then `REFUNDED`, the
+ * journal receipt stays immutable). The transaction locks the competition row,
+ * re-reads status/entrant and re-checks REGISTRATION, so a concurrent start or
+ * cancellation can never be followed by a charge (no pay-after-start /
+ * pay-after-cancel).
  */
 export async function optInCompetition(
   fastify: FastifyInstance,
-  input: { competitionId: string; principalId: string; idempotencyKey: string }
+  input: { competitionId: string; principalId: string }
 ): Promise<OptInCompetitionResponse> {
   const competition = await fastify.prisma.competition.findUnique({
     where: { id: input.competitionId },
@@ -630,9 +751,6 @@ export async function optInCompetition(
       400,
       "COMPETITION_NOT_ASSET"
     );
-  }
-  if (competition.status !== "REGISTRATION") {
-    throw new AppError("Competition registration is closed", 409, "COMPETITION_NOT_REGISTERING");
   }
   const entrant = competition.entrants.find(
     (candidate) => candidate.principalId === input.principalId
@@ -660,15 +778,24 @@ export async function optInCompetition(
   }
   const amountAtomic = entrant.entryAmountAtomic ?? competition.entryAmountAtomic;
 
-  if (entrant.entryState === "PAID") {
-    // Durable replay: never charge twice, even after a lost response.
+  // Durable replay first: a committed charge is evidenced by its immutable
+  // reserve-credit journal and stays replayable for this authenticated payer
+  // after start and after a prestart cancellation.
+  if (entrant.entryState === "PAID" || entrant.entryState === "REFUNDED") {
+    if (entrant.entryJournalId === null) {
+      throw new AppError(
+        "Competition entry journal evidence is missing",
+        409,
+        "COMPETITION_ENTRY_EVIDENCE_MISSING"
+      );
+    }
     return {
       success: true,
       competitionId: competition.id,
       principalId: entrant.principalId,
-      entryState: "PAID",
+      entryState: entrant.entryState,
       entry: { assetId: competition.entryAssetId, amountAtomic },
-      conversionId: entrant.entryJournalId ?? `competition-entry:${competition.id}`,
+      journalRequestId: entrant.entryJournalId,
     };
   }
   if (entrant.entryState !== "PENDING") {
@@ -678,38 +805,121 @@ export async function optInCompetition(
       "COMPETITION_ENTRY_NOT_REQUIRED"
     );
   }
+  if (competition.status !== "REGISTRATION") {
+    throw new AppError("Competition registration is closed", 409, "COMPETITION_NOT_REGISTERING");
+  }
 
   await assertPaidAdmissionReady(fastify);
 
-  const journal = await fastify.prisma.$transaction(async (tx) => {
-    const result = await fastify.financialManager.applyCompetitionEntry(tx, {
-      competitionId: competition.id,
-      payerId: entrant.principalId,
-      sponsorId: competition.sponsorId!,
-      assetId: competition.entryAssetId!,
-      amountAtomic,
-    });
-    await tx.competitionEntrant.update({
-      where: { id: entrant.id },
-      data: { entryState: "PAID", entryJournalId: result.journalRequestId },
-    });
-    return result;
-  });
+  const journal = await fastify.prisma.$transaction(
+    async (tx) => {
+      await lockCompetitionRow(tx, competition.id);
+      const fresh = await tx.competition.findUniqueOrThrow({
+        where: { id: competition.id },
+        select: {
+          status: true,
+          mode: true,
+          entryAssetId: true,
+          entryAmountAtomic: true,
+          sponsorId: true,
+        },
+      });
+      const freshEntrant = await tx.competitionEntrant.findUniqueOrThrow({
+        where: {
+          competitionId_principalId: {
+            competitionId: competition.id,
+            principalId: input.principalId,
+          },
+        },
+      });
+      // A concurrent opt-in may have committed while this transaction waited.
+      if (freshEntrant.entryState === "PAID" || freshEntrant.entryState === "REFUNDED") {
+        if (freshEntrant.entryJournalId === null) {
+          throw new AppError(
+            "Competition entry journal evidence is missing",
+            409,
+            "COMPETITION_ENTRY_EVIDENCE_MISSING"
+          );
+        }
+        return { journalRequestId: freshEntrant.entryJournalId };
+      }
+      if (freshEntrant.entryState !== "PENDING") {
+        throw new AppError(
+          "Principal is not a configured entry payer",
+          400,
+          "COMPETITION_ENTRY_NOT_REQUIRED"
+        );
+      }
+      // Serialized winner check: a start or cancellation committed before this
+      // transaction took the row lock must prevent any charge.
+      if (fresh.status !== "REGISTRATION") {
+        throw new AppError(
+          "Competition registration is closed",
+          409,
+          "COMPETITION_NOT_REGISTERING"
+        );
+      }
+      if (
+        fresh.mode !== "ASSET" ||
+        fresh.entryAssetId === null ||
+        fresh.entryAmountAtomic === null ||
+        fresh.sponsorId === null
+      ) {
+        throw new AppError(
+          "Competition entry terms are incomplete",
+          409,
+          "COMPETITION_TERMS_INCOMPLETE"
+        );
+      }
+      const result = await fastify.financialManager.applyCompetitionEntry(tx, {
+        competitionId: competition.id,
+        payerId: freshEntrant.principalId,
+        assetId: fresh.entryAssetId,
+        amountAtomic: freshEntrant.entryAmountAtomic ?? fresh.entryAmountAtomic,
+      });
+      await tx.competitionEntrant.update({
+        where: { id: freshEntrant.id },
+        data: { entryState: "PAID", entryJournalId: result.journalRequestId },
+      });
+      return result;
+    },
+    { maxWait: 10_000, timeout: 15_000 }
+  );
 
-  await fastify.auditManager.record({
+  // Report the live durable entry state at response time: a concurrent
+  // cancellation may have refunded the just-committed charge. The journal
+  // receipt is immutable either way.
+  const live = await fastify.prisma.competitionEntrant.findUniqueOrThrow({
+    where: {
+      competitionId_principalId: {
+        competitionId: competition.id,
+        principalId: input.principalId,
+      },
+    },
+    select: { entryState: true },
+  });
+  if (live.entryState !== "PAID" && live.entryState !== "REFUNDED") {
+    throw new AppError(
+      "Competition entry state is inconsistent",
+      409,
+      "COMPETITION_ENTRY_EVIDENCE_MISSING"
+    );
+  }
+
+  await recordAcceptedAudit(fastify, {
     actorId: input.principalId,
     action: "COMPETITION_OPT_IN",
     resource: `competition:${input.competitionId}`,
-    metadata: { conversionId: journal.journalRequestId },
+    metadata: { journalRequestId: journal.journalRequestId },
   });
 
   return {
     success: true,
     competitionId: competition.id,
     principalId: entrant.principalId,
-    entryState: "PAID",
+    entryState: live.entryState,
     entry: { assetId: competition.entryAssetId, amountAtomic },
-    conversionId: journal.journalRequestId,
+    journalRequestId: journal.journalRequestId,
   };
 }
 
@@ -718,14 +928,25 @@ export async function optInCompetition(
  *
  * One transaction seats every entrant (engine SIT + entry assignment), flips
  * the tournament RUNNING, deals the first hand and flips the competition
- * RUNNING with `startedAt`. Until that commit, no seat or hand is publicly
- * observable and public actions are rejected by the game authority; after it,
- * every entrant is seated. Paid admission is readiness-gated and re-asserts
- * assets ACTIVE inside the transaction.
+ * RUNNING with `startedAt`; held entries are transferred to the sponsor exactly
+ * once inside that same transaction. Until that commit, no seat or hand is
+ * publicly observable and public actions are rejected by the game authority;
+ * after it, every entrant is seated.
+ *
+ * Race safety: the transaction locks the competition row and re-reads status
+ * and entries, so a concurrent cancellation can never be followed by a start
+ * (`REGISTRATION -> RUNNING` / `REGISTRATION -> CANCELLED` have exactly one
+ * winner). Unpaid entries are re-checked under the lock, so an opt-in that
+ * commits after the lock is observed and blocks the start instead of racing it.
+ *
+ * Natural idempotency: a durable `startedAt` makes start replayable from
+ * durable state — while RUNNING and after settlement — with no request
+ * idempotency key. Paid admission is readiness-gated and re-asserts assets
+ * ACTIVE inside the transaction.
  */
 export async function startCompetition(
   fastify: FastifyInstance,
-  input: { competitionId: string; actor: AuthenticatedPrincipal; idempotencyKey: string }
+  input: { competitionId: string; actor: AuthenticatedPrincipal }
 ): Promise<StartCompetitionResponse> {
   const competition = await fastify.prisma.competition.findUnique({
     where: { id: input.competitionId },
@@ -739,8 +960,9 @@ export async function startCompetition(
   const seatsFor = (entrants: Array<{ principalId: string; seat: number }>) =>
     entrants.map((entrant) => ({ principalId: entrant.principalId, seat: entrant.seat }));
 
-  if (competition.status === "RUNNING" && competition.startedAt !== null) {
-    // Durable replay: an already-started competition returns its accepted seats.
+  if (competition.startedAt !== null) {
+    // Durable start replay: the accepted start stays valid while RUNNING and
+    // after settlement; a CANCELLED competition never has a start marker.
     return {
       success: true as const,
       competitionId: competition.id,
@@ -777,15 +999,27 @@ export async function startCompetition(
   const now = new Date();
   await fastify.prisma.$transaction(
     async (tx) => {
+      await lockCompetitionRow(tx, competition.id);
       const fresh = await tx.competition.findUniqueOrThrow({
         where: { id: competition.id },
         include: { entrants: { orderBy: { seat: "asc" } } },
       });
+      if (fresh.startedAt !== null) {
+        // A concurrent start committed while this transaction waited.
+        return;
+      }
       if (fresh.status !== "REGISTRATION") {
         throw new AppError(
           "Competition is not accepting a start",
           409,
           "COMPETITION_NOT_REGISTERING"
+        );
+      }
+      if (fresh.entrants.length < 2) {
+        throw new AppError(
+          "Competition requires at least two entrants",
+          400,
+          "COMPETITION_REQUIRES_TWO_ENTRANTS"
         );
       }
       if (fresh.mode === "ASSET") {
@@ -797,7 +1031,7 @@ export async function startCompetition(
           );
         }
         // Freeze race: lock and re-assert ACTIVE under the durable asset lock
-        // (sorted order) before any seat, deal or RUNNING transition.
+        // (sorted order) before any release, seat, deal or RUNNING transition.
         await fastify.financialManager.lockAndRequireActiveAssets(tx, [
           fresh.entryAssetId,
           fresh.prizeAssetId,
@@ -808,6 +1042,50 @@ export async function startCompetition(
             503,
             "COMPETITION_PRIZE_NOT_RESERVED"
           );
+        }
+        // Re-check entry obligations under the row lock: a concurrent opt-in
+        // either committed before this lock (and is released below) or is
+        // blocked behind it, so a start can never race an unpaid entry.
+        if (fresh.entrants.some((entrant) => entrant.entryState === "PENDING")) {
+          throw new AppError(
+            "Configured entry payers must opt in before start",
+            409,
+            "COMPETITION_ENTRY_UNPAID"
+          );
+        }
+        for (const entrant of fresh.entrants) {
+          if (entrant.entryState !== "PAID") continue;
+          if (entrant.entryJournalId === null) {
+            throw new AppError(
+              "Competition entry value cannot be accounted for",
+              409,
+              "COMPETITION_ENTRY_EVIDENCE_MISSING"
+            );
+          }
+          // Canonical evidence only: the exact reserve-credit journal.
+          await fastify.financialManager.assertCompetitionEntryHeld(tx, {
+            competitionId: fresh.id,
+            journalRequestId: entrant.entryJournalId,
+          });
+          const amountAtomic = entrant.entryAmountAtomic ?? fresh.entryAmountAtomic;
+          if (amountAtomic === null) {
+            throw new AppError(
+              "Competition entry amount is missing",
+              409,
+              "COMPETITION_TERMS_INCOMPLETE"
+            );
+          }
+          const release = await fastify.financialManager.applyCompetitionEntryRelease(tx, {
+            competitionId: fresh.id,
+            payerId: entrant.principalId,
+            sponsorId: fresh.sponsorId!,
+            assetId: fresh.entryAssetId,
+            amountAtomic,
+          });
+          await tx.competitionEntrant.update({
+            where: { id: entrant.id },
+            data: { entrySettlementJournalId: release.journalRequestId },
+          });
         }
       }
 
@@ -886,7 +1164,7 @@ export async function startCompetition(
   );
 
   await fastify.gameManager.publishCommitted(tableId).catch(() => undefined);
-  await fastify.auditManager.record({
+  await recordAcceptedAudit(fastify, {
     actorId: input.actor.id,
     action: "COMPETITION_START",
     resource: `competition:${competition.id}`,
@@ -908,7 +1186,7 @@ export async function startCompetition(
  */
 export async function settleCompetition(
   fastify: FastifyInstance,
-  input: { competitionId: string; actor: AuthenticatedPrincipal; idempotencyKey: string }
+  input: { competitionId: string; actor: AuthenticatedPrincipal }
 ): Promise<SettleCompetitionResponse> {
   const competition = await fastify.prisma.competition.findUnique({
     where: { id: input.competitionId },
@@ -1016,17 +1294,11 @@ export async function settleCompetition(
     );
   }
 
-  const isPostgres = (config.DATABASE_URL ?? "").startsWith("postgres");
   const disposition = await fastify.prisma.$transaction(async (tx) => {
     // Serialize the durable disposition decision on the competition row. Under
     // READ COMMITTED two invocations would otherwise branch on stale
     // status/prizeStatus snapshots and could apply different dispositions.
-    if (isPostgres) {
-      await tx.$queryRawUnsafe(
-        'SELECT "id" FROM "Competition" WHERE "id" = $1 FOR UPDATE',
-        competition.id
-      );
-    }
+    await lockCompetitionRow(tx, competition.id);
     const fresh = await tx.competition.findUniqueOrThrow({
       where: { id: competition.id },
       select: {
@@ -1137,7 +1409,7 @@ export async function settleCompetition(
     orderBy: { placement: "asc" },
   });
 
-  await fastify.auditManager.record({
+  await recordAcceptedAudit(fastify, {
     actorId: input.actor.id,
     action: "COMPETITION_SETTLE",
     resource: `competition:${input.competitionId}`,
@@ -1146,6 +1418,195 @@ export async function settleCompetition(
 
   const prizePaid = disposition.prizeStatus === "PAID" && competition.prizeAmountAtomic !== null;
   return buildResult(disposition.prizeStatus, prizePaid ? competition.prizeAmountAtomic : null);
+}
+
+/**
+ * Cancel a competition before it starts.
+ *
+ * One transaction: refunds every PAID entry still held in the competition's own
+ * entry reserve, releases the reserved prize to the sponsor, marks the backing
+ * tournament CANCELLED and closes its table, then flips the competition
+ * CANCELLED with `cancelledAt`. It deliberately does **not** require financial
+ * readiness or ACTIVE assets: cancellation is risk-reducing and must work under
+ * frozen/degraded admission conditions.
+ *
+ * Race safety: the transaction locks the competition row and re-reads state, so
+ * `REGISTRATION -> RUNNING` and `REGISTRATION -> CANCELLED` have exactly one
+ * winner; a losing start/cancel reports the winner's durable state. Concurrent
+ * opt-ins are serialized behind the same lock and can never pay after
+ * cancellation.
+ *
+ * All-or-nothing: every PAID entry must be evidenced by its exact
+ * reserve-credit journal. If any paid value cannot be accounted for (missing,
+ * unsealed or foreign journal), the whole cancellation is refused with 409
+ * `COMPETITION_ENTRY_UNRESOLVED` and the competition stays REGISTRATION — no
+ * partial refund, no false cancellation, no transfer from a non-canonical
+ * account.
+ *
+ * Natural idempotency: an accepted cancellation replays from durable state
+ * (`status`, `cancelledAt`, entrant REFUNDED markers and exact refund
+ * journals). The response never reports an entry as refunded unless the exact
+ * refund journal exists.
+ */
+export async function cancelCompetition(
+  fastify: FastifyInstance,
+  input: { competitionId: string; actor: AuthenticatedPrincipal }
+): Promise<CancelCompetitionResponse> {
+  const competition = await loadCompetition(fastify, input.competitionId);
+  if (!competition) {
+    throw new AppError("Competition not found", 404, "COMPETITION_NOT_FOUND");
+  }
+  assertCompetitionOwner(input.actor, competition);
+
+  if (competition.status === "CANCELLED") {
+    // Durable replay: project the accepted cancellation without moving value.
+    return buildCancellationResponse(competition);
+  }
+  if (competition.status !== "REGISTRATION") {
+    throw new AppError(
+      "Only a competition in registration can be cancelled",
+      409,
+      "COMPETITION_NOT_CANCELLABLE"
+    );
+  }
+
+  const now = new Date();
+  await fastify.prisma.$transaction(
+    async (tx) => {
+      await lockCompetitionRow(tx, competition.id);
+      const fresh = await tx.competition.findUniqueOrThrow({
+        where: { id: competition.id },
+        include: {
+          entrants: { orderBy: { seat: "asc" } },
+          tournament: { select: { tableId: true } },
+        },
+      });
+      if (fresh.status === "CANCELLED") {
+        // A concurrent cancellation won while this transaction waited.
+        return;
+      }
+      if (fresh.status !== "REGISTRATION") {
+        throw new AppError(
+          "Only a competition in registration can be cancelled",
+          409,
+          "COMPETITION_NOT_CANCELLABLE"
+        );
+      }
+
+      // Refund exactly the entries held in this competition's reserve. Every
+      // PAID entry must be evidenced by its exact reserve-credit journal; a
+      // malformed or foreign journal blocks the entire cancellation with the
+      // competition left in REGISTRATION — no partial refunds, no false
+      // cancellation, no transfer from a non-canonical account.
+      const refundedEntries: Array<{
+        principalId: string;
+        refundJournalId: string;
+      }> = [];
+      for (const entrant of fresh.entrants) {
+        if (entrant.entryState !== "PAID") continue;
+        if (entrant.entryJournalId === null || fresh.entryAssetId === null) {
+          throw new AppError(
+            "Competition entry value cannot be accounted for",
+            409,
+            "COMPETITION_ENTRY_UNRESOLVED"
+          );
+        }
+        await fastify.financialManager.assertCompetitionEntryHeld(tx, {
+          competitionId: fresh.id,
+          journalRequestId: entrant.entryJournalId,
+        });
+        const amountAtomic = entrant.entryAmountAtomic ?? fresh.entryAmountAtomic;
+        if (amountAtomic === null) {
+          throw new AppError(
+            "Competition entry amount is missing",
+            409,
+            "COMPETITION_TERMS_INCOMPLETE"
+          );
+        }
+        const refund = await fastify.financialManager.applyCompetitionEntryRefund(tx, {
+          competitionId: fresh.id,
+          payerId: entrant.principalId,
+          assetId: fresh.entryAssetId,
+          amountAtomic,
+        });
+        await tx.competitionEntrant.update({
+          where: { id: entrant.id },
+          data: { entryState: "REFUNDED", refundJournalId: refund.journalRequestId },
+        });
+        refundedEntries.push({
+          principalId: entrant.principalId,
+          refundJournalId: refund.journalRequestId,
+        });
+      }
+
+      let prizeStatus: CompetitionPrizeStatus = fresh.prizeStatus;
+      if (fresh.mode === "ASSET" && fresh.prizeStatus === "RESERVED") {
+        if (
+          fresh.prizeAssetId === null ||
+          fresh.prizeAmountAtomic === null ||
+          fresh.sponsorId === null
+        ) {
+          throw new AppError(
+            "Competition prize terms are incomplete",
+            409,
+            "COMPETITION_TERMS_INCOMPLETE"
+          );
+        }
+        // Risk-reducing: release without an ACTIVE-asset or readiness gate.
+        await fastify.financialManager.applyCompetitionPrizeRelease(tx, {
+          competitionId: fresh.id,
+          sponsorId: fresh.sponsorId,
+          assetId: fresh.prizeAssetId,
+          amountAtomic: fresh.prizeAmountAtomic,
+        });
+        prizeStatus = "RELEASED";
+      }
+
+      await tx.tournament.update({
+        where: { id: fresh.tournamentId },
+        data: { status: "CANCELLED", finishedAt: now },
+      });
+      await tx.table.update({
+        where: { id: fresh.tournament.tableId },
+        data: { status: "CLOSED" },
+      });
+      await tx.competition.update({
+        where: { id: fresh.id },
+        data: { status: "CANCELLED", cancelledAt: now, prizeStatus },
+      });
+
+      await recordTournamentEvent(tx, {
+        tournamentId: fresh.tournamentId,
+        type: "TOURNAMENT_CANCELLED",
+        payload: {
+          competitionId: fresh.id,
+          tableId: fresh.tournament.tableId,
+          refundedEntries,
+          prizeStatus,
+        },
+        stateFingerprint: `competition-cancelled:${fresh.id}`,
+        requestRef: input.actor.id,
+      });
+    },
+    { maxWait: 10_000, timeout: 15_000 }
+  );
+
+  // Best-effort cache eviction; the database is authoritative.
+  try {
+    await fastify.redis.del(`table:${competition.tournament.tableId}`);
+  } catch {
+    // Redis is only a cache.
+  }
+
+  await recordAcceptedAudit(fastify, {
+    actorId: input.actor.id,
+    action: "COMPETITION_CANCEL",
+    resource: `competition:${input.competitionId}`,
+  });
+
+  const row = await loadCompetition(fastify, input.competitionId);
+  if (!row) throw new AppError("Competition not found", 404, "COMPETITION_NOT_FOUND");
+  return buildCancellationResponse(row);
 }
 
 /**
@@ -1235,11 +1696,34 @@ export async function issueAgentCredential(
     }
   }
 
+  // Rotation never broadens implicitly: when `scopes` is omitted on a rotate,
+  // preserve the existing credential's scopes instead of substituting the
+  // default set. A fresh issue (or an invalid rotation) falls back to the
+  // canonical default; the principal manager still validates the credential.
+  let scopes = input.scopes;
+  if (scopes === undefined && input.credentialId !== undefined) {
+    const existing = await fastify.prisma.serviceCredential.findUnique({
+      where: { id: input.credentialId },
+      select: { userId: true, tableId: true, scopes: true },
+    });
+    if (
+      existing &&
+      existing.userId === entrant.principalId &&
+      existing.tableId === competition.tournament.tableId
+    ) {
+      const preserved = (Array.isArray(existing.scopes) ? existing.scopes : []).filter(
+        (scope): scope is "table:observe" | "table:act" | "table:chat" =>
+          scope === "table:observe" || scope === "table:act" || scope === "table:chat"
+      );
+      if (preserved.length > 0) scopes = preserved;
+    }
+  }
+
   const created = await fastify.principalManager.issueScopedCredential({
     principalId: entrant.principalId,
     tableId: competition.tournament.tableId,
     name: input.name,
-    scopes: input.scopes ?? ["table:observe", "table:act", "table:chat"],
+    scopes: scopes ?? ["table:observe", "table:act", "table:chat"],
     seat: input.seat ?? null,
     expiresAt: input.expiresAt ? new Date(input.expiresAt) : undefined,
     credentialId: input.credentialId ?? null,

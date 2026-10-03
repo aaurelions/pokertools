@@ -27,12 +27,12 @@ versioned, built and (where applicable) published to npm.
 
 <div class="pkg-card">
 <div class="pkg-name"><a href="/pokertools/packages/api">@pokertools/api</a></div>
-<p>Fastify REST/WS API, Redis table state, BullMQ workers, Prisma.</p>
+<p>Fastify REST/WS API, PostgreSQL-authoritative state, Redis cache/queues, BullMQ workers, Prisma.</p>
 </div>
 
 <div class="pkg-card">
 <div class="pkg-name"><a href="/pokertools/packages/custody">@pokertools/custody</a></div>
-<p>Isolated withdrawal signer, receipt/reorg monitoring and treasury reconciliation.</p>
+<p>Isolated withdrawal signer (treasury keys never in the API), receipt/reorg monitoring and treasury reconciliation.</p>
 </div>
 
 <div class="pkg-card">

@@ -1,7 +1,7 @@
 /**
  * Canonical custody worker.
  *
- * Telegram-independent: it drives the withdrawal workflow on a timer and, on a
+ * Drives the withdrawal workflow on a timer and, on a
  * slower cadence, runs treasury reconciliation. It is the only loop started by
  * the custody entrypoint.
  */

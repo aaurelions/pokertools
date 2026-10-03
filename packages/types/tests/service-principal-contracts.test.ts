@@ -1,6 +1,8 @@
 import {
   ProvisionServicePrincipalRequestSchema,
   ProvisionedServicePrincipalSchema,
+  RevokeServicePrincipalDelegationRequestSchema,
+  RevokeServicePrincipalDelegationResponseSchema,
   RotateServiceCredentialRequestSchema,
   ServiceCredentialRefSchema,
 } from "../src/canonical/service-principal";
@@ -43,13 +45,40 @@ describe("service principal provisioning contracts", () => {
     expect(parsed.principalId).toBe("principal-svc-1");
   });
 
-  it("still rejects a scope mix the API must refuse at the boundary", () => {
-    // The contract accepts table scopes and orchestration; the API rejects
-    // mixing them so an orchestration credential is never table-capable.
+  it("rejects a scope mix and unbound table grants at the contract boundary", () => {
+    // The contract itself now enforces the shape the API must refuse: an
+    // orchestration credential is never table-capable, and every table
+    // credential is resource-bound.
     expect(
       CreateServiceCredentialRequestSchema.safeParse({
         name: "mixed",
         scopes: ["table:act", "competition:orchestrate"],
+      }).success
+    ).toBe(false);
+    expect(
+      CreateServiceCredentialRequestSchema.safeParse({
+        name: "unbound",
+        scopes: ["table:act"],
+      }).success
+    ).toBe(false);
+    expect(
+      CreateServiceCredentialRequestSchema.safeParse({
+        name: "orchestration-with-table",
+        scopes: ["competition:orchestrate"],
+        tableId: "table-1",
+      }).success
+    ).toBe(false);
+    expect(
+      CreateServiceCredentialRequestSchema.safeParse({
+        name: "bound",
+        scopes: ["table:act"],
+        tableId: "table-1",
+      }).success
+    ).toBe(true);
+    expect(
+      CreateServiceCredentialRequestSchema.safeParse({
+        name: "orchestrator",
+        scopes: ["competition:orchestrate"],
       }).success
     ).toBe(true);
   });
@@ -66,5 +95,23 @@ describe("service principal provisioning contracts", () => {
         expiresAt: null,
       }).credentialId
     ).toBe("cred-1");
+  });
+
+  it("accepts an empty strict delegation-revoke body and rejects unknown fields", () => {
+    expect(RevokeServicePrincipalDelegationRequestSchema.safeParse({}).success).toBe(true);
+    expect(RevokeServicePrincipalDelegationRequestSchema.safeParse({ force: true }).success).toBe(
+      false
+    );
+  });
+
+  it("parses the durable delegation revocation response", () => {
+    const parsed = RevokeServicePrincipalDelegationResponseSchema.parse({
+      success: true,
+      servicePrincipalId: "principal-svc-1",
+      delegatePrincipalId: "orchestrator-1",
+      revokedAt: "2026-01-01T00:00:00.000Z",
+    });
+    expect(parsed.servicePrincipalId).toBe("principal-svc-1");
+    expect(parsed.revokedAt).toBe("2026-01-01T00:00:00.000Z");
   });
 });

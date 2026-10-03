@@ -204,7 +204,10 @@ model Tournament {
   maxPlayers        Int  // Total tournament capacity (up to 30+)
   tableMaxPlayers   Int  @default(10) // Max players per engine table (≤10)
   balancingTolerance Int @default(2)  // Max difference in player count between tables before rebalancing
-  prizePool         Int  @default(0)
+  // BigInt internally: a 100-player roster of valid int32 buy-ins can exceed
+  // 2^31 chips while staying far below Number.MAX_SAFE_INTEGER. Wire responses
+  // convert exactly at the public boundary.
+  prizePool         BigInt @default(0)
   blindStructure    Json
   payoutPercentages Json
 
@@ -243,7 +246,8 @@ model TournamentEntry {
   seat         Int                   // Global registration seat
   status       TournamentEntryStatus @default(REGISTERED)
   placement    Int?
-  prize        Int                   @default(0)
+  // BigInt internally; the wire boundary converts the exact safe value.
+  prize        BigInt                @default(0)
 
   // Current table assignment (multi-table support)
   currentTableId String?
@@ -255,6 +259,10 @@ model TournamentEntry {
 
   @@unique([tournamentId, userId])
   @@unique([tournamentId, seat])
+  // One finishing placement per tournament. PostgreSQL/SQLite unique indexes
+  // treat NULL as distinct, so unplaced REGISTERED/ACTIVE entries are exempt;
+  // assigned placements can never collide, even under a buggy writer.
+  @@unique([tournamentId, placement])
   @@index([userId, status])
   @@index([currentTableId])
 }
@@ -294,6 +302,7 @@ enum CompetitionEntryState {
   NOT_REQUIRED
   PENDING
   PAID
+  REFUNDED
 }
 
 enum CompetitionPrizeStatus {
@@ -347,6 +356,9 @@ model Competition {
 
   startedAt  DateTime?
   finishedAt DateTime?
+  /// Set exactly when the competition was cancelled before start. Cancellation
+  /// is a terminal prestart transition (`REGISTRATION -> CANCELLED`).
+  cancelledAt DateTime?
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
@@ -369,7 +381,13 @@ model CompetitionEntrant {
   entryState    CompetitionEntryState @default(NOT_REQUIRED)
   // Resolved per-payer amount (nullable for SERVICE / non-paying entrants).
   entryAmountAtomic String?
-  entryJournalId    String? @unique
+  // Exact journal that credited the entry into the competition entry reserve.
+  entryJournalId String? @unique
+  // Journal that transferred the held entry to the sponsor exactly once at
+  // start (set when the competition starts).
+  entrySettlementJournalId String? @unique
+  // Journal that refunded the held entry to the payer at cancellation.
+  refundJournalId String? @unique
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -604,8 +622,6 @@ enum DepositClaimStatus {
 
 enum DepositProvenance {
   DIRECT_TREASURY
-  SWEEP
-  MIGRATION
 }
 
 /// Exact on-chain deposit log identity: (chainId, txHash, logIndex).

@@ -10,8 +10,9 @@
  * When DATABASE_URL is unset or empty (e.g. a CI runner without a database),
  * it supplies a harmless local SQLite URL so that the Prisma client can be
  * generated during `npm ci` / `npm install`. The database file never
- * leaves .runtime/ (which is gitignored) and the generated client is
- * identical regardless of the datasource URL.
+ * leaves .runtime/ (which is gitignored). The relational model is shared, but
+ * the generated client's provider must match its runtime adapter. Deployment
+ * images generate the PostgreSQL client with an explicit PostgreSQL URL.
  *
  * This script exists solely for the prepare lifecycle. Normal developer
  * and operator workflows should use `db:generate` (`prisma generate`)

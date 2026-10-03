@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { QueueEvents } from "bullmq";
 import { Redis } from "ioredis";
-import type { Address } from "viem";
+import type { Address, Hex } from "viem";
 import { AtomicLedger } from "../../../api/src/finance-core.js";
 import { createPrismaClient } from "../../../api/src/utils/prisma-client.js";
 import { bootstrapCanonicalDepositMonitor } from "../../../api/src/workers/canonical-deposit-monitor.js";
@@ -20,6 +20,7 @@ import {
   mintToken,
   readTokenDecimals,
   revertSnapshot,
+  safeHex,
   snapshot,
   transferToken,
 } from "./helpers/anvil-two-chain.js";
@@ -213,7 +214,7 @@ describe("production deposit monitor and multi-chain journal acceptance", () => 
       })
       .toBeGreaterThanOrEqual(3);
     const journalCount = await prisma.journalTransaction.count({ where: { assetId: assets[0] } });
-    await revertSnapshot(chainA, reorgSnapshot);
+    await revertSnapshot(chainA, safeHex(reorgSnapshot, "reorg snapshot id"));
     await mine(chainA, 5);
     expect(
       await chainA.publicClient
@@ -269,7 +270,7 @@ describe("production deposit monitor and multi-chain journal acceptance", () => 
     // reject the public claim, and leave its journal/projection untouched.
     const receipt = await transferToken(chainB, chainBToken!.address, 11, treasury, 10n ** 18n);
     const [log] = findTransferLogs(receipt, chainBToken!.address, { to: treasury });
-    proxySets[1].proxies[1].state.blockHashOverride = new Map([
+    proxySets[1].proxies[1].state.blockHashOverride = new Map<string, Hex>([
       [`0x${receipt.blockNumber.toString(16)}`, `0x${"ab".repeat(32)}`],
     ]);
     const before = await prisma.journalTransaction.count({ where: { assetId: assets[1] } });

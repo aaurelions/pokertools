@@ -33,7 +33,7 @@ const dbPath = join(tmpDir, "validate.db");
 const dbUrl = `file:${dbPath}`;
 
 try {
-  execSync("npx prisma db push --accept-data-loss", {
+  execSync("npx prisma db push", {
     cwd: packageDir,
     env: { ...process.env, DATABASE_URL: dbUrl },
     stdio: "pipe",

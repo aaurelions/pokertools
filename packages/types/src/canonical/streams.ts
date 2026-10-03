@@ -79,15 +79,16 @@ export type ChatPage = z.infer<typeof ChatPageSchema>;
  * Durable, append-only, ordered canonical tournament audit event.
  *
  * Records the accepted facts of a tournament lifecycle transition
- * (`TOURNAMENT_STARTED` / `TOURNAMENT_RECONCILED` / `TABLE_CLOSED` /
- * `TOURNAMENT_SETTLED`) with a stable `stateFingerprint` so a repeated
- * reconcile or settlement cannot append a spurious event or duplicate the
- * settled economic payout. `requestRef` optionally references the accepted
+ * (`TOURNAMENT_STARTED` / `TOURNAMENT_RECONCILED` / `TOURNAMENT_CANCELLED` /
+ * `TABLE_CLOSED` / `TOURNAMENT_SETTLED`) with a stable `stateFingerprint` so a
+ * repeated reconcile or settlement cannot append a spurious event or duplicate
+ * the settled economic payout. `requestRef` optionally references the accepted
  * operator request/actor.
  */
 export const TournamentEventTypeSchema = z.enum([
   "TOURNAMENT_STARTED",
   "TOURNAMENT_RECONCILED",
+  "TOURNAMENT_CANCELLED",
   "TABLE_CLOSED",
   "TOURNAMENT_SETTLED",
 ]);

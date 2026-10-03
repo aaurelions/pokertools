@@ -327,14 +327,14 @@ describe("competition paid admission freeze race (PostgreSQL + Redis)", () => {
         booted.baseUrl,
         "POST",
         `/competitions/${competition.id}/opt-in`,
-        { token: payer.token, body: { idempotencyKey: crypto.randomUUID() } }
+        { token: payer.token, body: {} }
       )
     );
     expect(optInBlocked.status, JSON.stringify(optInBlocked.body)).toBe(409);
     expect(optInBlocked.body.error).toBe("COMPETITION_ASSET_NOT_ACTIVE");
     expect(
       await booted.app.prisma.journalTransaction.findUnique({
-        where: { requestId: `competition-entry:${competition.id}:${payer.id}` },
+        where: { requestId: `competition-entry-reserve:${competition.id}:${payer.id}` },
       })
     ).toBeNull();
     expect(await atomicBalance(booted.app, payer.id, "USER_AVAILABLE")).toBe(payerBefore);
@@ -355,7 +355,7 @@ describe("competition paid admission freeze race (PostgreSQL + Redis)", () => {
       `/competitions/${competition.id}/opt-in`,
       {
         token: payer.token,
-        body: { idempotencyKey: crypto.randomUUID() },
+        body: {},
       }
     );
     expect(optIn.status).toBe(200);
@@ -366,7 +366,7 @@ describe("competition paid admission freeze race (PostgreSQL + Redis)", () => {
         `/competitions/${competition.id}/start`,
         {
           token: operator.token,
-          body: { idempotencyKey: crypto.randomUUID() },
+          body: {},
         }
       )
     );

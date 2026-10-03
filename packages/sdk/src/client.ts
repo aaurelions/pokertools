@@ -44,8 +44,10 @@ import type {
   CreateServiceCredentialRequest,
   CreatedServiceCredential,
   ServiceCredentialSummary,
+  PrincipalId,
   ProvisionServicePrincipalRequest,
   ProvisionedServicePrincipal,
+  RevokeServicePrincipalDelegationResponse,
   RotateServiceCredentialRequest,
   Asset,
   Balance as AssetBalance,
@@ -66,8 +68,11 @@ import {
   CredentialIdSchema,
   ListServiceCredentialsResponseSchema,
   RevokeServiceCredentialResponseSchema,
+  PrincipalIdSchema,
   ProvisionServicePrincipalRequestSchema,
   ProvisionedServicePrincipalSchema,
+  RevokeServicePrincipalDelegationRequestSchema,
+  RevokeServicePrincipalDelegationResponseSchema,
   RotateServiceCredentialRequestSchema,
   GetTablesResponseSchema,
   GetTableStateResponseSchema,
@@ -253,6 +258,33 @@ export class PokerClient {
     const parsed = ProvisionServicePrincipalRequestSchema.parse(request);
     const response = await this.request<unknown>("POST", "/auth/service-principals", parsed);
     return ProvisionedServicePrincipalSchema.parse(response);
+  }
+
+  /**
+   * Revoke an orchestration delegation for a durable SERVICE principal
+   * (`POST /auth/service-principals/:id/delegation/revoke`, operator-only).
+   *
+   * Durable and idempotent: a repeat returns the original `revokedAt`
+   * timestamp. Revocation blocks the delegate from rostering the principal
+   * into new competitions and from issuing further agent credentials for it,
+   * but deliberately does not revoke the principal or any already-issued
+   * table credential — those keep working until they expire or are explicitly
+   * revoked. Re-delegation/reassignment is not supported; provision a new
+   * principal instead. Naturally idempotent, so the transport may replay the
+   * identical empty bytes after a lost response.
+   */
+  async revokeServicePrincipalDelegation(
+    principalId: PrincipalId
+  ): Promise<RevokeServicePrincipalDelegationResponse> {
+    const parsedId = PrincipalIdSchema.parse(principalId);
+    const parsed = RevokeServicePrincipalDelegationRequestSchema.parse({});
+    const response = await this.request<unknown>(
+      "POST",
+      `/auth/service-principals/${encodeURIComponent(parsedId)}/delegation/revoke`,
+      parsed,
+      { retrySafe: true }
+    );
+    return RevokeServicePrincipalDelegationResponseSchema.parse(response);
   }
 
   /**
@@ -820,13 +852,15 @@ export class PokerClient {
    * Delegates to the shared {@link PokerHttpTransport}; `options.allowStatus`
    * lists non-2xx status codes whose bodies are still typed responses (e.g.
    * `/ready` returns 503 with the canonical readiness payload). Those statuses
-   * resolve instead of throwing and are never retried.
+   * resolve instead of throwing and are never retried. `options.retrySafe`
+   * explicitly marks a naturally idempotent mutation (e.g. delegation
+   * revocation) for replay; arbitrary mutations must never set it.
    */
   private async request<T>(
     method: string,
     path: string,
     body?: unknown,
-    options?: { allowStatus?: readonly number[] }
+    options?: { allowStatus?: readonly number[]; retrySafe?: boolean }
   ): Promise<T> {
     return this.transport.request<T>(method, path, body, options);
   }

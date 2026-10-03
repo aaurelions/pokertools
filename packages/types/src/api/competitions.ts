@@ -8,8 +8,11 @@
 
 export type {
   AgentTableScope,
+  CancelCompetitionRequest,
+  CancelCompetitionResponse,
   Competition,
   CompetitionAssetAmount,
+  CompetitionCancellationEntry,
   CompetitionEntrant,
   CompetitionEntrantSpec,
   CompetitionEntryPayer,
@@ -37,7 +40,10 @@ export type {
 
 export {
   AgentTableScopeSchema,
+  CancelCompetitionRequestSchema,
+  CancelCompetitionResponseSchema,
   CompetitionAssetAmountSchema,
+  CompetitionCancellationEntrySchema,
   CompetitionEntrantSchema,
   CompetitionEntrantSpecSchema,
   CompetitionEntryPayerSchema,

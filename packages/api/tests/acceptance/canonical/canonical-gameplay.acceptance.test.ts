@@ -101,7 +101,7 @@ describe("canonical gameplay acceptance", () => {
 
   it("completes a two-SERVICE canonical hand with chip conservation", async () => {
     const tableId = await newTable(2);
-    const [a, b] = [await newService(), await newService()];
+    const [a, b] = [await newService({ tableId }), await newService({ tableId })];
     await seatAll(tableId, [a, b]);
 
     // The same published SDK contract used by browser wallets also accepts
@@ -138,8 +138,8 @@ describe("canonical gameplay acceptance", () => {
     const [walletA, walletB, serviceA, serviceB] = [
       await newWallet(),
       await newWallet(),
-      await newService(),
-      await newService(),
+      await newService({ tableId }),
+      await newService({ tableId }),
     ];
     const principals: AnyPrincipal[] = [walletA, serviceA, walletB, serviceB];
     await seatAll(tableId, principals);
@@ -154,7 +154,7 @@ describe("canonical gameplay acceptance", () => {
     const tableId = await newTable(10);
     const principals: AnyPrincipal[] = [];
     for (let index = 0; index < 10; index++) {
-      principals.push(await newService());
+      principals.push(await newService({ tableId }));
     }
     await seatAll(tableId, principals);
 

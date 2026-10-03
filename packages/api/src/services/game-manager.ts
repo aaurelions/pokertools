@@ -2,7 +2,13 @@ import type { Redis } from "ioredis";
 import type Redlock from "redlock";
 import type { Prisma, PrismaClient } from "../../generated/prisma/index.js";
 import type { JobQueues } from "../plugins/queue.js";
-import { PokerEngine, type Action, type GameState, type PublicState } from "@pokertools/engine";
+import {
+  PokerEngine,
+  type Action,
+  type GameState,
+  type PublicState,
+  type SitAction,
+} from "@pokertools/engine";
 import {
   CanonicalActionRequestSchema,
   CanonicalActionResultSchema,
@@ -166,6 +172,12 @@ export class GameManager {
         expectedVersion: options.expectedVersion,
         canonical: false,
         skipIdentity: options.skipIdentity,
+        // SIT must never overwrite an occupied seat or duplicate a principal;
+        // validate against the exact authoritative snapshot the CAS commits.
+        validateSnapshot:
+          action.type === "SIT"
+            ? (snapshot: Snapshot) => validateSitSnapshot(snapshot, action)
+            : undefined,
       },
       options.skipLock,
       "throw"
@@ -265,18 +277,11 @@ export class GameManager {
     }
 
     // SIT overwrites a seat unconditionally in the engine, so the authoritative
-    // snapshot the CAS will commit against must be checked for occupancy.
+    // snapshot the CAS will commit against must be checked for occupancy and
+    // for a principal already seated elsewhere.
     const validateSnapshot =
       action.type === "SIT"
-        ? (snapshot: Snapshot) => {
-            if (snapshot.players[action.seat]) {
-              throw new GameAuthorityError(
-                "SEAT_OCCUPIED",
-                `Seat ${action.seat} is already occupied`,
-                400
-              );
-            }
-          }
+        ? (snapshot: Snapshot) => validateSitSnapshot(snapshot, action)
         : undefined;
 
     const result = await this.applyMutationInTx(tx, {
@@ -765,22 +770,30 @@ export class GameManager {
   }
 
   private async dispatchAndCache(tableId: string): Promise<void> {
+    // Redis/BullMQ is transport only. Commands queue indefinitely while Redis
+    // is unreachable, so every post-commit side effect is bounded: an accepted
+    // database mutation must never hang on non-authoritative transport. The
+    // durable outbox rows stay PENDING/FAILED for recovery to re-drive.
     try {
-      await dispatchPendingOutbox(this.prisma, this.queues, this.redis, {
-        tableId,
-        limit: 200,
-      });
+      await boundedRedisWork(
+        dispatchPendingOutbox(this.prisma, this.queues, this.redis, {
+          tableId,
+          limit: 200,
+        })
+      );
     } catch {
       // Outbox rows are durable and dispatched by recovery.
     }
     try {
       const record = await loadAuthoritativeTable(this.prisma, tableId);
       if (record?.snapshot) {
-        await this.redis.set(
-          `table:${tableId}`,
-          JSON.stringify(record.snapshot),
-          "EX",
-          appConfig.TABLE_REDIS_TTL_SECONDS
+        await boundedRedisWork(
+          this.redis.set(
+            `table:${tableId}`,
+            JSON.stringify(record.snapshot),
+            "EX",
+            appConfig.TABLE_REDIS_TTL_SECONDS
+          )
         );
       }
     } catch {
@@ -1231,6 +1244,30 @@ export class GameManager {
   }
 }
 
+/**
+ * Bound a best-effort post-commit Redis side effect. ioredis/BullMQ commands
+ * queue indefinitely while Redis is unreachable; an accepted DB mutation must
+ * never hang on transport that is explicitly not authoritative. The raced
+ * operation keeps its own rejection handler so a late settle cannot surface as
+ * an unhandled rejection.
+ */
+const POST_COMMIT_REDIS_TIMEOUT_MS = 2_000;
+
+async function boundedRedisWork(operation: Promise<unknown>): Promise<void> {
+  operation.catch(() => undefined);
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      operation,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, POST_COMMIT_REDIS_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function isUniqueConstraintError(error: unknown): boolean {
   return (
     typeof error === "object" &&
@@ -1238,6 +1275,26 @@ function isUniqueConstraintError(error: unknown): boolean {
     "code" in error &&
     (error as { code?: string }).code === "P2002"
   );
+}
+
+/**
+ * SIT safety against the exact authoritative snapshot the CAS commits: a SIT
+ * must never overwrite an occupied seat and must never duplicate a principal
+ * that is already seated at another seat on the same table. This is the single
+ * management-path guard shared by `processAction` and
+ * `applyManagementMutationInTx`; the pure engine enforces the same invariants.
+ */
+function validateSitSnapshot(snapshot: Snapshot, action: SitAction): void {
+  if (snapshot.players[action.seat]) {
+    throw new GameAuthorityError("SEAT_OCCUPIED", `Seat ${action.seat} is already occupied`, 400);
+  }
+  if (snapshot.players.some((player) => player?.id === action.playerId)) {
+    throw new GameAuthorityError(
+      "SEAT_OCCUPIED",
+      `Player ${action.playerId} is already seated at another seat`,
+      400
+    );
+  }
 }
 
 function isRetryableConflict(error: unknown): boolean {

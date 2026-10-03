@@ -660,6 +660,20 @@ export class FinancialManager {
   }
 
   /**
+   * Competition entry reserves use a distinct, scoped owner account (existing
+   * RESERVE class) so a paid entry is held by the competition — not by the
+   * sponsor — until start. Cancellation can then refund every held entry
+   * exactly, even when the sponsor has spent its balance, and a sponsor can
+   * never spend value that is still refundable.
+   */
+  private competitionEntryReserveSpec(competitionId: string): {
+    ownerId: string;
+    class: "TOURNAMENT_RESERVE";
+  } {
+    return { ownerId: `competition-entry:${competitionId}`, class: "TOURNAMENT_RESERVE" };
+  }
+
+  /**
    * Lock every referenced asset in canonical (sorted) order and re-assert
    * ACTIVE under the durable lock.
    *
@@ -704,17 +718,17 @@ export class FinancialManager {
   }
 
   /**
-   * Charge one configured WALLET entry payer into the authorized sponsor's
-   * operator account. Idempotent on `competition-entry:<competitionId>:<payerId>`;
-   * a different amount under the same identity is a conflict, never a second
-   * charge.
+   * Charge one configured WALLET entry payer into the competition's own entry
+   * reserve. The value is held by the competition (never by the sponsor) until
+   * start, so cancellation can always refund it. Idempotent on
+   * `competition-entry-reserve:<competitionId>:<payerId>`; a different amount
+   * under the same identity is a conflict, never a second charge.
    */
   async applyCompetitionEntry(
     tx: Prisma.TransactionClient,
     input: {
       competitionId: string;
       payerId: string;
-      sponsorId: string;
       assetId: string;
       amountAtomic: string;
     }
@@ -727,20 +741,134 @@ export class FinancialManager {
       ownerId: input.payerId,
       class: "USER_AVAILABLE",
     });
-    const to = await this.ledger.ensureAccount(tx, {
+    const reserve = await this.ledger.ensureAccount(tx, {
+      assetId: input.assetId,
+      ...this.competitionEntryReserveSpec(input.competitionId),
+    });
+    const posted = await this.ledger.post(tx, {
+      requestId: `competition-entry-reserve:${input.competitionId}:${input.payerId}`,
+      assetId: input.assetId,
+      postings: [
+        { accountId: from.accountId, amountAtomic: (-amount).toString() },
+        { accountId: reserve.accountId, amountAtomic: amount.toString() },
+      ],
+    });
+    return { journalRequestId: posted.requestId };
+  }
+
+  /**
+   * Transfer one held entry from the competition entry reserve to the
+   * authorized sponsor's operator account exactly once, at start. Idempotent
+   * on `competition-entry-release:<competitionId>:<payerId>`.
+   */
+  async applyCompetitionEntryRelease(
+    tx: Prisma.TransactionClient,
+    input: {
+      competitionId: string;
+      payerId: string;
+      sponsorId: string;
+      assetId: string;
+      amountAtomic: string;
+    }
+  ): Promise<{ journalRequestId: string }> {
+    const amount = this.positiveAtomic(input.amountAtomic, "competition entry release");
+    // Admission path: re-assert ACTIVE under the asset lock before crediting.
+    await this.lockAndRequireActiveAssets(tx, [input.assetId]);
+    const reserve = await this.ledger.ensureAccount(tx, {
+      assetId: input.assetId,
+      ...this.competitionEntryReserveSpec(input.competitionId),
+    });
+    const sponsor = await this.ledger.ensureAccount(tx, {
       assetId: input.assetId,
       ownerId: input.sponsorId,
       class: "OPERATOR",
     });
     const posted = await this.ledger.post(tx, {
-      requestId: `competition-entry:${input.competitionId}:${input.payerId}`,
+      requestId: `competition-entry-release:${input.competitionId}:${input.payerId}`,
       assetId: input.assetId,
       postings: [
-        { accountId: from.accountId, amountAtomic: (-amount).toString() },
-        { accountId: to.accountId, amountAtomic: amount.toString() },
+        { accountId: reserve.accountId, amountAtomic: (-amount).toString() },
+        { accountId: sponsor.accountId, amountAtomic: amount.toString() },
       ],
     });
     return { journalRequestId: posted.requestId };
+  }
+
+  /**
+   * Refund one held entry from the competition entry reserve to its payer at
+   * cancellation. Risk-reducing: deliberately not gated on ACTIVE assets or
+   * financial readiness, so a frozen/degraded platform can still return value.
+   * Idempotent on `competition-entry-refund:<competitionId>:<payerId>`. The
+   * reserve is non-negative-enforced, so a drained reserve fails closed
+   * instead of inventing funding.
+   */
+  async applyCompetitionEntryRefund(
+    tx: Prisma.TransactionClient,
+    input: {
+      competitionId: string;
+      payerId: string;
+      assetId: string;
+      amountAtomic: string;
+    }
+  ): Promise<{ journalRequestId: string }> {
+    const amount = this.positiveAtomic(input.amountAtomic, "competition entry refund");
+    const reserve = await this.ledger.ensureAccount(tx, {
+      assetId: input.assetId,
+      ...this.competitionEntryReserveSpec(input.competitionId),
+    });
+    const payer = await this.ledger.ensureAccount(tx, {
+      assetId: input.assetId,
+      ownerId: input.payerId,
+      class: "USER_AVAILABLE",
+    });
+    const posted = await this.ledger.post(tx, {
+      requestId: `competition-entry-refund:${input.competitionId}:${input.payerId}`,
+      assetId: input.assetId,
+      postings: [
+        { accountId: reserve.accountId, amountAtomic: (-amount).toString() },
+        { accountId: payer.accountId, amountAtomic: amount.toString() },
+      ],
+    });
+    return { journalRequestId: posted.requestId };
+  }
+
+  /**
+   * Refuse malformed canonical entry evidence: a PAID entry must be evidenced
+   * by its exact reserve-credit journal — the immutable journal whose positive
+   * leg credits this competition's own entry reserve. A missing, unsealed or
+   * foreign (e.g. operator-credited) journal fails closed before any value
+   * moves, so no transfer can ever draw on another payer's held funds.
+   */
+  async assertCompetitionEntryHeld(
+    tx: Prisma.TransactionClient,
+    input: { competitionId: string; journalRequestId: string }
+  ): Promise<void> {
+    const journal = await tx.journalTransaction.findUnique({
+      where: { requestId: input.journalRequestId },
+      include: {
+        postings: {
+          include: {
+            account: { select: { ownerId: true, class: true } },
+          },
+        },
+      },
+    });
+    const owner = this.competitionEntryReserveSpec(input.competitionId).ownerId;
+    const held =
+      journal?.sealed === true &&
+      journal.postings.some(
+        (posting) =>
+          BigInt(posting.amountAtomic) > 0n &&
+          posting.account.ownerId === owner &&
+          posting.account.class === "TOURNAMENT_RESERVE"
+      );
+    if (!held) {
+      throw new AppError(
+        "Competition entry journal evidence is not the canonical reserve credit",
+        409,
+        "COMPETITION_ENTRY_UNRESOLVED"
+      );
+    }
   }
 
   /**
@@ -788,9 +916,8 @@ export class FinancialManager {
    * (`competition-prize-settlement:<competitionId>`), so the first committed
    * disposition wins: a retry of the same disposition replays it, while a
    * divergent second disposition (different payload under the same requestId)
-   * is refused instead of creating value. Legacy per-direction requestIds are
-   * also treated as an existing disposition. The asset lock serializes
-   * concurrent dispositions for the same asset before the check.
+   * is refused instead of creating value. The asset lock serializes concurrent
+   * dispositions for the same asset before the check.
    */
   private async lockAndCheckCompetitionDisposition(
     tx: Prisma.TransactionClient,
@@ -799,27 +926,7 @@ export class FinancialManager {
   ): Promise<string> {
     // Asset-first lock ordering; also serializes concurrent dispositions.
     await this.ledger.lockAsset(tx, assetId);
-    const requestId = `competition-prize-settlement:${competitionId}`;
-    const existing = await tx.journalTransaction.findFirst({
-      where: {
-        requestId: {
-          in: [
-            requestId,
-            `competition-prize-payout:${competitionId}`,
-            `competition-prize-release:${competitionId}`,
-          ],
-        },
-      },
-      select: { requestId: true },
-    });
-    if (existing && existing.requestId !== requestId) {
-      throw new AppError(
-        "Competition prize was already disposed by a different disposition",
-        409,
-        "COMPETITION_PRIZE_ALREADY_DISPOSED"
-      );
-    }
-    return requestId;
+    return `competition-prize-settlement:${competitionId}`;
   }
 
   /**
@@ -924,14 +1031,5 @@ export class FinancialManager {
       }
       throw error;
     }
-  }
-
-  /** Current competition prize reservation balance (atomic string). */
-  async getCompetitionPrizeReserve(competitionId: string, assetId: string): Promise<string> {
-    const account = await this.ledger.getAccount(this.prisma, {
-      assetId,
-      ...this.competitionReserveSpec(competitionId),
-    });
-    return account?.balanceAtomic ?? "0";
   }
 }

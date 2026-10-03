@@ -6,10 +6,13 @@
  * compose it; neither wraps the other.
  *
  * Retry safety: reads (GET) are always retried. A mutation is retried only when
- * its body carries a stable server-recognized identity (`idempotencyKey`,
- * canonical `requestId`, a signed withdrawal intent, or an exact deposit log
- * identity), and the identical serialized bytes are replayed, so a lost
- * response can never create a second logical mutation.
+ * the caller explicitly declares the operation retry-safe (`retrySafe: true`,
+ * for naturally idempotent resource operations such as competition
+ * opt-in/start/settle/cancel) or when its body carries a stable
+ * server-recognized identity (`idempotencyKey`, canonical `requestId`, a signed
+ * withdrawal intent, or an exact deposit log identity). The identical serialized
+ * bytes are replayed, so a lost response can never create a second logical
+ * mutation; arbitrary mutations are never replayed on a guess.
  */
 
 import { PokerSDKConfig, PokerSDKError } from "./types";
@@ -70,6 +73,15 @@ export interface TransportRequestOptions {
    * accept failure bodies.
    */
   allowStatus?: readonly number[];
+  /**
+   * Explicit retry-safety declaration for a mutation whose server operation is
+   * naturally idempotent for its resource even though the body carries no
+   * idempotency identity (e.g. competition opt-in/start/settle/cancel, whose
+   * request bodies are strict empty objects). This is independent of the
+   * body-identity heuristic: only set it for operations the server guarantees
+   * to be replay-safe, and never for arbitrary mutations.
+   */
+  retrySafe?: boolean;
 }
 
 /**
@@ -129,7 +141,7 @@ export class PokerHttpTransport {
       headers.Authorization = `Bearer ${this.token}`;
     }
 
-    const canRetry = method === "GET" || hasStableOperationId(body);
+    const canRetry = method === "GET" || options?.retrySafe === true || hasStableOperationId(body);
     const retryCount = canRetry ? this.retry.count : 0;
     let lastError: Error | null = null;
 
