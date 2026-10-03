@@ -478,7 +478,7 @@ export function createDefaultRpcClient(
       return BigInt(await client.getChainId());
     },
     async getBlockNumber() {
-      return client.getBlockNumber();
+      return client.getBlockNumber({ cacheTime: 0 });
     },
     async getBlock(args) {
       const block =
