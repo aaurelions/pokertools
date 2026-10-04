@@ -144,7 +144,7 @@ async function startDockerRedis(port: number): Promise<string> {
   const name = `pk-accept-redis-${process.pid}-${Date.now()}`;
   await docker([
     "run",
-    "--rm",
+    // Recovery tests stop/restart this container; teardown removes it explicitly.
     "-d",
     "--name",
     name,
@@ -219,7 +219,7 @@ export async function startRedis(): Promise<{
 /** Restart the Redis process described by an acceptance env (recovery tests). */
 export async function restartRedis(env: AcceptanceEnv): Promise<void> {
   if (env.useDockerRedis && env.redisContainer) {
-    await docker(["restart", env.redisContainer]).catch(() => undefined);
+    await docker(["restart", env.redisContainer]);
     await waitForPort("127.0.0.1", env.redisPort, 30_000);
     return;
   }
