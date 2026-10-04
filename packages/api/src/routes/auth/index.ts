@@ -23,6 +23,7 @@ import {
 } from "@pokertools/types";
 import { allowedSiweChainIds, config } from "../../config.js";
 import { toWirePrincipal } from "../../services/principal-manager.js";
+import { ipRateLimitKey } from "../../rate-limiting.js";
 import type { PrismaClient } from "../../../generated/prisma/index.js";
 
 // Wallets and the API can run on different clocks (including Docker's VM).
@@ -72,15 +73,23 @@ async function findOrCreateWalletUser(
   }
 }
 
-export const authRoutes: FastifyPluginAsync = async (fastify) => {
+export const authRoutes: FastifyPluginAsync<{ strictRateLimits?: boolean }> = async (
+  fastify,
+  options
+) => {
   // POST /auth/nonce
   fastify.post(
     "/nonce",
     {
       config: {
         rateLimit: {
-          max: config.NODE_ENV === "test" ? 100 : config.AUTH_NONCE_RATE_LIMIT_MAX,
+          max:
+            config.NODE_ENV === "test" && !options.strictRateLimits
+              ? 100
+              : config.AUTH_NONCE_RATE_LIMIT_MAX,
           timeWindow: "1 minute",
+          hook: "onRequest",
+          keyGenerator: ipRateLimitKey,
         },
       },
     },
@@ -99,8 +108,13 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     {
       config: {
         rateLimit: {
-          max: config.NODE_ENV === "test" ? 100 : config.AUTH_LOGIN_RATE_LIMIT_MAX,
+          max:
+            config.NODE_ENV === "test" && !options.strictRateLimits
+              ? 100
+              : config.AUTH_LOGIN_RATE_LIMIT_MAX,
           timeWindow: "1 minute",
+          hook: "onRequest",
+          keyGenerator: ipRateLimitKey,
         },
       },
     },

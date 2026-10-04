@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-10-05
+
+### Security
+
+- Rate limiting now enforces two explicit boundaries. The authenticated-principal application budget stays **100 requests/minute** (`RATE_LIMIT_MAX`, unchanged) and is keyed on the verified principal's kind and ID rather than the credential or client IP, so independent principals sharing an egress address no longer share one budget. A separate coarse per-client-network guard (`RATE_LIMIT_NETWORK_MAX`, default 1000/minute per normalized client IP) runs before credential verification and charges malformed and unauthenticated requests. Forwarded client addresses are honored only for explicitly configured `TRUSTED_PROXY_CIDRS`; proxy trust defaults to disabled. Financial, custody and poker behavior are unchanged.
+
 ## [2.0.0] - 2026-10-03
 
 ### Added
@@ -651,6 +657,7 @@ Given a version number MAJOR.MINOR.PATCH:
 - [NPM: @pokertools/evaluator](https://www.npmjs.com/package/@pokertools/evaluator)
 - [NPM: @pokertools/types](https://www.npmjs.com/package/@pokertools/types)
 
+[2.0.1]: https://github.com/aaurelions/pokertools/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/aaurelions/pokertools/compare/v1.0.20...v2.0.0
 [1.0.20]: https://github.com/aaurelions/pokertools/compare/v1.0.19...v1.0.20
 [1.0.19]: https://github.com/aaurelions/pokertools/compare/v1.0.18...v1.0.19
