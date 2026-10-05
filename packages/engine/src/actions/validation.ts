@@ -284,6 +284,22 @@ function validateDealAction(state: GameState): void {
     }
   }
 
+  // A showdown is only a valid deal boundary once the hand is settled. An
+  // unresolved showdown that still holds chips (pot and/or unmatched bets)
+  // must never be overwritten by a DEAL: the next hand would silently discard
+  // the undistributed pot. A settled showdown (`winners` present) keeps the
+  // valid manual-DEAL race path.
+  if (state.handNumber > 0 && state.street === Street.SHOWDOWN && state.winners === null) {
+    const potTotal = state.pots.reduce((sum, pot) => sum + pot.amount, 0);
+    if (potTotal > 0 || state.currentBets.size > 0) {
+      throw new IllegalActionError(
+        ErrorCodes.CANNOT_DEAL,
+        "Cannot deal while the showdown is unresolved: the pot has not been awarded",
+        { street: state.street, potTotal, bets: state.currentBets.size }
+      );
+    }
+  }
+
   const isTournament = !!state.config.blindStructure;
   const activePlayers = state.players.filter(
     (p) => p && p.stack > 0 && (isTournament || !p.isSittingOut)

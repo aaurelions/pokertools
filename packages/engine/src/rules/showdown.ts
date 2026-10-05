@@ -230,8 +230,13 @@ export function shouldShowdown(state: GameState): boolean {
   if (state.street !== Street.SHOWDOWN) return false;
   if (state.winners !== null) return false;
 
-  const activePlayers = state.players.filter(
+  const livePlayers = state.players.filter(
     (p) => p && (p.status === PlayerStatus.ACTIVE || p.status === PlayerStatus.ALL_IN)
   );
-  return activePlayers.length >= 2;
+  // A lone live hand (including an all-in wager that was never called, e.g. a
+  // sitting-out opponent already folded by forced blinds) wins the pot
+  // uncontested. `determineWinners` resolves a single eligible player without
+  // evaluating cards; requiring two live players here would strand the pot at
+  // SHOWDOWN with `winners === null`.
+  return livePlayers.length >= 1;
 }
