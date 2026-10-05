@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
-- Added focused next-hand identity concurrency regressions: a benign same-hand version change still auto-deals exactly once with new blinds, a manual DEAL wins, an H1 job cannot advance a table whose current hand is H2 at showdown, duplicate delivery deals once, fewer than two active players parks the table in `WAITING`, the normal path auto-deals, legacy payloads keep the strict version guard, and a matching hand without winners is never advanced.
+- Added focused next-hand identity concurrency regressions: a real tournament `NEXT_BLIND_LEVEL` advance after hand completion still auto-deals exactly once at the advanced blind level (and a late same-hand SHOW does too), a manual DEAL wins, an H1 job cannot advance a table whose current hand is H2 at showdown, duplicate delivery deals once, fewer than two active players parks the table in `WAITING`, the normal path auto-deals, legacy payloads keep the strict version guard, and a matching hand without winners is never advanced.
 
 ## [2.0.1] - 2026-10-05
 

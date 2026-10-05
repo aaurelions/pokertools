@@ -35,9 +35,10 @@ export interface NextHandIntentPayload {
  *   a manual DEAL, a newer hand, or a duplicate/replayed job can never advance
  *   play twice.
  * - A matching identity only proceeds when the authoritative hand is a
- *   completed SHOWDOWN with winners; a benign same-hand version change (e.g. a
- *   late SHOW at showdown) must not strand the auto-deal, but an unsettled hand
- *   is never re-dealt.
+ *   completed SHOWDOWN with winners; a benign same-hand version change (a late
+ *   SHOW, or a tournament NEXT_BLIND_LEVEL advance after the hand completed)
+ *   must not strand the auto-deal, and the new hand inherits the advanced
+ *   state. An unsettled hand is never re-dealt.
  * - Legacy payloads without an identity keep the strict version guard and are
  *   never guessed at.
  *
@@ -90,8 +91,11 @@ export async function executeNextHandIntent(
       return;
     }
 
-    // CAS against the version just read under the lock; passing a stale payload
-    // version would weaken the compare-and-set.
+    // Submit against the version just read under the lock, not the intent's
+    // original version: a benign same-hand advance (e.g. NEXT_BLIND_LEVEL)
+    // makes the payload version stale, and using it would make this valid
+    // intent no-op. The in-transaction CAS still rejects any write race that
+    // lands after this read.
     await manager.processAction(tableId, { type: ActionType.DEAL }, "", {
       skipLock: true,
       expectedVersion: record.stateVersion,

@@ -1,5 +1,6 @@
 /// <reference path="../../types/fastify.d.ts" />
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ActionType } from "@pokertools/types";
 import {
   initTestContext,
   runCleanup,
@@ -22,8 +23,9 @@ import {
  * The auto-deal job is bound to the table-scoped canonical identity of the hand
  * that completed (`${tableId}_${handId}`). These exercise the real GameManager
  * and the production next-hand handler against the authoritative snapshot:
- * exactly-once auto-deal after benign same-hand version movement, manual-DEAL
- * wins, stale/duplicate jobs, insufficient players, legacy payloads and the
+ * exactly-once auto-deal after benign same-hand version movement (a real
+ * tournament NEXT_BLIND_LEVEL advance, and a late SHOW), manual-DEAL wins,
+ * stale/duplicate jobs, insufficient players, legacy payloads and the
  * winners-absent guard.
  */
 describe("Next-hand identity concurrency", () => {
@@ -53,7 +55,20 @@ describe("Next-hand identity concurrency", () => {
       (sum: number, player: any) => sum + (player?.stack ?? 0),
       0
     );
-    return stacks + sumCurrentBets(state);
+    const pots = (state.pots ?? []).reduce(
+      (sum: number, pot: any) => sum + (Number(pot?.amount) || 0),
+      0
+    );
+    return stacks + sumCurrentBets(state) + pots;
+  }
+
+  /** Real tournament blind escalation through the management mutation path. */
+  async function advanceBlindLevel(tableId: string): Promise<void> {
+    await ctx.app.gameManager.processAction(
+      tableId,
+      { type: ActionType.NEXT_BLIND_LEVEL },
+      ctx.users[0].id
+    );
   }
 
   /** The durable intent written by the completion of `handId`. */
@@ -67,22 +82,31 @@ describe("Next-hand identity concurrency", () => {
     return row.payload as NextHandIntentPayload;
   }
 
-  /** Create a cash table, seat two players and complete hand H1 by folding. */
-  async function setupCompletedHand(name: string): Promise<{
+  /** Create a table, seat two players and complete hand H1 by folding. */
+  async function setupCompletedHand(
+    name: string,
+    options: {
+      mode?: "CASH" | "TOURNAMENT";
+      smallBlind?: number;
+      bigBlind?: number;
+      stack?: number;
+    } = {}
+  ): Promise<{
     tableId: string;
     tokens: string[];
     showdown: any;
     intent: NextHandIntentPayload;
   }> {
+    const { mode = "CASH", smallBlind = 5, bigBlind = 10, stack = 1000 } = options;
     const [player1, player2] = ctx.users;
     const tableId = await createTable(ctx.app, player1.token, {
       name,
-      mode: "CASH",
-      smallBlind: 5,
-      bigBlind: 10,
+      mode,
+      smallBlind,
+      bigBlind,
     });
-    await buyIn(ctx.app, player1.token, tableId, 1000, 0);
-    await buyIn(ctx.app, player2.token, tableId, 1000, 1);
+    await buyIn(ctx.app, player1.token, tableId, stack, 0);
+    await buyIn(ctx.app, player2.token, tableId, stack, 1);
     const tokens = [player1.token, player2.token];
 
     await executeAction(ctx.app, tokens[0], tableId, { type: "DEAL" });
@@ -102,15 +126,60 @@ describe("Next-hand identity concurrency", () => {
     return { tableId, tokens, showdown: state, intent };
   }
 
-  it("A. auto-deals exactly once after a benign same-hand version change, posting new blinds", async () => {
-    const { tableId, tokens, showdown, intent } =
-      await setupCompletedHand("next-hand-benign-update");
+  it("A. a real tournament blind advance keeps the original intent valid and deals at the advanced level", async () => {
+    const { tableId, tokens, showdown, intent } = await setupCompletedHand(
+      "next-hand-blind-advance",
+      { mode: "TOURNAMENT", smallBlind: 25, bigBlind: 50, stack: 1500 }
+    );
     try {
       // The committed intent carries the same table-scoped canonical identity
       // used by the dedupe key and the strict version snapshot it was built at.
       expect(intent.expectedHandId).toBe(`${tableId}_${showdown.handId}`);
       expect(intent.expectedVersion).toBe(showdown.version);
 
+      // Two real NEXT_BLIND_LEVEL management mutations on the SAME completed
+      // hand: identity, street and winners stay; version and blinds advance.
+      await advanceBlindLevel(tableId);
+      await advanceBlindLevel(tableId);
+      const afterBlinds = await getTableState(ctx.app, tokens[0], tableId);
+      expect(afterBlinds.handId).toBe(showdown.handId);
+      expect(afterBlinds.street).toBe("SHOWDOWN");
+      expect(afterBlinds.winners).toBeTruthy();
+      expect(afterBlinds.version).toBe(showdown.version + 2);
+      expect(afterBlinds.blindLevel).toBe(2);
+      expect(afterBlinds.smallBlind).toBeGreaterThan(showdown.smallBlind);
+      expect(afterBlinds.bigBlind).toBeGreaterThan(showdown.bigBlind);
+
+      // The original intent's version is now stale; identity is what keeps it
+      // valid. Executing it must deal the next hand at the ADVANCED level.
+      const chipsBefore = tableChipTotal(afterBlinds);
+      await runIntent(intent);
+      const afterDeal = await getTableState(ctx.app, tokens[0], tableId);
+      expect(afterDeal.handId).not.toBe(showdown.handId);
+      expect(afterDeal.street).toBe("PREFLOP");
+      expect(afterDeal.handNumber).toBe(showdown.handNumber + 1);
+      expect(afterDeal.version).toBe(afterBlinds.version + 1);
+      expect(afterDeal.blindLevel).toBe(afterBlinds.blindLevel);
+      expect(afterDeal.smallBlind).toBe(afterBlinds.smallBlind);
+      expect(afterDeal.bigBlind).toBe(afterBlinds.bigBlind);
+      expect(sumCurrentBets(afterDeal)).toBe(afterDeal.smallBlind + afterDeal.bigBlind);
+      expect(tableChipTotal(afterDeal)).toBe(chipsBefore);
+
+      // Replay of the same committed intent is a no-op by identity.
+      await runIntent(intent);
+      const afterReplay = await getTableState(ctx.app, tokens[0], tableId);
+      expect(afterReplay.handId).toBe(afterDeal.handId);
+      expect(afterReplay.version).toBe(afterDeal.version);
+      expect(sumCurrentBets(afterReplay)).toBe(sumCurrentBets(afterDeal));
+    } finally {
+      await cleanupTestTable(ctx.app, tableId);
+    }
+  });
+
+  it("extra: a benign same-hand SHOW still auto-deals exactly once with new blinds", async () => {
+    const { tableId, tokens, showdown, intent } =
+      await setupCompletedHand("next-hand-benign-update");
+    try {
       // Benign same-hand change: the winner shows at showdown. Hand identity and
       // winners are unchanged; only the version advances.
       const winnerToken = tokens[showdown.winners[0].seat];
