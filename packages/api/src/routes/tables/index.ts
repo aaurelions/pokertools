@@ -555,12 +555,6 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
     "/:id/chat",
     {
       onRequest: [fastify.authenticate],
-      config: {
-        rateLimit: {
-          max: config.NODE_ENV === "test" ? 100 : config.RATE_LIMIT_MAX,
-          timeWindow: "1 minute",
-        },
-      },
     },
     async (request, reply) => {
       const { id } = request.params;
@@ -603,12 +597,6 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
     "/:id/chat",
     {
       onRequest: [fastify.authenticate],
-      config: {
-        rateLimit: {
-          max: config.NODE_ENV === "test" ? 100 : config.RATE_LIMIT_MAX,
-          timeWindow: "1 minute",
-        },
-      },
     },
     async (request, reply) => {
       const { id } = request.params;

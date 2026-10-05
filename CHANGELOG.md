@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-10-05
+
+### Security
+
+- Rate limiting now enforces two explicit boundaries. The authenticated-principal application budget stays **100 requests/minute** (`RATE_LIMIT_MAX`, unchanged) and is keyed on the verified principal's kind and ID rather than the credential or client IP, so independent principals sharing an egress address no longer share one budget. A separate coarse per-client-network guard (`RATE_LIMIT_NETWORK_MAX`, default 1000/minute per normalized client IP) runs before credential verification and charges malformed and unauthenticated requests. Forwarded client addresses are honored only for explicitly configured `TRUSTED_PROXY_CIDRS`; proxy trust defaults to disabled. Financial, custody and poker behavior are unchanged.
+
+### Fixed
+
+- Auto-dealt next hands are now bound to the completing hand's table-scoped canonical identity (`${tableId}_${handId}`) instead of a version snapshot. A benign same-hand version change — such as a tournament `NEXT_BLIND_LEVEL` advance after the hand completed — no longer strands the job, and the next hand is dealt at the advanced blind level. A manual DEAL, an older hand's job, or a duplicate/replayed delivery is a no-op by identity. Legacy jobs without an identity keep the strict version guard, and the DEAL still commits through the database CAS against the freshly read version.
+
+### Tests
+
+- Added `next-hand-identity` concurrency regressions: a real tournament `NEXT_BLIND_LEVEL` advance after hand completion still auto-deals exactly once at the advanced blind level, a manual DEAL wins, an H1 job cannot advance a table whose current hand is H2 at showdown, duplicate delivery deals once, fewer than two active players parks the table in `WAITING`, the normal path auto-deals, legacy payloads keep the strict version guard, and a matching hand without winners is never advanced.
+
 ## [2.0.0] - 2026-10-03
 
 ### Added
@@ -651,6 +665,7 @@ Given a version number MAJOR.MINOR.PATCH:
 - [NPM: @pokertools/evaluator](https://www.npmjs.com/package/@pokertools/evaluator)
 - [NPM: @pokertools/types](https://www.npmjs.com/package/@pokertools/types)
 
+[2.0.1]: https://github.com/aaurelions/pokertools/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/aaurelions/pokertools/compare/v1.0.20...v2.0.0
 [1.0.20]: https://github.com/aaurelions/pokertools/compare/v1.0.19...v1.0.20
 [1.0.19]: https://github.com/aaurelions/pokertools/compare/v1.0.18...v1.0.19

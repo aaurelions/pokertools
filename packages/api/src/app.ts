@@ -3,7 +3,6 @@ import helmet from "@fastify/helmet";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import cookie from "@fastify/cookie";
-import rateLimit from "@fastify/rate-limit";
 import websocket from "@fastify/websocket";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
@@ -28,6 +27,11 @@ import { chipRoutes } from "./routes/chips/index.js";
 import { competitionRoutes } from "./routes/competitions/index.js";
 
 import { config } from "./config.js";
+import {
+  parseTrustedProxyCidrs,
+  registerRateLimiting,
+  type RateLimitingOptions,
+} from "./rate-limiting.js";
 import { HealthResponseSchema } from "@pokertools/types";
 import {
   ORCHESTRATION_SCOPE,
@@ -90,10 +94,29 @@ export interface BuildAppOptions {
    * probes. Financial admission always evaluates the composed service.
    */
   readiness?: Partial<CreatePlatformReadinessOptions>;
+  /** Lowered/explicit limits for focused tests; never accepted outside test. */
+  rateLimiting?: Partial<RateLimitingOptions>;
+  /** Explicit trusted ingress IP/CIDRs (default: trust no proxy). */
+  trustedProxyCidrs?: string[];
 }
 
 export async function buildApp(options: BuildAppOptions = {}) {
+  if (config.NODE_ENV !== "test" && options.rateLimiting !== undefined) {
+    throw new Error(
+      "Rate-limit overrides are test-only; configure production limits through the environment"
+    );
+  }
+  const limits: RateLimitingOptions = {
+    enabled: config.NODE_ENV !== "test",
+    max: config.RATE_LIMIT_MAX,
+    networkMax: config.RATE_LIMIT_NETWORK_MAX,
+    ...options.rateLimiting,
+  };
+  const trustedProxies = parseTrustedProxyCidrs(
+    options.trustedProxyCidrs ?? config.TRUSTED_PROXY_CIDRS
+  );
   const app = Fastify({
+    trustProxy: trustedProxies.length === 0 ? false : trustedProxies,
     logger:
       config.NODE_ENV === "test"
         ? false // Disable logging in tests
@@ -112,6 +135,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
                 : undefined,
           },
   });
+
+  // Install the coarse instance hook first, including before CORS can answer
+  // preflight requests. The application route hook runs after authentication.
+  await registerRateLimiting(app, limits);
 
   // Serialize BigInt values as strings to avoid JSON serialization errors.
   app.addHook("preSerialization", async (_request, _reply, payload: unknown) => {
@@ -138,12 +165,6 @@ export async function buildApp(options: BuildAppOptions = {}) {
           ? false
           : true,
     credentials: true,
-  });
-
-  await app.register(rateLimit, {
-    global: config.NODE_ENV !== "test",
-    max: config.RATE_LIMIT_MAX,
-    timeWindow: "1 minute",
   });
 
   await app.register(jwt, {
@@ -357,7 +378,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
 
   // Routes
-  await app.register(authRoutes, { prefix: "/auth" });
+  await app.register(authRoutes, { prefix: "/auth", strictRateLimits: limits.enabled });
   await app.register(tableRoutes, { prefix: "/tables" });
   await app.register(tournamentRoutes, { prefix: "/tournaments" });
   await app.register(competitionRoutes, { prefix: "/competitions" });

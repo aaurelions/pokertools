@@ -59,6 +59,16 @@ export interface ProcessActionOptions {
 }
 
 /**
+ * Canonical table-scoped hand identity. The same value binds a completion
+ * side-effect intent (`next-hand:<identity>` dedupe key + `expectedHandId`) to
+ * the next-hand worker's authoritative identity check, so a hand-scoped job can
+ * only ever act on the exact hand that scheduled it.
+ */
+export function canonicalHandIdentity(tableId: string, handId: string): string {
+  return `${tableId}_${handId}`;
+}
+
+/**
  * Canonical action result ({ receipt, observation }) — the shared
  * `@pokertools/types` contract. The full deterministic resulting observation is
  * persisted with the receipt in the idempotency row; an identical duplicate
@@ -1128,7 +1138,7 @@ export class GameManager {
     const intents: OutboxIntent[] = [];
 
     if (handCompleted) {
-      const handId = `${tableId}_${state.handId}`;
+      const handId = canonicalHandIdentity(tableId, state.handId);
       if (!state.config.blindStructure) {
         const playerNetChanges: Record<string, string> = {};
         for (const player of state.players) {
@@ -1163,7 +1173,7 @@ export class GameManager {
         intents.push({
           kind: "next-hand",
           dedupeKey: `next-hand:${handId}`,
-          payload: { tableId, expectedVersion: newVersion },
+          payload: { tableId, expectedVersion: newVersion, expectedHandId: handId },
           availableAt: new Date(Date.now() + appConfig.AUTO_DEAL_DELAY_MS),
         });
       }

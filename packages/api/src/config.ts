@@ -46,6 +46,8 @@ export const config = cleanEnv(process.env, {
 
   SESSION_TTL_SECONDS: num({ default: 7 * 24 * 60 * 60 }),
   RATE_LIMIT_MAX: num({ default: 100 }),
+  RATE_LIMIT_NETWORK_MAX: num({ default: 1000 }),
+  TRUSTED_PROXY_CIDRS: str({ default: "" }),
   AUTH_NONCE_RATE_LIMIT_MAX: num({ default: 5 }),
   AUTH_LOGIN_RATE_LIMIT_MAX: num({ default: 10 }),
   TABLE_REDIS_TTL_SECONDS: num({ default: 24 * 60 * 60 }),
