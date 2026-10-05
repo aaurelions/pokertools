@@ -1274,8 +1274,10 @@ export class GameManager {
       payload: {
         tableId,
         playerId: player.id,
-        // Semantic epoch: canonical hand identity + the immutable anchor event
-        // of this exact deadline + the legacy strict version fence.
+        // Semantic epoch: the existing table-scoped `GameState.handId` (the
+        // next-hand-owned `canonicalHandIdentity` is the same identity in
+        // another context, not a second system), the immutable anchor event of
+        // this exact deadline and the legacy strict version fence.
         handId: state.handId,
         anchorEventSeq,
         expectedVersion: version,

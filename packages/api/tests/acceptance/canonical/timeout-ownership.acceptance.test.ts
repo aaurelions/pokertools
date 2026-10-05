@@ -8,13 +8,16 @@
  * original deadline was pushed forward forever and the pending turn never
  * expired.
  *
- * The durable timeout intent is now bound to the canonical hand identity, the
- * immutable anchor `GameEvent.eventSeq` at deadline creation and the acting
- * player, while keeping the legacy strict version fence. A timeout lease is
- * only valid while the same hand/actor still owns the turn and every
- * intervening state mutation is a benign NEXT_BLIND_LEVEL (non-mutating
- * lifecycle projections at the validated state version are harmless). Any real
- * action, TIME_BANK renewal, seat change or new hand invalidates the lease.
+ * The durable timeout intent is now bound to the existing table-scoped
+ * `GameState.handId` (the next-hand-owned `canonicalHandIdentity` is the same
+ * identity in another context, not a second system), the immutable anchor
+ * `GameEvent.eventSeq` at deadline creation and the acting player, while
+ * keeping the legacy strict version fence. A timeout lease is only valid while
+ * the same hand/actor still owns the turn and every intervening state mutation
+ * is a benign NEXT_BLIND_LEVEL (non-mutating lifecycle projections at the
+ * validated state version are harmless). Any real action, TIME_BANK renewal,
+ * seat change or new hand invalidates the lease, and a long benign blind
+ * history never does.
  *
  * Everything is driven through the public canonical HTTP protocol and the
  * production worker payload path; direct database access is read-only
@@ -41,7 +44,11 @@ import {
   type AcceptanceApp,
   type WalletPrincipal,
 } from "./harness.js";
-import { durableOutboxProcessor, recoverGameOutbox } from "../../../src/services/game-outbox.js";
+import {
+  dispatchPendingOutbox,
+  durableOutboxProcessor,
+  recoverGameOutbox,
+} from "../../../src/services/game-outbox.js";
 import {
   processPlayerTimeoutPayload,
   type PlayerTimeoutPayload,
@@ -112,6 +119,39 @@ describe("scheduled player-timeout ownership acceptance", () => {
 
   async function fireTimeout(payload: PlayerTimeoutPayload): Promise<void> {
     await processPlayerTimeoutPayload(app.prisma, app.gameManager, payload);
+  }
+
+  /**
+   * Append `count` real NEXT_BLIND_LEVEL mutations through the manager's
+   * authoritative mutation path in one transaction (history fixture; every
+   * mutation still seals its own event and bumps the CAS cursors). The
+   * committed transport intents are dispatched afterwards, exactly as the
+   * production post-commit path does, so the fixture never floods unrelated
+   * recovery sweeps with PENDING rows.
+   */
+  async function appendBlindAdvances(tableId: string, count: number): Promise<void> {
+    await app.prisma.$transaction(
+      async (tx) => {
+        for (let index = 0; index < count; index += 1) {
+          const applied = await app.gameManager.applyManagementMutationInTx(
+            tx,
+            tableId,
+            playerA.id,
+            { type: ActionType.NEXT_BLIND_LEVEL },
+            { skipIdentity: true }
+          );
+          expect(applied.applied).toBe(true);
+        }
+      },
+      { maxWait: 10_000, timeout: 120_000 }
+    );
+    for (;;) {
+      const result = await dispatchPendingOutbox(app.prisma, app.jobQueues, app.redis, {
+        tableId,
+        limit: 500,
+      });
+      if (result.dispatched + result.failed === 0) break;
+    }
   }
 
   it("does not re-arm the pending-turn deadline across blind advances and fires once at the original deadline on the current version", async () => {
@@ -200,6 +240,77 @@ describe("scheduled player-timeout ownership acceptance", () => {
       await cleanupFixtures(app, { tableIds: [tableId] });
     }
   }, 60_000);
+
+  it("keeps a valid lease owned and executes it once across more than 1024 benign blind advances", async () => {
+    const tableId = await newTable("timeout-long-history", 2, { mode: "TOURNAMENT" });
+    try {
+      await startHand(ctx.baseUrl, tableId, [playerA, playerB]);
+      const started = await app.gameManager.getState(tableId);
+      const original = await originalTimeout(tableId);
+      const payload = payloadOf(original);
+      expect(payload.expectedVersion).toBe(started.version);
+
+      await appendBlindAdvances(tableId, 1030);
+
+      const longHistory = await app.gameManager.getState(tableId);
+      expect(longHistory.version).toBe(started.version + 1030);
+      expect(longHistory.handId).toBe(started.handId);
+      expect(longHistory.players[longHistory.actionTo!]!.id).toBe(payload.playerId);
+
+      // No cap: the lease is still owned and the original deadline is intact.
+      const rows = await app.prisma.gameOutbox.findMany({
+        where: { tableId, kind: "player-timeout" },
+      });
+      expect(rows).toHaveLength(1);
+      expect(rows[0].availableAt.getTime()).toBe(original.availableAt.getTime());
+
+      await fireTimeout(payload);
+      expect((await app.gameManager.getState(tableId)).version).toBe(longHistory.version + 1);
+      expect(await timeoutAppliedEvents(tableId)).toHaveLength(1);
+    } finally {
+      await cleanupFixtures(app, { tableIds: [tableId] });
+    }
+  }, 120_000);
+
+  it("rejects a real action embedded in a large benign blind history", async () => {
+    const tableId = await newTable("timeout-long-history-action", 2);
+    try {
+      await startHand(ctx.baseUrl, tableId, [playerA, playerB]);
+      const started = await app.gameManager.getState(tableId);
+      const original = await originalTimeout(tableId);
+      const stalePayload = payloadOf(original);
+      const actorId = stalePayload.playerId;
+
+      await appendBlindAdvances(tableId, 1030);
+
+      // Return the original actor to act in the same hand after a real action;
+      // the real CALL/CHECK events sit inside the long benign NBL history.
+      let returned = false;
+      for (let step = 0; step < 8 && !returned; step += 1) {
+        const state = await app.gameManager.getState(tableId);
+        if (
+          state.handId === started.handId &&
+          state.actionTo !== null &&
+          state.players[state.actionTo]!.id === actorId &&
+          state.version > started.version + 1030
+        ) {
+          returned = true;
+          break;
+        }
+        if (state.actionTo === null) break;
+        const turn = await playOneTurn(ctx.baseUrl, tableId, [playerA, playerB], ["CHECK", "CALL"]);
+        if (!turn) break;
+      }
+      expect(returned).toBe(true);
+
+      const before = await app.gameManager.getState(tableId);
+      await fireTimeout(stalePayload);
+      expect((await app.gameManager.getState(tableId)).version).toBe(before.version);
+      expect(await timeoutAppliedEvents(tableId)).toHaveLength(0);
+    } finally {
+      await cleanupFixtures(app, { tableIds: [tableId] });
+    }
+  }, 120_000);
 
   it("rejects a stale lease once a real betting action returns the same actor to act in the same hand", async () => {
     const tableId = await newTable("timeout-same-actor", 2);

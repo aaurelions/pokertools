@@ -4,7 +4,9 @@ import type { AuthoritativeTable } from "./game-repository.js";
 /**
  * Private scheduled-timeout ownership epoch.
  *
- * A committed `player-timeout` intent binds the canonical hand identity, the
+ * A committed `player-timeout` intent binds the existing table-scoped
+ * `GameState.handId` (the raw engine hand identity; `canonicalHandIdentity`
+ * is the next-hand-owned form of the same identity, not a second system), the
  * immutable `GameEvent.eventSeq` of the mutation that created the deadline, the
  * acting player and the legacy version fence (`expectedVersion`, which must
  * equal the anchor event's version). The manager validates the whole epoch
@@ -16,7 +18,7 @@ import type { AuthoritativeTable } from "./game-repository.js";
  * option passed only by the timeout worker from the committed outbox payload.
  */
 export interface TimeoutOwnership {
-  /** Canonical hand identity at deadline creation (`GameState.handId`). */
+  /** Existing table-scoped `GameState.handId` at deadline creation. */
   handId: string;
   /** `GameEvent.eventSeq` of the mutation that created the deadline. */
   anchorEventSeq: number;
@@ -42,37 +44,73 @@ export const NON_MUTATING_INTERVENING_EVENT_TYPES: readonly string[] = [
 ];
 
 /**
- * Upper bound on the state-mutating events scanned between a timeout anchor and
- * the current head. The legitimate case is a bounded number of blind-level
- * advances (the production blind interval is minutes, not milliseconds), so
- * exceeding this fails closed instead of loading unbounded history. The query
- * additionally excludes every known non-mutating projection in the database, so
- * chat/lifecycle traffic never counts against this bound.
+ * Action payloads that can legitimately carry a deadline-creating mutation.
+ * Every one of these appends a single ACTION_APPLIED event from the accepted
+ * mutation; NEXT_BLIND_LEVEL is deliberately absent because the producer never
+ * anchors a deadline at a blind-metadata advance.
  */
-export const MAX_INTERVENING_TIMEOUT_EVENTS = 1024;
-
-export type InterveningTimeoutEventClass = "benign-blind-advance" | "non-mutating" | "invalid";
+const DEADLINE_CREATING_ACTION_TYPES: readonly string[] = [
+  "FOLD",
+  "CHECK",
+  "CALL",
+  "BET",
+  "RAISE",
+  "SHOW",
+  "MUCK",
+  "TIMEOUT",
+  "TIME_BANK",
+];
 
 /**
- * Classify one event appended after a timeout anchor. Only a real
- * `NEXT_BLIND_LEVEL` action is a benign state mutation; known non-mutating
- * lifecycle/chat projections are harmless. Every other action (TIME_BANK, a
- * betting action, a seat change, a new hand) invalidates the lease, and so does
- * an ACTION_APPLIED event that does not advance past the anchor version.
+ * True when the anchor event could have been written by the deadline-creating
+ * mutation itself. `planTimeout` runs only after a real hand start, a seat
+ * mutation or a non-NBL action, so chat, lifecycle projections, blind-level
+ * advances, hand completions and unknown types can never be a genuine anchor.
  */
-export function classifyInterveningTimeoutEvent(
-  event: { type: string; version: number; payload: unknown },
-  anchorVersion: number
-): InterveningTimeoutEventClass {
-  if (event.type === "ACTION_APPLIED") {
-    const action = (event.payload as { action?: unknown } | null | undefined)?.action;
-    if (event.version > anchorVersion && action === "NEXT_BLIND_LEVEL") {
-      return "benign-blind-advance";
+export function isLegitimateTimeoutAnchorEvent(event: { type: string; payload: unknown }): boolean {
+  switch (event.type) {
+    case "HAND_STARTED":
+    case "SEAT_OCCUPIED":
+    case "SEAT_VACATED":
+    case "SEAT_RESERVED":
+      return true;
+    case "ACTION_APPLIED": {
+      const action = (event.payload as { action?: unknown } | null | undefined)?.action;
+      return typeof action === "string" && DEADLINE_CREATING_ACTION_TYPES.includes(action);
     }
-    return "invalid";
+    default:
+      return false;
   }
-  if (NON_MUTATING_INTERVENING_EVENT_TYPES.includes(event.type)) return "non-mutating";
-  return "invalid";
+}
+
+/**
+ * Database predicate for an intervening event that is neither a real benign
+ * `NEXT_BLIND_LEVEL` state mutation nor an explicitly classified non-mutating
+ * projection. The scan returns at most one row regardless of how long a
+ * legitimate blind-level history is (no row download, no arbitrary cap).
+ *
+ * The benign marker is the immutable `GameEvent.actionId` column rather than a
+ * JSON path filter: Prisma's PostgreSQL client types `path` as `string[]` while
+ * its SQLite client requires `string`, so no single JSON-path predicate is
+ * provider-agnostic. `actionId` is exact here — the public canonical route
+ * deliberately never offers NEXT_BLIND_LEVEL (see `getLegalActions`), so every
+ * internal blind advance seals `actionId = "NEXT_BLIND_LEVEL"` and every real
+ * action seals its own canonical action id or engine action type. Anything
+ * else (including an ACTION_APPLIED at or below the anchor version) is invalid.
+ */
+export function invalidInterveningTimeoutEventWhere(anchorVersion: number) {
+  return {
+    AND: [
+      {
+        NOT: {
+          type: "ACTION_APPLIED",
+          actionId: "NEXT_BLIND_LEVEL",
+          version: { gt: anchorVersion },
+        },
+      },
+      { NOT: { type: { in: [...NON_MUTATING_INTERVENING_EVENT_TYPES] } } },
+    ],
+  };
 }
 
 /**
@@ -81,11 +119,19 @@ export function classifyInterveningTimeoutEvent(
  *
  * 1. the current authoritative snapshot is the same hand and the same player
  *    still owns the pending turn;
- * 2. the anchor event exists and its immutable version equals the legacy fence;
- * 3. every event between the anchor and the current head exists (no history
- *    gap), never regresses below the anchor version and never exceeds the
- *    current authoritative version;
- * 4. every intervening state-mutating event is a benign NEXT_BLIND_LEVEL.
+ * 2. the anchor event exists, its immutable version equals the legacy fence and
+ *    it is a legitimate deadline-creation mutation (never NEXT_BLIND_LEVEL);
+ * 3. the current head event agrees with the authoritative `stateVersion`, and
+ *    every event between the anchor and the head exists (no history gap) with
+ *    no version below the anchor and none above the current state version;
+ * 4. no intervening state-mutating event is anything other than a benign
+ *    NEXT_BLIND_LEVEL.
+ *
+ * Version monotonicity *within* the interval (e.g. 12 -> 11) is not re-derived
+ * here: `GameEvent` is append-only and every mutation seals its events with the
+ * CAS-guarded `newVersion`, so a non-monotonic log cannot be produced without
+ * corrupting the hash chain and the writer invariant. The bounds checked here
+ * reject fabricated cursors that fall outside the immutable envelope.
  */
 export async function timeoutOwnershipHolds(
   tx: Prisma.TransactionClient,
@@ -99,40 +145,41 @@ export async function timeoutOwnershipHolds(
   if (!Number.isSafeInteger(ownership.expectedVersion) || ownership.expectedVersion < 0) {
     return false;
   }
-  if (ownership.anchorEventSeq > record.eventSeq) return false;
+  if (ownership.anchorEventSeq > record.eventSeq || record.eventSeq < 1) return false;
 
-  // Current ownership: same canonical hand, same actor still to act.
+  // Current ownership: same existing hand identity, same actor still to act.
   if (snapshot.handId !== ownership.handId) return false;
   if (snapshot.actionTo === null) return false;
   const actor = snapshot.players[snapshot.actionTo];
   if (!actor || actor.id !== ownership.playerId) return false;
 
   // The anchor must be the immutable event created with the lease, carrying the
-  // legacy version fence; a fabricated/future anchor is rejected.
+  // legacy version fence, and must be a real deadline-creation mutation.
   const anchor = await tx.gameEvent.findUnique({
     where: { tableId_eventSeq: { tableId, eventSeq: ownership.anchorEventSeq } },
-    select: { eventSeq: true, version: true },
+    select: { eventSeq: true, version: true, type: true, payload: true },
   });
   if (!anchor || anchor.version !== ownership.expectedVersion) return false;
   if (anchor.version > record.stateVersion) return false;
+  if (!isLegitimateTimeoutAnchorEvent(anchor)) return false;
+
+  // The authoritative head event must agree with the CAS cursors the manager
+  // loaded; a fabricated eventSeq cursor is rejected before any lineage check.
+  const head = await tx.gameEvent.findUnique({
+    where: { tableId_eventSeq: { tableId, eventSeq: record.eventSeq } },
+    select: { version: true },
+  });
+  if (!head || head.version !== record.stateVersion) return false;
 
   const range = {
     tableId,
     eventSeq: { gt: ownership.anchorEventSeq, lte: record.eventSeq },
   };
-  // Sequential on the transaction connection: interactive transactions execute
-  // one query at a time, and this keeps the bounded scan deterministic.
   const aggregate = await tx.gameEvent.aggregate({
     where: range,
     _count: true,
     _min: { version: true },
     _max: { version: true },
-  });
-  const mutating = await tx.gameEvent.findMany({
-    where: { ...range, type: { notIn: [...NON_MUTATING_INTERVENING_EVENT_TYPES] } },
-    orderBy: { eventSeq: "asc" },
-    select: { eventSeq: true, version: true, type: true, payload: true },
-    take: MAX_INTERVENING_TIMEOUT_EVENTS + 1,
   });
 
   // Every seq in (anchor, head] must exist exactly once: a count mismatch is a
@@ -141,14 +188,19 @@ export async function timeoutOwnershipHolds(
   if (aggregate._count !== interveningCount) return false;
   if (interveningCount > 0) {
     if (aggregate._min.version === null || aggregate._min.version < ownership.expectedVersion) {
-      return false; // version regression below the validated anchor
+      return false; // version below the validated anchor
     }
     if (aggregate._max.version === null || aggregate._max.version > record.stateVersion) {
-      return false; // fabricated/future lineage
+      return false; // version beyond the authoritative head
     }
   }
-  if (mutating.length > MAX_INTERVENING_TIMEOUT_EVENTS) return false;
-  return mutating.every(
-    (event) => classifyInterveningTimeoutEvent(event, ownership.expectedVersion) !== "invalid"
-  );
+
+  // Single database-predicate probe: any real action, TIME_BANK renewal, seat
+  // change, new hand or unknown event invalidates the lease. The query returns
+  // at most one row and never downloads the (possibly long) benign history.
+  const invalid = await tx.gameEvent.findFirst({
+    where: { ...range, ...invalidInterveningTimeoutEventWhere(ownership.expectedVersion) },
+    select: { eventSeq: true },
+  });
+  return invalid === null;
 }
