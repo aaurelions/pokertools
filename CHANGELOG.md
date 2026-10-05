@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-10-05
+
+### Fixed
+
+- Scheduled player-timeout intents are now bound to a semantic ownership epoch: the existing table-scoped hand identity, the immutable anchor `GameEvent.eventSeq` at deadline creation and the acting player, while keeping the legacy version fence. A tournament `NEXT_BLIND_LEVEL` advance no longer re-arms the pending deadline, so the turn fires at its original deadline on the current authoritative version; any real action, `TIME_BANK` renewal, seat change or new hand invalidates the lease. Ownership is validated inside the existing table lock and database transaction, the normal compare-and-set remains the authority, legacy intents keep the strict version guard, and outbox recovery no longer retires an owned lease on a version advance alone.
+- A showdown with a single live hand now settles the uncontested pot (including an uncalled lone all-in) instead of stalling with no winner and an undistributed pot; a DEAL against an unresolved showdown that still holds chips is rejected so a stale manual DEAL cannot discard the pot.
+
+### Notes
+
+- Aside from the two fixes above, no poker/blind-structure, chip-economy, provider-budget or agent-prompt behavior changed.
+
 ## [2.0.1] - 2026-10-05
 
 ### Security
@@ -665,6 +676,7 @@ Given a version number MAJOR.MINOR.PATCH:
 - [NPM: @pokertools/evaluator](https://www.npmjs.com/package/@pokertools/evaluator)
 - [NPM: @pokertools/types](https://www.npmjs.com/package/@pokertools/types)
 
+[2.0.2]: https://github.com/aaurelions/pokertools/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/aaurelions/pokertools/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/aaurelions/pokertools/compare/v1.0.20...v2.0.0
 [1.0.20]: https://github.com/aaurelions/pokertools/compare/v1.0.19...v1.0.20

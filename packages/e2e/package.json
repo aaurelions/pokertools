@@ -1,6 +1,6 @@
 {
   "name": "@pokertools/e2e",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "End-to-end Docker integration tests for PokerTools API",
   "author": "A.Aurelius",
   "license": "MIT",
@@ -17,7 +17,7 @@
     "test:finance-acceptance": "vitest run --config vitest.finance.config.ts"
   },
   "dependencies": {
-    "@pokertools/sdk": "2.0.1",
+    "@pokertools/sdk": "2.0.2",
     "@prisma/adapter-better-sqlite3": "^7.10.0",
     "@prisma/client": "^7.10.0",
     "@scure/bip32": "^2.4.0",
