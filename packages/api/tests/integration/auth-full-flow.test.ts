@@ -1,9 +1,63 @@
 /// <reference path="../../types/fastify.d.ts" />
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { randomUUID } from "node:crypto";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { buildApp } from "../../src/app.js";
 import type { FastifyInstance } from "fastify";
 import { generatePrivateKey, privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import { createSiweMessage } from "viem/siwe";
+import { ChipLedger } from "../../src/services/chip-ledger.js";
+
+/**
+ * Hold every `chipAccount.upsert` until `expected` calls have arrived and the
+ * test releases the gate. Test-only instrumentation: the production bootstrap
+ * path is untouched.
+ *
+ * SQLite interactive transactions are serialized by the single-writer adapter
+ * (a second `$transaction` callback cannot start before the first commits), so
+ * this gates concurrent direct `ensureAccount` calls, which is where SQLite
+ * can still interleave callers before the driver serializes the writes.
+ */
+function gateAccountUpserts(
+  app: FastifyInstance,
+  expected: number
+): { arrived: Promise<void>; release: () => void; restore: () => void } {
+  let arrivals = 0;
+  let release!: () => void;
+  let markArrived!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const arrived = new Promise<void>((resolve) => {
+    markArrived = resolve;
+  });
+
+  const original = app.prisma.chipAccount.upsert.bind(app.prisma.chipAccount) as (
+    ...args: unknown[]
+  ) => Promise<unknown>;
+  const spy = vi.spyOn(app.prisma.chipAccount, "upsert").mockImplementation(((
+    ...args: unknown[]
+  ) => {
+    arrivals += 1;
+    if (arrivals >= expected) markArrived();
+    return released.then(() => original(...args));
+  }) as never);
+
+  return { arrived, release, restore: () => spy.mockRestore() };
+}
+
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 describe("Auth - Full SIWE Flow Integration Test", () => {
   let app: FastifyInstance;
@@ -207,6 +261,17 @@ describe("Auth - Full SIWE Flow Integration Test", () => {
     const addressLower = account.address.toLowerCase();
     expect(await app.prisma.user.count({ where: { address: addressLower } })).toBe(1);
 
+    // Exactly one AVAILABLE account for that principal, canonical owner scope,
+    // untouched zero balance.
+    const accounts = await app.prisma.chipAccount.findMany({ where: { principalId: a.user.id } });
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0]).toMatchObject({
+      principalId: a.user.id,
+      kind: "AVAILABLE",
+      scopeKey: "@owner",
+      balance: 0n,
+    });
+
     // Both issued sessions resolve to that same principal.
     for (const token of [a.token, b.token]) {
       const me = await app.inject({
@@ -217,6 +282,67 @@ describe("Auth - Full SIWE Flow Integration Test", () => {
       expect(me.statusCode).toBe(200);
       expect((JSON.parse(me.body) as { id: string }).id).toBe(a.user.id);
     }
+  });
+
+  it("converges gated concurrent account bootstrap on one account without touching balance/owner/scope", async () => {
+    const ledger = new ChipLedger(app.prisma);
+    const principalId = `sqlite-bootstrap-${randomUUID()}`;
+
+    // Both concurrent ensures are parked before either may write; the
+    // bootstrap must converge on one row and one id.
+    const gate = gateAccountUpserts(app, 2);
+    try {
+      const racing = Promise.all([
+        ledger.ensureAvailableAccount(app.prisma, principalId),
+        ledger.ensureAvailableAccount(app.prisma, principalId),
+      ]);
+      await withTimeout(gate.arrived, 15_000, "both account bootstrap upserts");
+      gate.release();
+      const [first, second] = await racing;
+      expect(first.id).toBe(second.id);
+    } finally {
+      gate.release();
+      gate.restore();
+    }
+
+    const created = await app.prisma.chipAccount.findMany({ where: { principalId } });
+    expect(created).toHaveLength(1);
+    expect(created[0]).toMatchObject({
+      principalId,
+      kind: "AVAILABLE",
+      scopeKey: "@owner",
+      balance: 0n,
+    });
+
+    // Fund the account, then re-ensure under the same gate: a materialized
+    // NONZERO balance and the owner/scope identity are never rewritten.
+    const funded = await app.prisma.chipAccount.update({
+      where: { id: created[0].id },
+      data: { balance: 777n },
+    });
+    const gateAgain = gateAccountUpserts(app, 2);
+    try {
+      const racingAgain = Promise.all([
+        ledger.ensureAvailableAccount(app.prisma, principalId),
+        ledger.ensureAvailableAccount(app.prisma, principalId),
+      ]);
+      await withTimeout(gateAgain.arrived, 15_000, "both re-ensure upserts");
+      gateAgain.release();
+      const [first, second] = await racingAgain;
+      expect(first.id).toBe(funded.id);
+      expect(second.id).toBe(funded.id);
+    } finally {
+      gateAgain.release();
+      gateAgain.restore();
+    }
+
+    const after = await app.prisma.chipAccount.findUniqueOrThrow({ where: { id: funded.id } });
+    expect(after.balance).toBe(777n);
+    expect(after.version).toBe(funded.version);
+    expect(after.principalId).toBe(principalId);
+    expect(after.kind).toBe("AVAILABLE");
+    expect(after.scopeKey).toBe("@owner");
+    expect(after.createdAt).toEqual(funded.createdAt);
   });
 
   it("consumes a nonce only when the signature is valid", async () => {

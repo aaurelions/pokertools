@@ -33,6 +33,8 @@ import {
   type WalletPrincipal,
 } from "./harness.js";
 import { hashServiceToken, generateServiceToken } from "../../../src/services/principal-manager.js";
+import { ChipLedger } from "../../../src/services/chip-ledger.js";
+import { createPrismaClient } from "../../../src/utils/prisma-client.js";
 
 interface CredentialWire {
   id: string;
@@ -564,6 +566,19 @@ describe("service credential rotation/revocation race acceptance (PostgreSQL + H
     const addressLower = account.address.toLowerCase();
     expect(await booted.app.prisma.user.count({ where: { address: addressLower } })).toBe(1);
 
+    // Both first logins bootstrap exactly one AVAILABLE account for the one
+    // principal, with the canonical owner scope and an untouched zero balance.
+    const accounts = await booted.app.prisma.chipAccount.findMany({
+      where: { principalId: loginA.body.user.id },
+    });
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0]).toMatchObject({
+      principalId: loginA.body.user.id,
+      kind: "AVAILABLE",
+      scopeKey: "@owner",
+      balance: 0n,
+    });
+
     // The default public name is opaque CSPRNG, never a wallet-linkable prefix.
     expect(loginA.body.user.username).toMatch(/^player_[0-9a-f]{32}$/);
     expect(loginA.body.user.username).not.toContain(addressLower.slice(2, 14));
@@ -573,6 +588,141 @@ describe("service credential rotation/revocation race acceptance (PostgreSQL + H
       const me = await apiRequest<{ id: string }>(booted.baseUrl, "GET", "/auth/me", { token });
       expect(me.status, JSON.stringify(me.body)).toBe(200);
       expect(me.body.id).toBe(loginA.body.user.id);
+    }
+  });
+
+  it("converges gated concurrent account bootstrap on one account without touching balance/owner/scope", async () => {
+    const ledger = new ChipLedger(booted.app.prisma);
+    const principalId = `bootstrap-${crypto.randomUUID()}`;
+
+    // FAIL-FIRST: both transactions are parked on their account upsert before
+    // either may write. Without the native ON CONFLICT upsert the loser hits
+    // P2002 inside its transaction, aborting it (the failure is not catchable
+    // in the transaction and surfaces as a 500).
+    const gate = gateTransactionCall(booted.app, "chipAccount", "upsert", 2);
+    try {
+      const racing = Promise.all([
+        booted.app.prisma.$transaction((tx) => ledger.ensureAvailableAccount(tx, principalId)),
+        booted.app.prisma.$transaction((tx) => ledger.ensureAvailableAccount(tx, principalId)),
+      ]);
+      await withTimeout(gate.arrived, 15_000, "both account bootstrap upserts");
+      gate.release();
+      const [first, second] = await racing;
+      expect(first.id).toBe(second.id);
+    } finally {
+      gate.release();
+      gate.restore();
+    }
+
+    const created = await booted.app.prisma.chipAccount.findMany({ where: { principalId } });
+    expect(created).toHaveLength(1);
+    expect(created[0]).toMatchObject({
+      principalId,
+      kind: "AVAILABLE",
+      scopeKey: "@owner",
+      balance: 0n,
+    });
+
+    // Fund the account, then re-ensure under the same deterministic gate: a
+    // materialized NONZERO balance and the owner/scope identity are never
+    // rewritten by bootstrap.
+    const funded = await booted.app.prisma.chipAccount.update({
+      where: { id: created[0].id },
+      data: { balance: 777n },
+    });
+    const gateAgain = gateTransactionCall(booted.app, "chipAccount", "upsert", 2);
+    try {
+      const racingAgain = Promise.all([
+        booted.app.prisma.$transaction((tx) => ledger.ensureAvailableAccount(tx, principalId)),
+        booted.app.prisma.$transaction((tx) => ledger.ensureAvailableAccount(tx, principalId)),
+      ]);
+      await withTimeout(gateAgain.arrived, 15_000, "both re-ensure upserts");
+      gateAgain.release();
+      const [first, second] = await racingAgain;
+      expect(first.id).toBe(funded.id);
+      expect(second.id).toBe(funded.id);
+    } finally {
+      gateAgain.release();
+      gateAgain.restore();
+    }
+
+    const after = await booted.app.prisma.chipAccount.findUniqueOrThrow({
+      where: { id: funded.id },
+    });
+    expect(after.balance).toBe(777n);
+    expect(after.version).toBe(funded.version);
+    expect(after.principalId).toBe(principalId);
+    expect(after.kind).toBe("AVAILABLE");
+    expect(after.scopeKey).toBe("@owner");
+    expect(after.createdAt).toEqual(funded.createdAt);
+  });
+
+  it("converges gated concurrent first SIWE logins on one principal and one account", async () => {
+    const account = privateKeyToAccount(generatePrivateKey());
+    const [first, second] = await Promise.all([
+      signedSiweMessage(account),
+      signedSiweMessage(account),
+    ]);
+    const login = (body: { message: string; signature: string }) =>
+      apiRequest<{ token: string; user: { id: string; username: string } } & ErrorWire>(
+        booted.baseUrl,
+        "POST",
+        "/auth/login",
+        { body }
+      );
+
+    // Park both first-login account bootstrap upserts: both requests have
+    // resolved the same wallet principal and are about to materialize its
+    // account. Both must still return 200 for the one principal/account.
+    let principalId = "";
+    const gate = gateTransactionCall(booted.app, "chipAccount", "upsert", 2);
+    try {
+      const racing = Promise.all([login(first), login(second)]);
+      await withTimeout(gate.arrived, 15_000, "both first-login account upserts");
+      gate.release();
+      const [loginA, loginB] = await racing;
+      expect(loginA.status, JSON.stringify(loginA.body)).toBe(200);
+      expect(loginB.status, JSON.stringify(loginB.body)).toBe(200);
+      expect(loginA.body.user.id).toBe(loginB.body.user.id);
+      expect(loginA.body.user.username).toBe(loginB.body.user.username);
+      principalId = loginA.body.user.id;
+    } finally {
+      gate.release();
+      gate.restore();
+    }
+
+    const addressLower = account.address.toLowerCase();
+    expect(await booted.app.prisma.user.count({ where: { address: addressLower } })).toBe(1);
+    const accounts = await booted.app.prisma.chipAccount.findMany({ where: { principalId } });
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0]).toMatchObject({
+      principalId,
+      kind: "AVAILABLE",
+      scopeKey: "@owner",
+      balance: 0n,
+    });
+  });
+
+  it("bootstraps accounts with one native ON CONFLICT DO UPDATE statement", async () => {
+    const logging = createPrismaClient({ log: [{ emit: "event", level: "query" }] });
+    const queries: string[] = [];
+    (
+      logging as unknown as { $on: (event: string, cb: (e: { query: string }) => void) => void }
+    ).$on("query", (event) => queries.push(event.query));
+    const principalId = `sql-structure-${crypto.randomUUID()}`;
+    try {
+      const ledger = new ChipLedger(logging);
+      await logging.$transaction((tx) => ledger.ensureAvailableAccount(tx, principalId));
+
+      const chipStatements = queries.filter((query) => /"ChipAccount"/.test(query));
+      expect(chipStatements, JSON.stringify(queries)).toHaveLength(1);
+      expect(chipStatements[0]).toMatch(
+        /INSERT INTO .*"ChipAccount".*ON CONFLICT \("principalId","kind","scopeKey"\) DO UPDATE SET "scopeKey"/
+      );
+      expect(chipStatements[0]).not.toContain("DO NOTHING");
+    } finally {
+      await logging.chipAccount.deleteMany({ where: { principalId } });
+      await logging.$disconnect();
     }
   });
 

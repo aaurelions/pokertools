@@ -101,7 +101,12 @@ export class ChipLedger {
         scopeKey,
         balance: 0n,
       },
-      update: {},
+      // A no-op write of the conflict key forces Prisma to emit one native
+      // `INSERT ... ON CONFLICT (principalId, kind, scopeKey) DO UPDATE`
+      // instead of a read-then-insert that races concurrent first logins into
+      // an unrecoverable P2002 inside the transaction. Never touch balance,
+      // version, kind or principalId here.
+      update: { scopeKey },
     });
   }
 
