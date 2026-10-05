@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.3] - 2026-10-05
+
+### Fixed
+
+- Chip-account bootstrap now commits as one database-native `INSERT ... ON CONFLICT (principalId, kind, scopeKey) DO UPDATE` instead of a read-then-insert. Simultaneous first logins for one wallet (or any concurrent `ensureAccount` inside a transaction) can no longer collide on the `ChipAccount` unique key and abort one transaction with an unrecoverable P2002 / HTTP 500; both callers converge on the same durable account. The conflict update writes only the conflict key (the same natural-key value), so an existing balance, version, kind and principal identity are never rewritten.
+
+### Tests
+
+- Canonical PostgreSQL regressions deterministically gate the account upsert: two concurrent transactional ensures return the same account id with an existing NONZERO balance, version and owner/scope untouched; two concurrent first SIWE logins return 200 for one principal and exactly one AVAILABLE account; a structural assertion pins the native single-statement `ON CONFLICT ... DO UPDATE SET "scopeKey"`. The SQLite suite carries the equivalent service-boundary and first-login regressions.
+- Canonical acceptance files now reset only `risk:*` velocity keys on the disposable per-run Redis before each file boots (with a live self-test that unrelated keys survive and the real limits still deny), so shared-loopback risk windows no longer leak across files.
+
+### Notes
+
+- Aside from the bootstrap fix above, no poker/blind-structure, chip-economy, provider-budget or agent-prompt behavior changed. No public `@pokertools/types` or `@pokertools/sdk` source changes; dependency pins and lock entries only move to 2.0.3.
+
 ## [2.0.2] - 2026-10-05
 
 ### Fixed
