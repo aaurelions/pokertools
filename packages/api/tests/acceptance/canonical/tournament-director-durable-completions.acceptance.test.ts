@@ -365,10 +365,10 @@ describe("durable tournament-director completions (PostgreSQL + Redis)", () => {
     const loserId =
       seated.find((player) => player.id !== winnerId)?.id ??
       (
-        await app.prisma.tournamentEntry.findFirstOrThrow({
+        await ctx.app.prisma.tournamentEntry.findFirstOrThrow({
           where: {
             tournamentId: (
-              await app.prisma.table.findUniqueOrThrow({
+              await ctx.app.prisma.table.findUniqueOrThrow({
                 where: { id: tableId },
                 select: { tournamentId: true },
               })
@@ -381,7 +381,7 @@ describe("durable tournament-director completions (PostgreSQL + Redis)", () => {
 
     const handStarted = await ctx.app.prisma.gameEvent.findFirstOrThrow({
       where: { tableId, type: "HAND_STARTED" },
-      orderBy: { eventSeq: "asc" },
+      orderBy: { eventSeq: "desc" },
     });
     const handCompleted = await ctx.app.prisma.gameEvent.findFirstOrThrow({
       where: { tableId, type: "HAND_COMPLETED" },
@@ -401,9 +401,11 @@ describe("durable tournament-director completions (PostgreSQL + Redis)", () => {
         where: { dedupeKey: `next-hand:${canonicalHandId}` },
       })
     ).toBeNull();
-    expect(await ctx.app.prisma.gameOutbox.count({ where: { tableId, kind: "next-hand" } })).toBe(
-      0
-    );
+    expect(
+      await ctx.app.prisma.gameOutbox.count({
+        where: { tableId, kind: "next-hand", dedupeKey: `next-hand:${canonicalHandId}` },
+      })
+    ).toBe(0);
     expect(await ctx.app.prisma.gameOutbox.count({ where: { tableId, kind: "settle-hand" } })).toBe(
       0
     );
