@@ -204,6 +204,20 @@ export async function recoverGameOutbox(
       const queue = queues[row.kind as keyof JobQueues];
       if (!queue) continue;
       if (row.kind === "player-timeout") {
+        const payload = row.payload as {
+          expectedVersion?: number;
+          handId?: unknown;
+          anchorEventSeq?: unknown;
+        };
+        // A semantic (owned) lease is retired only by the manager's ownership
+        // validation when it actually runs. Its legacy version necessarily
+        // advances across benign blind levels, so a version mismatch alone must
+        // never discard it during recovery.
+        const ownedLease =
+          typeof payload.handId === "string" &&
+          payload.handId.length > 0 &&
+          Number.isSafeInteger(payload.anchorEventSeq) &&
+          (payload.anchorEventSeq as number) >= 1;
         const table = await prisma.table.findUnique({
           where: { id: row.tableId },
           select: { stateVersion: true, status: true },
@@ -211,7 +225,7 @@ export async function recoverGameOutbox(
         if (
           !table ||
           table.status === "CLOSED" ||
-          (row.payload as { expectedVersion?: number }).expectedVersion !== table.stateVersion
+          (!ownedLease && payload.expectedVersion !== table.stateVersion)
         ) {
           await prisma.gameOutbox.updateMany({
             where: { id: row.id, status: "DISPATCHED" },

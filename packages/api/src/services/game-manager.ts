@@ -51,11 +51,20 @@ import {
 import { listTournamentEvents } from "./tournament-events.js";
 import { dispatchPendingOutbox, writeOutboxIntents, type OutboxIntent } from "./game-outbox.js";
 import { getLegalActions } from "./legal-actions.js";
+import { timeoutOwnershipHolds, type TimeoutOwnership } from "./timeout-ownership.js";
 
 export interface ProcessActionOptions {
   skipLock?: boolean;
   skipIdentity?: boolean;
   expectedVersion?: number;
+  /**
+   * Private worker-only ownership fence for a scheduled player timeout. It is
+   * never accepted from public canonical actions; the timeout worker passes it
+   * from the committed outbox payload so the manager can validate the semantic
+   * epoch (hand + actor + anchor event) inside its transaction instead of the
+   * legacy strict version equality alone.
+   */
+  timeoutOwnership?: TimeoutOwnership;
 }
 
 /**
@@ -102,6 +111,8 @@ interface MutationInput {
   actionId?: string;
   amount?: number;
   requestHash?: string;
+  /** Private worker-only scheduled-timeout ownership epoch (TIMEOUT only). */
+  timeoutOwnership?: TimeoutOwnership;
   /**
    * Optional extra invariant evaluated against the authoritative snapshot read
    * inside the CAS transaction, before the engine acts. Throwing rolls back the
@@ -180,6 +191,7 @@ export class GameManager {
         action,
         principalId: userId || "",
         expectedVersion: options.expectedVersion,
+        timeoutOwnership: options.timeoutOwnership,
         canonical: false,
         skipIdentity: options.skipIdentity,
         // SIT must never overwrite an occupied seat or duplicate a principal;
@@ -884,7 +896,41 @@ export class GameManager {
       throw new GameAuthorityError("TABLE_CLOSED", "Table is closed", 409);
     }
 
-    // CAS/version gate.
+    // Private scheduled-timeout ownership epoch. It is validated against the
+    // exact authoritative record this transaction will CAS, under the existing
+    // table lock, and replaces the legacy strict version equality: a valid
+    // pending turn may legitimately span benign blind-level advances. The CAS
+    // below still commits against the record loaded here, so it is never
+    // weakened. A lease that no longer owns the turn is a no-op.
+    if (input.timeoutOwnership) {
+      if (input.canonical || !input.action || input.action.type !== "TIMEOUT") {
+        throw new GameAuthorityError(
+          "INVALID_CANONICAL_ACTION",
+          "Timeout ownership requires a TIMEOUT mutation",
+          400
+        );
+      }
+      if (input.action.playerId !== input.timeoutOwnership.playerId) {
+        throw new GameAuthorityError(
+          "INVALID_CANONICAL_ACTION",
+          "Timeout ownership player does not match the timeout action",
+          400
+        );
+      }
+      const holds = await timeoutOwnershipHolds(tx, input.tableId, record, input.timeoutOwnership);
+      if (!holds) {
+        const engine = PokerEngine.restore(record.snapshot);
+        return {
+          kind: "noop",
+          version: record.stateVersion,
+          state: toPublicWireState(engine.view(input.principalId, record.stateVersion)),
+        };
+      }
+    }
+
+    // CAS/version gate. An owned timeout intentionally has no legacy
+    // `expectedVersion` (its fence lives in the anchor epoch above), so this
+    // falls back to the version loaded in this transaction.
     const expectedVersion = input.expectedVersion ?? record.stateVersion;
     if (expectedVersion !== record.stateVersion) {
       if (input.canonical) {
@@ -1015,6 +1061,7 @@ export class GameManager {
     const intents = this.planSideEffects({
       tableId: input.tableId,
       engine,
+      actionType: engineAction.type,
       newVersion,
       newEventSeq,
       handCompleted,
@@ -1129,11 +1176,12 @@ export class GameManager {
   private planSideEffects(input: {
     tableId: string;
     engine: PokerEngine;
+    actionType: Action["type"];
     newVersion: number;
     newEventSeq: number;
     handCompleted: boolean;
   }): OutboxIntent[] {
-    const { tableId, engine, newVersion, newEventSeq, handCompleted } = input;
+    const { tableId, engine, actionType, newVersion, newEventSeq, handCompleted } = input;
     const state = engine.state;
     const intents: OutboxIntent[] = [];
 
@@ -1177,8 +1225,11 @@ export class GameManager {
           availableAt: new Date(Date.now() + appConfig.AUTO_DEAL_DELAY_MS),
         });
       }
-    } else {
-      const timeout = this.planTimeout(tableId, state, newVersion);
+    } else if (actionType !== "NEXT_BLIND_LEVEL") {
+      // NEXT_BLIND_LEVEL is blind metadata only: it must never re-arm the
+      // pending turn's deadline. The original intent stays valid across blind
+      // advances (the ownership epoch tolerates exactly those events).
+      const timeout = this.planTimeout(tableId, state, newVersion, newEventSeq);
       if (timeout) intents.push(timeout);
     }
 
@@ -1198,7 +1249,12 @@ export class GameManager {
     return intents;
   }
 
-  private planTimeout(tableId: string, state: GameState, version: number): OutboxIntent | null {
+  private planTimeout(
+    tableId: string,
+    state: GameState,
+    version: number,
+    anchorEventSeq: number
+  ): OutboxIntent | null {
     if (state.actionTo === null) return null;
     const player = state.players[state.actionTo];
     if (!player) return null;
@@ -1215,7 +1271,15 @@ export class GameManager {
     return {
       kind: "player-timeout",
       dedupeKey: `timeout:${tableId}:${state.actionTo}:${version}`,
-      payload: { tableId, playerId: player.id, expectedVersion: version },
+      payload: {
+        tableId,
+        playerId: player.id,
+        // Semantic epoch: canonical hand identity + the immutable anchor event
+        // of this exact deadline + the legacy strict version fence.
+        handId: state.handId,
+        anchorEventSeq,
+        expectedVersion: version,
+      },
       availableAt: new Date(Date.now() + timeoutSeconds * 1000),
     };
   }

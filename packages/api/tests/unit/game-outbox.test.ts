@@ -105,9 +105,44 @@ describe("durable outbox processing", () => {
     expect(h.row.status).toBe("DISPATCHED");
   });
 
-  it("retires stale timeout versions without executing them", async () => {
+  it("retires stale legacy timeout versions without executing them", async () => {
     const h = fixture("player-timeout");
     h.row.payload.expectedVersion = 0;
+    await recoverGameOutbox(h.prisma as never, h.queues as never, h.redis as never);
+    expect(h.row.status).toBe("COMPLETED");
+    expect(h.queue.add).not.toHaveBeenCalled();
+  });
+
+  it("does not retire an owned semantic timeout lease whose legacy version advanced", async () => {
+    const h = fixture("player-timeout");
+    h.row.payload = {
+      tableId: "table",
+      playerId: "player",
+      handId: "table_hand-1",
+      anchorEventSeq: 5,
+      expectedVersion: 0,
+    } as typeof h.row.payload;
+    await recoverGameOutbox(h.prisma as never, h.queues as never, h.redis as never);
+    // Ownership is the manager's decision when the lease actually runs; a
+    // version advance alone (benign blind levels) must not discard it.
+    expect(h.row.status).toBe("DISPATCHED");
+    expect(h.queue.add).toHaveBeenCalledWith(
+      "player-timeout",
+      h.row.payload,
+      expect.objectContaining({ jobId: h.row.id })
+    );
+  });
+
+  it("still retires an owned semantic timeout lease when the table is closed", async () => {
+    const h = fixture("player-timeout");
+    h.row.payload = {
+      tableId: "table",
+      playerId: "player",
+      handId: "table_hand-1",
+      anchorEventSeq: 5,
+      expectedVersion: 0,
+    } as typeof h.row.payload;
+    h.prisma.table.findUnique.mockResolvedValue({ stateVersion: 1, status: "CLOSED" });
     await recoverGameOutbox(h.prisma as never, h.queues as never, h.redis as never);
     expect(h.row.status).toBe("COMPLETED");
     expect(h.queue.add).not.toHaveBeenCalled();

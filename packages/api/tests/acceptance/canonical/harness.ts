@@ -223,8 +223,11 @@ export async function createTable(
     smallBlind: number;
     bigBlind: number;
     maxPlayers: number;
+    mode?: "CASH" | "TOURNAMENT";
     minBuyIn?: number;
     maxBuyIn?: number;
+    timeBankSeconds?: number;
+    timeBankDeductionSeconds?: number;
   }
 ): Promise<string> {
   const response = await apiRequest<{ tableId: string }>(baseUrl, "POST", "/tables", {

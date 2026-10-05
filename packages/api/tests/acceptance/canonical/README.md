@@ -38,6 +38,9 @@ The suite provisions:
   recovery.
 - `canonical-race.acceptance.test.ts` — a client action racing the scheduled
   timeout worker in a separate OS process.
+- `timeout-ownership.acceptance.test.ts` — scheduled-timeout ownership epoch:
+  original deadline across blind advances, stale leases (same actor, TIME_BANK
+  renewal, hand/actor change), legacy strict version guard and stale recovery.
 - `timeout-worker-main.ts` — standalone timeout worker entry point.
 
 ## Scope
