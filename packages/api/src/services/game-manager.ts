@@ -1066,6 +1066,35 @@ export class GameManager {
       newEventSeq,
       handCompleted,
     });
+
+    // Durable tournament-director obligation: written in the SAME transaction
+    // as every tournament hand completion, regardless of which mutation
+    // produced it (canonical ACTION, worker DEAL, or worker TIMEOUT). The HTTP
+    // action route only runs the director inline as an optional fast path; a
+    // crash after commit, a worker completion, or a failed inline pass must
+    // still converge through this row and its worker. The actor is the real
+    // public caller when there is one, and null for background mutations
+    // (never a forged identity).
+    if (handCompleted) {
+      const table = await tx.table.findUnique({
+        where: { id: input.tableId },
+        select: { mode: true, tournamentId: true },
+      });
+      if (table?.mode === "TOURNAMENT" && table.tournamentId) {
+        const handId = canonicalHandIdentity(input.tableId, engine.state.handId);
+        intents.push({
+          kind: "tournament-reconcile",
+          dedupeKey: `tournament-reconcile:${handId}`,
+          payload: {
+            tournamentId: table.tournamentId,
+            tableId: input.tableId,
+            handId,
+            actorId: input.canonical ? input.principalId : null,
+          },
+        });
+      }
+    }
+
     await writeOutboxIntents(tx, input.tableId, intents);
 
     const acceptedAt = Date.now();

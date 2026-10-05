@@ -15,6 +15,7 @@ const gameQueueNames = [
   "archive-hand",
   "next-hand",
   "player-timeout",
+  "tournament-reconcile",
   "tournament-blinds",
 ] as const;
 

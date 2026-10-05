@@ -36,7 +36,9 @@ const manager = new GameManager(redis, redlock, queues, prisma);
 
 const worker = createPlayerTimeoutWorker(prisma, manager, redis);
 await worker.waitUntilReady();
-if (process.env.POKERTOOLS_ACCEPTANCE_HAND_WORKERS === "true") {
+const wantsHandWorkers = process.env.POKERTOOLS_ACCEPTANCE_HAND_WORKERS === "true";
+const wantsTournamentWorkers = process.env.POKERTOOLS_ACCEPTANCE_TOURNAMENT_WORKERS === "true";
+if (wantsHandWorkers || wantsTournamentWorkers) {
   // Production worker modules use the same schema with this suite's private PG
   // generated client. No handler, ledger, queue or infrastructure is replaced.
   const sharedClient = new URL("../../../generated/prisma/index.js", import.meta.url).href;
@@ -50,6 +52,8 @@ if (process.env.POKERTOOLS_ACCEPTANCE_HAND_WORKERS === "true") {
         : resolved;
     },
   });
+}
+if (wantsHandWorkers) {
   for (const path of [
     "../../../src/workers/settle-hand.js",
     "../../../src/workers/archive-hand.js",
@@ -63,6 +67,34 @@ if (process.env.POKERTOOLS_ACCEPTANCE_HAND_WORKERS === "true") {
     );
     await handWorker.waitUntilReady();
   }
+}
+if (wantsTournamentWorkers) {
+  // Real next-hand and durable tournament-director workers (production
+  // factories, shared with process wiring), for tournament/competition
+  // completion regressions.
+  const { createNextHandWorker } = await import("../../../src/workers/next-hand-handler.js");
+  const nextHand = createNextHandWorker(prisma, manager, redis, redlock);
+  nextHand.on("completed", (job: { id: string }) =>
+    console.log(`canonical-tournament-worker:next-hand:completed:${job.id}`)
+  );
+  nextHand.on("failed", (job: { id: string }, error: Error) =>
+    console.log(`canonical-tournament-worker:next-hand:failed:${job.id}:${error.message}`)
+  );
+  await nextHand.waitUntilReady();
+
+  const { createTournamentReconcileWorker } =
+    await import("../../../src/workers/tournament-reconcile-handler.js");
+  const director = createTournamentReconcileWorker(prisma, manager, redis, redlock, {
+    warn: (obj: unknown, msg?: string) =>
+      console.log(`canonical-tournament-worker:director:warn:${JSON.stringify(obj)}:${msg ?? ""}`),
+  });
+  director.on("completed", (job: { id: string }) =>
+    console.log(`canonical-tournament-worker:director:completed:${job.id}`)
+  );
+  director.on("failed", (job: { id: string }, error: Error) =>
+    console.log(`canonical-tournament-worker:director:failed:${job.id}:${error.message}`)
+  );
+  await director.waitUntilReady();
 }
 await recoverGameOutbox(prisma, queues, redis);
 setInterval(

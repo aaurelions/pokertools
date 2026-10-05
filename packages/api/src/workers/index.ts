@@ -17,6 +17,7 @@ import settleHandWorker from "./settle-hand.js";
 import archiveHandWorker from "./archive-hand.js";
 import nextHandWorker from "./next-hand.js";
 import timeoutWorker from "./timeout.js";
+import tournamentReconcileWorker from "./tournament-reconcile.js";
 import createTournamentBlindsWorker from "./tournament-blinds.js";
 import reconciliationWorker from "./reconciliation.js";
 
@@ -31,6 +32,7 @@ logger.info(
       "archive-hand",
       "next-hand",
       "player-timeout",
+      "tournament-reconcile",
       "tournament-blinds",
       "reconciliation",
     ],
@@ -44,6 +46,7 @@ export const workers = [
   archiveHandWorker,
   nextHandWorker,
   timeoutWorker,
+  tournamentReconcileWorker,
   tournamentBlindsWorker,
   reconciliationWorker,
 ];

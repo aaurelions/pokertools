@@ -239,6 +239,167 @@ describe("Tournament sit-out settlement", () => {
   });
 });
 
+/**
+ * Terminal fold with a sole eligible live contender (2.0.3 CASE2 / H11).
+ *
+ * External container evidence: a sitting-out opponent is already folded dead
+ * (forced big blind 70 + ante 7) when the sole live player is asked to act.
+ * The server-issued FOLD was accepted, but the hand then held zero live hands
+ * at PREFLOP with 119 chips (14 ante + 35/70 current bets) undistributed, no
+ * winner and no HAND_COMPLETED. A sole eligible live contender has ALREADY won
+ * uncontested: the fold must settle that win instead of stranding the pot, and
+ * must not refund the dead opponent's unmatched forced blind (dead money).
+ * An ALL_IN opponent stays live eligible, so an ordinary fold still loses.
+ */
+describe("Terminal fold with a sole eligible live contender", () => {
+  const blindStructure = [
+    { smallBlind: 35, bigBlind: 70, ante: 7 },
+    { smallBlind: 53, bigBlind: 106, ante: 11 },
+  ];
+
+  function terminalFoldEngine(): PokerEngine {
+    const engine = new PokerEngine({
+      smallBlind: 35,
+      bigBlind: 70,
+      maxPlayers: 2,
+      blindStructure,
+    });
+    // Reported in-hand shape: human 1300 behind with 42 invested; sitting-out
+    // opponent 581 behind with 77 invested (forced big blind + ante).
+    engine.sit(0, "human", "Human", 1342);
+    engine.sit(1, "agent", "Agent", 658);
+    (engine.state.players as Array<Player | null>)[1] = {
+      ...engine.state.players[1]!,
+      isSittingOut: true,
+    };
+    return engine;
+  }
+
+  function expectReportedShape(engine: PokerEngine): void {
+    engine.deal();
+    const state = engine.state;
+
+    expect(state.street).toBe(Street.PREFLOP);
+    expect(state.actionTo).toBe(0);
+
+    const human = state.players[0]!;
+    expect(human.status).toBe(PlayerStatus.ACTIVE);
+    expect(human.stack).toBe(1300);
+    expect(human.betThisStreet).toBe(35);
+    expect(human.totalInvestedThisHand).toBe(42);
+    expect(human.isSittingOut).toBe(false);
+
+    const deadOpponent = state.players[1]!;
+    expect(deadOpponent.status).toBe(PlayerStatus.FOLDED);
+    expect(deadOpponent.isSittingOut).toBe(true);
+    expect(deadOpponent.stack).toBe(581);
+    expect(deadOpponent.betThisStreet).toBe(70);
+    expect(deadOpponent.totalInvestedThisHand).toBe(77);
+
+    expect(state.pots).toEqual([{ amount: 14, eligibleSeats: [0], type: "MAIN", capPerPlayer: 7 }]);
+    expect([...state.currentBets.entries()].sort((a, b) => a[0] - b[0])).toEqual([
+      [0, 35],
+      [1, 70],
+    ]);
+  }
+
+  test("an accepted FOLD settles the prior sole contender instead of stranding the pot", () => {
+    const engine = terminalFoldEngine();
+    expectReportedShape(engine);
+
+    // H11 blind bump between DEAL and FOLD: settings advance, but the in-hand
+    // investments stay at the level they were posted at.
+    engine.nextBlindLevel();
+    expect(engine.state.blindLevel).toBe(1);
+    expect(engine.state.smallBlind).toBe(53);
+    expect(engine.state.bigBlind).toBe(106);
+    expect(engine.state.ante).toBe(11);
+    expect([...engine.state.currentBets.entries()].sort((a, b) => a[0] - b[0])).toEqual([
+      [0, 35],
+      [1, 70],
+    ]);
+    expect(engine.state.pots[0]!.amount).toBe(14);
+
+    // The server-issued FOLD is accepted and recorded.
+    engine.act({ type: ActionType.FOLD, playerId: "human" });
+
+    const state = engine.state;
+    expect(state.street).toBe(Street.SHOWDOWN);
+    expect(state.actionTo).toBeNull();
+    expect(state.pots).toEqual([]);
+    expect(state.currentBets.size).toBe(0);
+    expect(state.winners).not.toBeNull();
+    expect(state.winners).toHaveLength(1);
+    expect(state.winners![0]).toMatchObject({ seat: 0, amount: 119 });
+    expect(state.actionHistory.some((record) => record.action.type === ActionType.FOLD)).toBe(true);
+
+    // The prior sole contender remains the live owner: a fold cannot forfeit
+    // eligibility that was already established.
+    expect(state.players[0]!.status).toBe(PlayerStatus.ACTIVE);
+    expect(state.players[0]!.stack).toBe(1419);
+
+    // The dead sit-out loses its full forced stakes (70 + 7): the unmatched
+    // forced big blind is dead money, not a live uncalled wager to refund.
+    expect(state.players[1]!.status).toBe(PlayerStatus.FOLDED);
+    expect(state.players[1]!.stack).toBe(581);
+
+    expect(totalChips(engine)).toBe(2000);
+    expect(getInitialChips(state)).toBe(2000);
+  });
+
+  test("a TIMEOUT of the sole contender settles the same uncontested win", () => {
+    const engine = terminalFoldEngine();
+    expectReportedShape(engine);
+    engine.nextBlindLevel();
+
+    engine.act({ type: ActionType.TIMEOUT, playerId: "human" });
+
+    const state = engine.state;
+    expect(state.street).toBe(Street.SHOWDOWN);
+    expect(state.actionTo).toBeNull();
+    expect(state.winners).toHaveLength(1);
+    expect(state.winners![0]).toMatchObject({ seat: 0, amount: 119 });
+    expect(state.players[0]!.stack).toBe(1419);
+    expect(state.players[0]!.isSittingOut).toBe(true);
+    expect(state.players[1]!.stack).toBe(581);
+    expect(totalChips(engine)).toBe(2000);
+    expect(getInitialChips(state)).toBe(2000);
+  });
+
+  test("an ordinary fold against an ALL_IN opponent still loses", () => {
+    const engine = new PokerEngine({
+      smallBlind: 10,
+      bigBlind: 20,
+      maxPlayers: 2,
+      blindStructure: [
+        { smallBlind: 10, bigBlind: 20, ante: 0 },
+        { smallBlind: 15, bigBlind: 30, ante: 0 },
+      ],
+    });
+    engine.sit(0, "p0", "Player 0", 1000);
+    engine.sit(1, "p1", "Player 1", 1000);
+    engine.deal();
+
+    engine.act({ type: ActionType.RAISE, playerId: "p0", amount: 40 });
+    const p1 = engine.state.players[1]!;
+    engine.act({
+      type: ActionType.RAISE,
+      playerId: p1.id,
+      amount: p1.stack + (engine.state.currentBets.get(1) ?? 0),
+    });
+    engine.act({ type: ActionType.FOLD, playerId: "p0" });
+
+    const state = engine.state;
+    expect(state.players[0]!.status).toBe(PlayerStatus.FOLDED);
+    expect(state.winners).not.toBeNull();
+    expect(state.winners!.map((winner) => winner.seat)).toEqual([1]);
+    expect(state.players[0]!.stack).toBe(960);
+    expect(state.players[1]!.stack).toBe(1040);
+    expect(totalChips(engine)).toBe(2000);
+    expect(getInitialChips(state)).toBe(2000);
+  });
+});
+
 function makeUnsettledShowdownState(): GameState {
   const makePlayer = (
     seat: number,
@@ -352,5 +513,121 @@ describe("DEAL boundary validation", () => {
         Array.from(afterDeal.currentBets.values()).reduce((sum, bet) => sum + bet, 0) +
         afterDeal.pots.reduce((sum, pot) => sum + pot.amount, 0)
     ).toBe(1604);
+  });
+});
+
+/**
+ * The ordinary fold settlement's defensive eligible-0 pot fallback must stay
+ * untouched by the sole-contender fix: a side pot whose listed eligible seats
+ * have all folded still goes to the last listed seat exactly as before. The
+ * award helper is private, so this pins the behavior through the public
+ * reducer with the same synthetic-state pattern used by the DEAL tests.
+ */
+function makeOrdinaryFoldSidePotState(): GameState {
+  const makePlayer = (
+    seat: number,
+    overrides: Partial<Player> & { hand: string[] | null }
+  ): Player => ({
+    id: `p${seat}`,
+    name: `Player ${seat}`,
+    seat,
+    stack: 0,
+    hand: null,
+    shownCards: null,
+    status: PlayerStatus.FOLDED,
+    betThisStreet: 0,
+    totalInvestedThisHand: 0,
+    isSittingOut: false,
+    timeBank: 30,
+    pendingAddOn: 0,
+    sitInOption: SitInOption.IMMEDIATE,
+    reservationExpiry: null,
+    ...overrides,
+  });
+
+  const players: Array<Player | null> = Array(3).fill(null);
+  // Seat 0 is all-in for 50 and survives; it is not eligible for the side pot.
+  players[0] = makePlayer(0, {
+    stack: 0,
+    hand: ["As", "Ks"],
+    status: PlayerStatus.ALL_IN,
+    totalInvestedThisHand: 50,
+  });
+  // Seat 1 is the last non-all-in player about to fold.
+  players[1] = makePlayer(1, {
+    stack: 500,
+    hand: ["Qh", "Jh"],
+    status: PlayerStatus.ACTIVE,
+    totalInvestedThisHand: 500,
+  });
+  // Seat 2 already folded into the side pot.
+  players[2] = makePlayer(2, {
+    stack: 0,
+    hand: null,
+    status: PlayerStatus.FOLDED,
+    totalInvestedThisHand: 500,
+  });
+
+  return {
+    config: { smallBlind: 5, bigBlind: 10, validateIntegrity: true },
+    players,
+    maxPlayers: 3,
+    handNumber: 3,
+    buttonSeat: 0,
+    bigBlindSeat: 2,
+    deck: [],
+    board: [],
+    street: Street.PREFLOP,
+    pots: [
+      { amount: 150, eligibleSeats: [0, 1, 2], type: "MAIN", capPerPlayer: 50 },
+      { amount: 900, eligibleSeats: [1, 2], type: "SIDE", capPerPlayer: 500 },
+    ],
+    currentBets: new Map(),
+    minRaise: 10,
+    lastRaiseAmount: 10,
+    actionTo: 1,
+    lastAggressorSeat: null,
+    activePlayers: [1],
+    winners: null,
+    rakeThisHand: 0,
+    smallBlind: 5,
+    bigBlind: 10,
+    ante: 0,
+    blindLevel: 0,
+    timeBanks: new Map([
+      [0, 30],
+      [1, 30],
+      [2, 30],
+    ]),
+    timeBankActiveSeat: null,
+    actionHistory: [],
+    previousStates: [],
+    timestamp: 1791171529568,
+    handId: "hand-1791171527083-748777",
+  };
+}
+
+describe("Ordinary fold settlement fallback (unchanged)", () => {
+  test("an all-dead side pot still goes to its last listed eligible seat", () => {
+    const state = makeOrdinaryFoldSidePotState();
+
+    const result = gameReducer(state, {
+      type: ActionType.FOLD,
+      playerId: "p1",
+      timestamp: state.timestamp + 1,
+    });
+
+    expect(result.street).toBe(Street.SHOWDOWN);
+    expect(result.actionTo).toBeNull();
+    expect(result.pots).toEqual([]);
+    expect(result.currentBets.size).toBe(0);
+    expect(result.winners).toEqual([
+      { seat: 0, amount: 150, hand: null, handRank: null },
+      { seat: 2, amount: 900, hand: null, handRank: null },
+    ]);
+    expect(result.players[0]!.stack).toBe(150);
+    expect(result.players[1]!.stack).toBe(500);
+    expect(result.players[2]!.stack).toBe(900);
+    expect(getInitialChips(result)).toBe(1550);
   });
 });

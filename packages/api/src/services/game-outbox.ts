@@ -15,7 +15,13 @@ import type { JobQueues } from "../plugins/queue.js";
  * after a crash is logically idempotent (BullMQ also dedupes by `jobId`).
  */
 
-export type OutboxKind = "settle-hand" | "archive-hand" | "next-hand" | "player-timeout" | "pubsub";
+export type OutboxKind =
+  | "settle-hand"
+  | "archive-hand"
+  | "next-hand"
+  | "player-timeout"
+  | "tournament-reconcile"
+  | "pubsub";
 
 export interface OutboxIntent {
   kind: OutboxKind;
@@ -60,7 +66,7 @@ export async function writeOutboxIntents(
 
 function jobOptions(kind: string, availableAt: Date): Record<string, unknown> {
   const delay = Math.max(0, availableAt.getTime() - Date.now());
-  if (kind === "settle-hand" || kind === "player-timeout") {
+  if (kind === "settle-hand" || kind === "player-timeout" || kind === "tournament-reconcile") {
     return { attempts: 10, backoff: { type: "exponential", delay: 500 }, delay };
   }
   return { delay };

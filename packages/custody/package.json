@@ -1,6 +1,6 @@
 {
   "name": "@pokertools/custody",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "description": "Private treasury signing, withdrawal recovery and reconciliation worker",
   "author": "A.Aurelius",
   "license": "MIT",
@@ -36,8 +36,8 @@
     "npm": ">=12.2.0"
   },
   "dependencies": {
-    "@pokertools/api": "2.0.3",
-    "@pokertools/types": "2.0.3",
+    "@pokertools/api": "2.0.4",
+    "@pokertools/types": "2.0.4",
     "@prisma/adapter-better-sqlite3": "^7.10.0",
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",

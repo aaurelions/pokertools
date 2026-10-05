@@ -14,7 +14,7 @@ import { getPlayerById } from "../utils/positioning";
 import { getNextToAct } from "../rules/action-order";
 import { CriticalStateError } from "../errors/critical-state-error";
 import { calculateRake } from "../utils/rake";
-import { returnUncalledBet } from "../rules/side-pots";
+import { calculateUncalledBet, returnUncalledBet } from "../rules/side-pots";
 import { getCurrentBet } from "../rules/current-bet";
 
 /**
@@ -27,30 +27,51 @@ export function handleFold(state: GameState, action: FoldAction): GameState {
   }
 
   const { seat } = result;
-  const newPlayers = [...state.players];
+
+  const actionRecord: ActionRecord = {
+    action,
+    seat,
+    resultingPot: getTotalPot(state),
+    resultingStack: state.players[seat]!.stack,
+    street: state.street,
+  };
+
+  const stateWithRecord: GameState = {
+    ...state,
+    actionHistory: [...state.actionHistory, actionRecord],
+    timeBankActiveSeat: null,
+    timestamp: action.timestamp!,
+  };
+
+  // A sole eligible live contender has ALREADY won the hand uncontested against
+  // folded or sitting-out dead hands. Such a contender cannot forfeit that
+  // eligibility and strand the pot: a fold (or the timeout that reuses this
+  // handler) settles the prior uncontested win through the canonical fold-award
+  // path before it can produce a zero-live hand with an undistributed pot. An
+  // ALL_IN opponent remains a live eligible hand, so an ordinary fold against
+  // one still loses normally through the single-live branch below.
+  const liveHandsBeforeFold = stateWithRecord.players.filter(
+    (p) => p && (p.status === PlayerStatus.ACTIVE || p.status === PlayerStatus.ALL_IN)
+  );
+  if (liveHandsBeforeFold.length === 1 && liveHandsBeforeFold[0]?.seat === seat) {
+    // The dead opponent's unmatched forced blind is dead money, not a live
+    // uncalled wager: award it with the pot instead of refunding the dead seat.
+    return awardPotToLastPlayer(stateWithRecord, seat, { soleContender: true });
+  }
+
+  const newPlayers = [...stateWithRecord.players];
 
   newPlayers[seat] = {
     ...newPlayers[seat]!,
     status: PlayerStatus.FOLDED,
   };
 
-  const newActivePlayers = state.activePlayers.filter((s) => s !== seat);
-
-  const actionRecord: ActionRecord = {
-    action,
-    seat,
-    resultingPot: getTotalPot(state),
-    resultingStack: newPlayers[seat].stack,
-    street: state.street,
-  };
+  const newActivePlayers = stateWithRecord.activePlayers.filter((s) => s !== seat);
 
   const currentState: GameState = {
-    ...state,
+    ...stateWithRecord,
     players: newPlayers,
     activePlayers: newActivePlayers,
-    actionHistory: [...state.actionHistory, actionRecord],
-    timeBankActiveSeat: null,
-    timestamp: action.timestamp!,
   };
 
   const playersWithLiveHands = currentState.players.filter(
@@ -292,12 +313,27 @@ function getTotalPot(state: GameState): number {
  *
  * Key principle: Uncalled bets are NOT raked and are returned to the bettor immediately.
  * Only the contested portion is subject to rake.
+ *
+ * `soleContender` marks the pre-action settlement of a sole eligible live hand
+ * against already-dead folded/sitting-out seats (default false = the ordinary
+ * fold settlement, whose behavior is unchanged):
+ * - an already-folded seat's unmatched forced blind is dead money and is
+ *   awarded with the pot instead of refunded;
+ * - a pot whose listed eligible seats are all dead is awarded to the known
+ *   sole contender instead of the last listed seat.
  */
-function awardPotToLastPlayer(state: GameState, winningSeat: number): GameState {
-  // The unmatched wager may belong to a player who just folded (most notably
-  // an oversized blind), not necessarily to the winner. Normalize it before
-  // awarding any contested chips.
-  const normalizedState = returnUncalledBet(state);
+function awardPotToLastPlayer(
+  state: GameState,
+  winningSeat: number,
+  options: { soleContender?: boolean } = {}
+): GameState {
+  const soleContender = options.soleContender ?? false;
+  const uncalled = calculateUncalledBet(state);
+  const uncalledBettor = uncalled ? state.players[uncalled[1]] : null;
+  const shouldReturnUncalled =
+    uncalled !== null &&
+    (!soleContender || (uncalledBettor !== null && uncalledBettor.status !== PlayerStatus.FOLDED));
+  const normalizedState = shouldReturnUncalled ? returnUncalledBet(state) : state;
   const newPlayers = [...normalizedState.players];
   const winners: Winner[] = [];
   let totalRakeFromPots = 0;
@@ -313,16 +349,21 @@ function awardPotToLastPlayer(state: GameState, winningSeat: number): GameState 
     const potAfterRake = pot.amount - potRake;
 
     if (eligibleNonFolded.length === 0) {
-      // Defensive fallback: no eligible players remain.
-      const lastEligible = pot.eligibleSeats[pot.eligibleSeats.length - 1];
-      const player = newPlayers[lastEligible];
+      // Historical defensive fallback: for the ordinary fold settlement the
+      // last listed eligible seat still receives the pot, unchanged. Only the
+      // sole-contender settlement redirects an all-dead pot to the known live
+      // hand, since no dead seat may be awarded dead money.
+      const fallbackSeat = soleContender
+        ? winningSeat
+        : pot.eligibleSeats[pot.eligibleSeats.length - 1];
+      const player = newPlayers[fallbackSeat];
       if (player) {
-        newPlayers[lastEligible] = {
+        newPlayers[fallbackSeat] = {
           ...player,
           stack: player.stack + potAfterRake,
         };
         winners.push({
-          seat: lastEligible,
+          seat: fallbackSeat,
           amount: potAfterRake,
           hand: null,
           handRank: null,

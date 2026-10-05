@@ -1,6 +1,9 @@
 import type { FastifyInstance } from "fastify";
+import type { Redis } from "ioredis";
+import type Redlock from "redlock";
 import { ActionType } from "@pokertools/types";
-import type { Prisma } from "../../generated/prisma/index.js";
+import type { Prisma, PrismaClient } from "../../generated/prisma/index.js";
+import type { GameManager } from "./game-manager.js";
 import {
   computeTournamentPayouts,
   computeTournamentTableDistribution,
@@ -29,6 +32,19 @@ import { recordTournamentEvent } from "./tournament-events.js";
  * and transactional outbox all commit together. Redis (Redlock) is only a
  * best-effort contention optimization and is never required for correctness.
  */
+
+/**
+ * Minimal platform context the tournament director needs. The Fastify app
+ * satisfies it structurally, and durable background workers construct it
+ * directly from their own Prisma/Redis/Redlock/GameManager instances.
+ */
+export interface TournamentDirectorContext {
+  prisma: PrismaClient;
+  gameManager: GameManager;
+  redis: Pick<Redis, "status">;
+  redlock: Redlock;
+  log: { warn: (obj: unknown, msg?: string) => void };
+}
 
 export async function requireTournamentManager(
   fastify: FastifyInstance,
@@ -108,12 +124,12 @@ export async function lockTableRows(
  * transition, and the lock is released by TTL if the unlock fails.
  */
 export async function acquireTournamentLockBestEffort(
-  fastify: FastifyInstance,
+  context: TournamentDirectorContext,
   tournamentId: string
 ): Promise<{ unlock: () => Promise<void> } | null> {
-  if (fastify.redis.status !== "ready") return null;
+  if (context.redis.status !== "ready") return null;
   try {
-    return await fastify.redlock.lock(
+    return await context.redlock.lock(
       [`lock:tournament:${tournamentId}`],
       config.TOURNAMENT_LOCK_TTL_MS
     );

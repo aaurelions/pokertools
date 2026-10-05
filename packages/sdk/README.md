@@ -61,7 +61,7 @@ yarn add @pokertools/sdk @pokertools/types
 pnpm add @pokertools/sdk @pokertools/types
 ```
 
-`@pokertools/sdk` (v2.0.3) depends on `@pokertools/types` (v2.0.3) for shared
+`@pokertools/sdk` (v2.0.4) depends on `@pokertools/types` (v2.0.4) for shared
 TypeScript types. The React hooks require `react >= 19.2.3` as an **optional**
 peer dependency — install `react` and `react-dom` only if you use the React
 integration. The base client targets both browsers and Node.js.

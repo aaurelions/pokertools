@@ -20,6 +20,10 @@ export class ObservabilityManager {
     );
     this.createCounter("pokertools_idempotency_hits_total", "Durable idempotency replay hits");
     this.createCounter("pokertools_audit_log_failures_total", "Audit log write failures");
+    this.createCounter(
+      "pokertools_tournament_reconcile_failures_total",
+      "Post-commit tournament director reconcile failures after an accepted mutation"
+    );
   }
 
   increment(name: string, labels: Record<string, string> = {}, value = 1): void {

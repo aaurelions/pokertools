@@ -1,4 +1,3 @@
-import type { FastifyInstance } from "fastify";
 import type { Prisma } from "../../generated/prisma/index.js";
 import { ActionType } from "@pokertools/types";
 import { MAX_RECONCILE_ITERATIONS } from "../utils/tournaments.js";
@@ -8,6 +7,7 @@ import {
   acquireTournamentLockBestEffort,
   lockTableRows,
   lockTournamentRow,
+  type TournamentDirectorContext,
 } from "./tournament-lifecycle.js";
 import { recordTournamentEvent, tournamentStateFingerprint } from "./tournament-events.js";
 
@@ -82,21 +82,21 @@ async function findOpenSeatInTx(tx: Tx, tableId: string): Promise<number> {
  * player to compensate for.
  */
 async function movePlayerInTx(
-  fastify: FastifyInstance,
+  context: TournamentDirectorContext,
   tx: Tx,
   player: LivePlayer,
   destTableId: string,
   destSeat: number,
   actorUserId: string
 ): Promise<void> {
-  await fastify.gameManager.applyManagementMutationInTx(
+  await context.gameManager.applyManagementMutationInTx(
     tx,
     player.tableId,
     actorUserId,
     { type: ActionType.STAND, playerId: player.userId },
     { skipIdentity: true }
   );
-  await fastify.gameManager.applyManagementMutationInTx(
+  await context.gameManager.applyManagementMutationInTx(
     tx,
     destTableId,
     actorUserId,
@@ -151,7 +151,7 @@ async function closeEmptyTournamentTableInTx(tx: Tx, tableId: string): Promise<b
  * table break changed the layout), `"done"` otherwise.
  */
 async function reconcileOnce(
-  fastify: FastifyInstance,
+  context: TournamentDirectorContext,
   tx: Tx,
   tournamentId: string,
   actorUserId: string
@@ -264,7 +264,7 @@ async function reconcileOnce(
     if (!state.winners?.length || state.actionTo != null) continue;
     for (const player of state.players) {
       if (player && player.stack === 0) {
-        await fastify.gameManager.applyManagementMutationInTx(
+        await context.gameManager.applyManagementMutationInTx(
           tx,
           table.id,
           actorUserId,
@@ -298,13 +298,13 @@ async function reconcileOnce(
       try {
         destSeat = await findOpenSeatInTx(tx, finalTableId);
       } catch {
-        fastify.log.warn(
+        context.log.warn(
           { tournamentId, playerId: player.userId, finalTableId },
           "Cannot merge player to final table: no open seat available"
         );
         continue;
       }
-      await movePlayerInTx(fastify, tx, player, finalTableId, destSeat, actorUserId);
+      await movePlayerInTx(context, tx, player, finalTableId, destSeat, actorUserId);
     }
 
     // Never close a table with players still assigned to it (including deferred
@@ -350,13 +350,13 @@ async function reconcileOnce(
       try {
         seat = await findOpenSeatInTx(tx, target[0]);
       } catch {
-        fastify.log.warn(
+        context.log.warn(
           { tournamentId, playerId: player.userId, targetTableId: target[0] },
           "Cannot consolidate player: no open seat on destination table"
         );
         break;
       }
-      await movePlayerInTx(fastify, tx, player, target[0], seat, actorUserId);
+      await movePlayerInTx(context, tx, player, target[0], seat, actorUserId);
       moved = true;
       tablePlayerCounts.set(target[0], (tablePlayerCounts.get(target[0]) ?? 0) + 1);
       tablePlayerCounts.set(sourceId, (tablePlayerCounts.get(sourceId) ?? 0) - 1);
@@ -402,13 +402,13 @@ async function reconcileOnce(
       try {
         openSeat = await findOpenSeatInTx(tx, targetTable.id);
       } catch {
-        fastify.log.warn(
+        context.log.warn(
           { tournamentId, playerId: player.userId, targetTableId: targetTable.id },
           "Cannot break short table: no open seat on target table"
         );
         continue;
       }
-      await movePlayerInTx(fastify, tx, player, targetTable.id, openSeat, actorUserId);
+      await movePlayerInTx(context, tx, player, targetTable.id, openSeat, actorUserId);
       moved = true;
       tablePlayerCounts.set(targetTable.id, (tablePlayerCounts.get(targetTable.id) ?? 0) + 1);
       tablePlayerCounts.set(tableId, (tablePlayerCounts.get(tableId) ?? 0) - 1);
@@ -430,13 +430,13 @@ async function reconcileOnce(
       try {
         destSeat = await findOpenSeatInTx(tx, minTableId);
       } catch {
-        fastify.log.warn(
+        context.log.warn(
           { tournamentId, maxTableId, minTableId },
           "Cannot rebalance: no open seat on min table"
         );
         return "done";
       }
-      await movePlayerInTx(fastify, tx, playerToMove, minTableId, destSeat, actorUserId);
+      await movePlayerInTx(context, tx, playerToMove, minTableId, destSeat, actorUserId);
     }
   }
 
@@ -449,13 +449,16 @@ async function reconcileOnce(
  * facts produce the same stable audit fingerprint and append no spurious event.
  */
 export async function reconcileTournament(
-  fastify: FastifyInstance,
+  context: TournamentDirectorContext,
   tournamentId: string,
   actorUserId: string
-): Promise<void> {
-  const lock = await acquireTournamentLockBestEffort(fastify, tournamentId);
+): Promise<{ converged: boolean }> {
+  const lock = await acquireTournamentLockBestEffort(context, tournamentId);
+  // `false` only when the bounded iteration cap deferred work: durable callers
+  // must retry instead of acknowledging a partially reconciled tournament.
+  let converged = true;
   try {
-    await fastify.prisma.$transaction(
+    await context.prisma.$transaction(
       async (tx) => {
         await lockTournamentRow(tx, tournamentId);
 
@@ -479,12 +482,13 @@ export async function reconcileTournament(
 
         let remaining = MAX_RECONCILE_ITERATIONS;
         while (remaining > 0) {
-          const outcome = await reconcileOnce(fastify, tx, tournamentId, actorUserId);
+          const outcome = await reconcileOnce(context, tx, tournamentId, actorUserId);
           if (outcome === "done") break;
           remaining--;
         }
         if (remaining <= 0) {
-          fastify.log.warn(
+          converged = false;
+          context.log.warn(
             { tournamentId, iterations: MAX_RECONCILE_ITERATIONS },
             "Reconciliation iteration limit reached; deferring remaining work to next reconcile call"
           );
@@ -527,4 +531,5 @@ export async function reconcileTournament(
   } finally {
     if (lock) await lock.unlock().catch(() => undefined);
   }
+  return { converged };
 }

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.4] - 2026-10-05
+
+### Fixed
+
+- A terminal fold by the sole eligible live contender — including the scheduled timeout that reuses the fold handler — now settles the uncontested win that contender already held instead of leaving a hand with zero live hands, an undistributed pot, no winner and no `HAND_COMPLETED`. In the reported CASE 2 shape (a sitting-out opponent already folded dead with an unmatched forced big blind and ante, and the sole live player's server-issued `FOLD` accepted at PREFLOP) the 119-chip pot is now awarded to the remaining live hand, and the dead opponent's unmatched forced blind is awarded as dead money with the pot rather than refunded to the folded seat. An `ALL_IN` opponent remains a live eligible hand, so an ordinary fold against one still loses normally.
+- Every tournament `HAND_COMPLETED` — whether produced by a canonical `ACTION`, a worker `DEAL` or a worker `TIMEOUT` — now commits a durable `tournament-reconcile` outbox intent in the same database transaction. A new `tournament-reconcile` BullMQ worker runs the existing authoritative tournament director with bounded retry/backoff and restart recovery; the outbox row is acknowledged only when the director pass converges, and a bounded iteration-cap deferral is retried rather than acknowledged. A post-commit director failure can no longer strand a busted entrant `ACTIVE` or leave a competition not `settlementReady` until a human reconciles or a player acts again.
+
+### Notes
+
+- Aside from the two fixes above, no poker/blind-structure, chip-economy, provider-budget or agent-prompt behavior changed. No public `@pokertools/types` or `@pokertools/sdk` source changes; dependency pins and lock entries only move to 2.0.4.
+
 ## [2.0.3] - 2026-10-05
 
 ### Fixed
