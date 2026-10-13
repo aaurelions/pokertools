@@ -84,6 +84,59 @@ describe("WebSocket connection limits", () => {
     }
   });
 
+  it("releases the connection slot when the socket closes during authentication", async () => {
+    const address = `0x${"c".repeat(40)}`;
+    const user = await app.prisma.user.create({
+      data: { address, username: `ws_abort_${Date.now()}` },
+    });
+    await app.financialManager.ensureAccounts(user.id);
+    const jti = `ws-abort-${Date.now()}`;
+    await app.prisma.session.create({
+      data: { userId: user.id, jti, expiresAt: new Date(Date.now() + 3600000) },
+    });
+    const token = await app.jwt.sign(
+      { userId: user.id, address: user.address, jti },
+      { jti, expiresIn: "1h" }
+    );
+    const wsUrl = baseUrl.replace("http", "ws") + "/ws/play";
+
+    // Widen the race window: the server awaits Redis after authentication.
+    const originalHincrby = app.redis.hincrby.bind(app.redis);
+    const slowHincrby = (async (...args: Parameters<typeof originalHincrby>) => {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      return originalHincrby(...args);
+    }) as typeof originalHincrby;
+    app.redis.hincrby = slowHincrby;
+
+    try {
+      for (let i = 0; i < 8; i++) {
+        const ws = new WebSocket(wsUrl, ["pokertools", `jwt.${token}`]);
+        await new Promise<void>((resolve) => {
+          ws.on("open", () => {
+            // Abort while the server is still awaiting async authentication.
+            ws.terminate();
+          });
+          ws.on("close", () => resolve());
+          ws.on("error", () => resolve());
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      app.redis.hincrby = originalHincrby;
+      const remaining = await app.redis.hget("ws:connections", user.id);
+      expect(Number(remaining ?? 0)).toBe(0);
+    } finally {
+      app.redis.hincrby = originalHincrby;
+      await app.redis.hdel("ws:connections", user.id);
+      await app.prisma.session.deleteMany({ where: { userId: user.id } });
+      await app.prisma.chipLedgerEntry.deleteMany({
+        where: { account: { principalId: user.id } },
+      });
+      await app.prisma.chipGrant.deleteMany({ where: { principalId: user.id } });
+      await app.prisma.chipAccount.deleteMany({ where: { principalId: user.id } });
+      await app.prisma.user.delete({ where: { id: user.id } });
+    }
+  });
+
   it("bounds pre-authentication messages instead of allowing an unbounded queue", async () => {
     const address = `0x${"b".repeat(40)}`;
     const user = await app.prisma.user.create({

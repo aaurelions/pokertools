@@ -545,6 +545,15 @@ export class PokerClient {
     return (await this.submitFamily(tableId, "STAND")).observation.state;
   }
 
+  /**
+   * Return from a sit-out ("I'm back", e.g. after a timeout). Takes effect from
+   * the next hand. Uses the dedicated `POST /tables/:id/sit-in` route because
+   * management families are not offered through the canonical action route.
+   */
+  async sitIn(tableId: string): Promise<void> {
+    await this.request("POST", `/tables/${tableId}/sit-in`);
+  }
+
   // ============================================================================
   // Tournaments
   // ============================================================================

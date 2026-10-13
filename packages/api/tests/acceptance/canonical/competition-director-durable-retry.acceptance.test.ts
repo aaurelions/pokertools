@@ -24,7 +24,7 @@
  *   (all-in RAISE + CALL);
  * - a test spy on the service Prisma `$transaction` fails the inline director
  *   transaction exactly ONCE, after the poker commit, simulating a transient
- *   PostgreSQL failure (no engine mock, no private NLHE API);
+ *   PostgreSQL failure (no engine mock, no private consumer API);
  * - the real BullMQ workers (settle/archive/next-hand/tournament-director via
  *   the canonical `timeout-worker-main.ts` fixture) consume the committed
  *   outbox; the director obligation was committed in the SAME transaction as

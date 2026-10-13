@@ -63,7 +63,15 @@ function serviceRequiredScope(method: string, routeUrl: string): ServiceScopeNam
   if (routeUrl === "/tables/:id/observation" || routeUrl === "/tables/:id/replay") {
     return method === "GET" ? "table:observe" : null;
   }
-  if (["/tables/:id/buy-in", "/tables/:id/add-chips", "/tables/:id/stand"].includes(routeUrl)) {
+  if (
+    [
+      "/tables/:id/buy-in",
+      "/tables/:id/add-chips",
+      "/tables/:id/stand",
+      // A timed-out agent must be able to return to its own (bound) table.
+      "/tables/:id/sit-in",
+    ].includes(routeUrl)
+  ) {
     return method === "POST" ? "table:act" : null;
   }
   if (routeUrl === "/tables/:id/chat") {

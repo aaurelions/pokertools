@@ -34,6 +34,14 @@ export const StandActionSchema = z.object({
 });
 
 /**
+ * Schema for SIT_IN action (returning from a sit-out)
+ */
+export const SitInActionSchema = z.object({
+  type: z.literal("SIT_IN"),
+  playerId: z.string().min(1, "Player ID is required"),
+});
+
+/**
  * Schema for BET action
  */
 export const BetActionSchema = z.object({
@@ -159,6 +167,7 @@ export const UncalledBetReturnedActionSchema = z.object({
 export const ActionSchema = z.discriminatedUnion("type", [
   SitActionSchema,
   StandActionSchema,
+  SitInActionSchema,
   BetActionSchema,
   RaiseActionSchema,
   CallActionSchema,

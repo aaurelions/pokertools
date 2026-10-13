@@ -324,6 +324,8 @@ export function legalFamilyToEngineAction(
       return { type: ActionType.TIME_BANK, playerId: principalId };
     case "STAND":
       return { type: ActionType.STAND, playerId: principalId };
+    case "SIT_IN":
+      return { type: ActionType.SIT_IN, playerId: principalId };
     case "DEAL":
       return { type: ActionType.DEAL };
     case "NEXT_BLIND_LEVEL":

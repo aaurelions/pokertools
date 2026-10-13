@@ -352,6 +352,9 @@ export function useTable(tableId: string, options: UseTableOptions = {}): UseTab
         case "STAND":
           await client.stand(tableId);
           break;
+        case "SIT_IN":
+          await client.sitIn(tableId);
+          break;
         default:
           throw new Error(`Unsupported action family: ${family as string}`);
       }

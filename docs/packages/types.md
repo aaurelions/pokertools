@@ -27,6 +27,7 @@ Every state transition is an `Action` — a discriminated union on `type`.
 | :---------------------- | :--------- | :---------------------------- | :--------------------------------------------------- |
 | `SIT`                   | Management | `seat`, `stack`, `name`, `id` | Sit at a seat with chips                             |
 | `STAND`                 | Management | —                             | Leave the table                                      |
+| `SIT_IN`                | Management | —                             | Return from sit-out; dealt in from the next hand     |
 | `ADD_CHIPS`             | Management | `amount`                      | Top up chips                                         |
 | `RESERVE_SEAT`          | Management | `seat`                        | Hold a seat for late join                            |
 | `DEAL`                  | Dealing    | —                             | Shuffle, deal, post blinds/antes                     |

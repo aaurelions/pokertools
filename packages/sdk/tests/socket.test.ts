@@ -242,6 +242,48 @@ describe("PokerSocket", () => {
     });
   });
 
+  describe("join regressions", () => {
+    it("resolves a re-join with the unchanged observation instead of timing out", async () => {
+      await socket.connect();
+      const ws = (socket as any).ws as MockWebSocket;
+      const observation = makeObservation({ version: 4, eventSeq: 9 });
+
+      const first = socket.join("table-1");
+      ws.onmessage?.({ data: observationFrame(observation) });
+      await first;
+
+      // After a reconnect the server re-sends the identical projection.
+      const second = socket.join("table-1");
+      ws.onmessage?.({ data: observationFrame(observation) });
+      const result = await Promise.race([
+        second,
+        new Promise((resolve) => setTimeout(() => resolve("hung"), 200)),
+      ]);
+      expect(result).not.toBe("hung");
+      expect((result as SeatObservation).version).toBe(4);
+    });
+
+    it("a superseded join timeout does not drop the newer pending join", async () => {
+      await socket.connect();
+      const ws = (socket as any).ws as MockWebSocket;
+      vi.useFakeTimers();
+
+      const first = socket.join("table-1").catch((e: Error) => e);
+      await vi.advanceTimersByTimeAsync(6000);
+      const second = socket.join("table-1");
+      const secondSettled = vi.fn();
+      second.then(secondSettled, secondSettled);
+
+      // First join times out at t=10000, second is still within its window.
+      await vi.advanceTimersByTimeAsync(4500);
+      expect(await first).toBeInstanceOf(PokerSDKError);
+
+      ws.onmessage?.({ data: observationFrame(makeObservation({ version: 2, eventSeq: 2 })) });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(secondSettled).toHaveBeenCalledWith(expect.objectContaining({ version: 2 }));
+    });
+  });
+
   describe("leave", () => {
     it("sends LEAVE message and drops the cached observation", async () => {
       await socket.connect();

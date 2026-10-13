@@ -70,6 +70,7 @@ settings are present in its environment.
 | Tables      | `GET /tables/:id/replay`                              | Hand replay                                 |
 | Tables      | `POST /tables/:id/add-chips`                          | Top up                                      |
 | Tables      | `POST /tables/:id/stand`                              | Leave table                                 |
+| Tables      | `POST /tables/:id/sit-in`                             | Return from sit-out (next hand)             |
 | Tournaments | `GET /tournaments`                                    | List                                        |
 | Tournaments | `POST /tournaments`                                   | Create                                      |
 | Tournaments | `GET /tournaments/:id`                                | Detail                                      |

@@ -16,6 +16,7 @@ import type { AuthenticatedPrincipal } from "../../services/principal-manager.js
 import { config } from "../../config.js";
 import { getHouseUserId } from "../../utils/house-user.js";
 import { reconcileTournament } from "../../services/tournament-director.js";
+import { clampChatLimit, sanitizeChatBody } from "./chat.js";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -80,33 +81,6 @@ async function competitionManagedTableError(
 
 function parseRequiredInteger(value: string | undefined): number | undefined {
   return parseOptionalInteger(value);
-}
-
-// ---------------------------------------------------------------------------
-// Chat body hygiene. Stored text is escaped so it is HTML-inert on render, and
-// page sizes are clamped to a bounded server range.
-// ---------------------------------------------------------------------------
-
-const CHAT_MAX_BODY_LENGTH = 2000;
-const CHAT_MAX_PAGE_SIZE = 200;
-const CHAT_DEFAULT_PAGE_SIZE = 50;
-
-const HTML_ESCAPES: Readonly<Record<string, string>> = {
-  "&": "&amp;",
-  "<": "&lt;",
-  ">": "&gt;",
-  '"': "&quot;",
-  "'": "&#39;",
-};
-
-function sanitizeChatBody(body: string): string {
-  const escaped = body.replace(/[&<>"']/g, (character) => HTML_ESCAPES[character] ?? character);
-  return escaped.slice(0, CHAT_MAX_BODY_LENGTH);
-}
-
-function clampChatLimit(limit: number | undefined): number {
-  if (limit === undefined || !Number.isFinite(limit)) return CHAT_DEFAULT_PAGE_SIZE;
-  return Math.min(CHAT_MAX_PAGE_SIZE, Math.max(1, Math.trunc(limit)));
 }
 
 // ---------------------------------------------------------------------------
@@ -806,6 +780,52 @@ export const tableRoutes: FastifyPluginAsync = async (fastify) => {
         metadata: { amount: amountNum, replayed: idem.replayed },
       });
       return idem.response;
+    }
+  );
+
+  // POST /tables/:id/sit-in - Return from a sit-out ("I'm back"). Takes effect
+  // from the next deal; no financial effect, so no reserve/settlement work.
+  fastify.post<{ Params: { id: string } }>(
+    "/:id/sit-in",
+    { onRequest: [fastify.authenticate] },
+    async (request) => {
+      const { id } = request.params;
+      const { userId } = request.user;
+      const actorId = userId;
+
+      // Same table lock namespace as stand/game actions/settlement.
+      const lock = await fastify.redlock.lock([`lock:table:${id}`], config.TABLE_LOCK_TTL_MS * 3);
+
+      try {
+        await retryTransaction(() =>
+          fastify.prisma.$transaction(async (tx) => {
+            const snapshot = await fastify.gameManager.loadTransactionSnapshot(tx, id);
+            const player = snapshot.players.find((p) => p?.id === actorId);
+            if (!player) {
+              throw Object.assign(new Error("Not seated at this table"), {
+                statusCode: 400,
+                code: "NOT_SEATED",
+              });
+            }
+            if (!player.isSittingOut) {
+              throw Object.assign(new Error("Not sitting out"), {
+                statusCode: 400,
+                code: "NOT_SITTING_OUT",
+              });
+            }
+
+            await fastify.gameManager.applyManagementMutationInTx(tx, id, actorId, {
+              type: "SIT_IN" as ActionType.SIT_IN,
+              playerId: actorId,
+            });
+          })
+        );
+
+        await fastify.gameManager.publishCommitted(id);
+        return { success: true };
+      } finally {
+        await lock.unlock();
+      }
     }
   );
 

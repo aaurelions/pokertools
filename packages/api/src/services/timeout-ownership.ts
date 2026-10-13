@@ -104,7 +104,7 @@ export function invalidInterveningTimeoutEventWhere(anchorVersion: number) {
       {
         NOT: {
           type: "ACTION_APPLIED",
-          actionId: "NEXT_BLIND_LEVEL",
+          actionId: { in: ["NEXT_BLIND_LEVEL", "SIT_IN"] },
           version: { gt: anchorVersion },
         },
       },

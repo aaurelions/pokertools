@@ -16,6 +16,12 @@ export function progressStreet(state: GameState): GameState {
     return state;
   }
 
+  // Uncontested: at most one non-folded player means nobody can be beaten, so
+  // no community cards are dealt; go straight to settlement.
+  if (countLivePlayers(state) <= 1) {
+    return { ...state, street: Street.SHOWDOWN, currentBets: new Map(), actionTo: null };
+  }
+
   if (checkAutoRunout(state)) {
     return handleAutoRunout(state);
   }
@@ -96,6 +102,19 @@ function dealCommunityCards(state: GameState, street: Street): { board: string[]
     default:
       return { board: currentBoard, deck };
   }
+}
+
+function countLivePlayers(state: GameState): number {
+  let live = 0;
+  for (const player of state.players) {
+    if (
+      player &&
+      (player.status === PlayerStatus.ACTIVE || player.status === PlayerStatus.ALL_IN)
+    ) {
+      live++;
+    }
+  }
+  return live;
 }
 
 /**

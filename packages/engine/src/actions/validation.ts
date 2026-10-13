@@ -6,6 +6,7 @@ import {
   PlayerStatus,
   SitAction,
   StandAction,
+  SitInAction,
   TimeoutAction,
   TimeBankAction,
   AddChipsAction,
@@ -49,6 +50,10 @@ export function validateAction(state: GameState, action: Action): void {
 
     case ActionType.STAND:
       validateStandAction(state, action);
+      break;
+
+    case ActionType.SIT_IN:
+      validateSitInAction(state, action);
       break;
 
     case ActionType.TIMEOUT:
@@ -357,6 +362,26 @@ function validateSitAction(state: GameState, action: SitAction): void {
       ErrorCodes.INVALID_STACK,
       `Stack must be positive, got ${action.stack}`,
       { stack: action.stack }
+    );
+  }
+}
+
+function validateSitInAction(state: GameState, action: SitInAction): void {
+  const result = getPlayerById(state, action.playerId);
+
+  if (!result) {
+    throw new IllegalActionError(
+      ErrorCodes.PLAYER_NOT_FOUND,
+      `Player ${action.playerId} not found`,
+      { playerId: action.playerId }
+    );
+  }
+
+  if (!result.player.isSittingOut) {
+    throw new IllegalActionError(
+      ErrorCodes.INVALID_ACTION,
+      `Player ${action.playerId} is not sitting out`,
+      { playerId: action.playerId }
     );
   }
 }

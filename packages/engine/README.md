@@ -237,6 +237,9 @@ engine.act({ type: ActionType.MUCK, playerId: "user123" });
 
 // Activate time bank
 engine.act({ type: ActionType.TIME_BANK, playerId: "user123" });
+
+// Return from a sit-out (takes effect from the next deal)
+engine.act({ type: ActionType.SIT_IN, playerId: "user123" });
 ```
 
 `CALL` is amount-less. If the player has less than the outstanding call, it
@@ -587,6 +590,7 @@ enum ActionType {
   // Management
   SIT = "SIT",
   STAND = "STAND",
+  SIT_IN = "SIT_IN",
   ADD_CHIPS = "ADD_CHIPS",
   RESERVE_SEAT = "RESERVE_SEAT",
 

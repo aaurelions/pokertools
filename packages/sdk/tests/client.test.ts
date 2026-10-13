@@ -300,6 +300,19 @@ describe("PokerClient", () => {
       );
     });
 
+    it("sitIn posts to the sit-in route", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true }),
+      });
+
+      await expect(client.sitIn("table-1")).resolves.toBeUndefined();
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.example.com/tables/table-1/sit-in",
+        expect.objectContaining({ method: "POST" })
+      );
+    });
+
     it("getObservation returns the validated seat observation", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,

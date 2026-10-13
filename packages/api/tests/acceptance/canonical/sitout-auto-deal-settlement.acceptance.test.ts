@@ -2,9 +2,9 @@
 /**
  * Sit-out auto-deal settlement acceptance on real PostgreSQL + Redis.
  *
- * Regression for the NLHE h3 platform blocker: after two failed provider
- * attempts the platform applied a real TIMEOUT, marking the agent seat sitting
- * out. In a tournament the sitting-out player still posts forced blinds/antes
+ * Regression for a platform blocker: after an agent's decision provider
+ * failed twice the platform applied a real TIMEOUT, marking the agent seat
+ * sitting out. In a tournament the sitting-out player still posts forced blinds/antes
  * and is folded; when the only remaining live player then shoved with no
  * caller, the hand reached SHOWDOWN with `winners === null` and an
  * undistributed pot. No HAND_COMPLETED event, archive-hand or next-hand intent

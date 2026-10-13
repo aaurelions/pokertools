@@ -395,6 +395,33 @@ describe("Service principal auth + scoped authorization", () => {
     });
   });
 
+  it("lets a table-bound act credential reach sit-in only on its own table", async () => {
+    const sitIn = (token: string, tableId: string) =>
+      app.inject({
+        method: "POST",
+        url: `/tables/${tableId}/sit-in`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+    const { body: actor } = await createCredential(admin.token, {
+      name: "sit-in-act",
+      scopes: ["table:act"],
+      tableId: tableA,
+    });
+    // Past the SERVICE scope gate: the route itself answers (not seated).
+    const own = await sitIn(actor.token, tableA);
+    expect(own.statusCode).toBe(400);
+    expect(JSON.parse(own.body).code ?? JSON.parse(own.body).error).toBe("NOT_SEATED");
+    // Table binding still applies.
+    expect((await sitIn(actor.token, tableB)).statusCode).toBe(403);
+
+    const { body: observer } = await createCredential(admin.token, {
+      name: "sit-in-observe",
+      scopes: ["table:observe"],
+      tableId: tableA,
+    });
+    expect((await sitIn(observer.token, tableA)).statusCode).toBe(403);
+  });
+
   it("blocks service credentials from creating tables/rooms", async () => {
     const { body } = await createCredential(admin.token, {
       name: "no-room-create",

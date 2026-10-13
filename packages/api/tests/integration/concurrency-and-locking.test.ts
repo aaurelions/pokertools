@@ -6,6 +6,7 @@ import {
   buyIn,
   getTableState,
   type TestContext,
+  withBoundedLockRetries,
 } from "../helpers/test-utils.js";
 
 describe("Stand endpoint lock namespace", () => {
@@ -57,11 +58,13 @@ describe("Stand endpoint lock namespace", () => {
 
     const lock = await ctx.app.redlock.lock([`lock:table:${ctx.tableId}`], 60000);
     try {
-      const res = await ctx.app.inject({
-        method: "POST",
-        url: `/tables/${ctx.tableId}/stand`,
-        headers: { authorization: `Bearer ${player1.token}` },
-      });
+      const res = await withBoundedLockRetries(ctx.app, 25, () =>
+        ctx.app.inject({
+          method: "POST",
+          url: `/tables/${ctx.tableId}/stand`,
+          headers: { authorization: `Bearer ${player1.token}` },
+        })
+      );
       expect(res.statusCode).toBeGreaterThanOrEqual(400);
     } finally {
       await lock.unlock();

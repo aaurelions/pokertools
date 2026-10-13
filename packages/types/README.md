@@ -299,6 +299,7 @@ const enum ActionType {
   // Management
   SIT = "SIT",
   STAND = "STAND",
+  SIT_IN = "SIT_IN",
   ADD_CHIPS = "ADD_CHIPS",
   RESERVE_SEAT = "RESERVE_SEAT",
 
@@ -463,6 +464,12 @@ const timeBank: TimeBankAction = {
   playerId: "user123",
 };
 
+// SIT_IN - Return from a sit-out (dealt in from the next hand)
+const sitIn: SitInAction = {
+  type: ActionType.SIT_IN,
+  playerId: "user123",
+};
+
 // UNCALLED_BET_RETURNED - Internal engine action
 const uncalled: UncalledBetReturnedAction = {
   type: ActionType.UNCALLED_BET_RETURNED,
@@ -535,6 +542,7 @@ const ALLOWED_GAMEPLAY_ACTIONS: readonly ActionType[] = [
   ActionType.MUCK,
   ActionType.TIME_BANK,
   ActionType.STAND,
+  ActionType.SIT_IN,
   ActionType.NEXT_BLIND_LEVEL,
 ];
 

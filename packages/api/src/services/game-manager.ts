@@ -1180,6 +1180,7 @@ export class GameManager {
       // turn: at a showdown/hand boundary `actionTo` is null, so SHOW/MUCK must
       // be authorized against the durable seat, not the pending-turn seat.
       case "STAND":
+      case "SIT_IN":
       case "SHOW":
       case "MUCK": {
         const seated = snapshot.players.some((player) => player?.id === principalId);
@@ -1254,9 +1255,9 @@ export class GameManager {
           availableAt: new Date(Date.now() + appConfig.AUTO_DEAL_DELAY_MS),
         });
       }
-    } else if (actionType !== "NEXT_BLIND_LEVEL") {
-      // NEXT_BLIND_LEVEL is blind metadata only: it must never re-arm the
-      // pending turn's deadline. The original intent stays valid across blind
+    } else if (actionType !== "NEXT_BLIND_LEVEL" && actionType !== "SIT_IN") {
+      // NEXT_BLIND_LEVEL and SIT_IN (a flag flip taking effect next deal) are
+      // not turn-affecting: they must never re-arm the pending turn's deadline. The original intent stays valid across blind
       // advances (the ownership epoch tolerates exactly those events).
       const timeout = this.planTimeout(tableId, state, newVersion, newEventSeq);
       if (timeout) intents.push(timeout);

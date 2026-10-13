@@ -293,12 +293,16 @@ export class PokerSocket {
 
     // Wait for the first OBSERVATION for this table
     return new Promise((resolve, reject) => {
+      const key = `observation:${tableId}`;
       const timeout = setTimeout(() => {
-        this.pendingRequests.delete(`observation:${tableId}`);
+        // Only drop our own entry; a newer join for the same table may own the key.
+        if (this.pendingRequests.get(key)?.timeout === timeout) {
+          this.pendingRequests.delete(key);
+        }
         reject(new PokerSDKError("Join timeout", "TIMEOUT"));
       }, 10000);
 
-      this.pendingRequests.set(`observation:${tableId}`, {
+      this.pendingRequests.set(key, {
         resolve: (observation) => {
           clearTimeout(timeout);
           resolve(observation as SeatObservation);
@@ -500,6 +504,14 @@ export class PokerSocket {
           // without the full projection that carries it.
           if (cached && this.isStaleObservation(cached, incoming)) {
             this.log("Ignoring stale observation:", message.tableId, incoming.version);
+            // A re-join (e.g. after reconnect) may legitimately be answered with
+            // the projection we already hold. Resolve it with the newest known
+            // observation rather than leaving the join to time out.
+            const pendingJoin = this.pendingRequests.get(`observation:${message.tableId}`);
+            if (pendingJoin) {
+              this.pendingRequests.delete(`observation:${message.tableId}`);
+              pendingJoin.resolve(cached);
+            }
             break;
           }
 

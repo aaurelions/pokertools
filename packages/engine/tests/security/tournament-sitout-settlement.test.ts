@@ -14,8 +14,9 @@ import { createSeededRandom } from "../helpers/seeded-random";
 /**
  * Tournament sit-out settlement regressions.
  *
- * Platform-reachable defect (NLHE h3 evidence): a player whose provider
- * attempts were exhausted is marked sitting out by a TIMEOUT. In a tournament
+ * Platform-reachable defect: a player who failed to act in time (for example
+ * an agent whose decision provider was exhausted) is marked sitting out by a
+ * TIMEOUT. In a tournament
  * that player still posts forced blinds/antes and is folded. When the only
  * remaining live player then shoves (or checks down) with no caller, the hand
  * reached SHOWDOWN with `winners === null` and an undistributed pot, so no

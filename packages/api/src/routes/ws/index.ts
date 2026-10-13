@@ -88,6 +88,42 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
       queuedMessages.push(data);
     });
 
+    // Track closure from the very start: a socket that closes while async
+    // authentication or the connection-slot reservation is still in flight must
+    // still release everything it reserved.
+    let socketClosed = false;
+    let connectionAccepted = false;
+    let userIdForSlot: string | null = null;
+    let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+    let serviceRevalidateInterval: ReturnType<typeof setInterval> | null = null;
+    const subscriptions = new Set<string>();
+
+    const releaseConnectionSlot = async (): Promise<void> => {
+      if (!connectionAccepted || userIdForSlot === null) return;
+      connectionAccepted = false;
+      // Best-effort decrement; the Redis connection may already be closing
+      // during shutdown, so swallow connection-closed errors.
+      try {
+        const currentCount = await fastify.redis.hincrby("ws:connections", userIdForSlot, -1);
+        if (currentCount <= 0) {
+          await fastify.redis.hdel("ws:connections", userIdForSlot);
+        }
+      } catch {
+        // Connection closed during shutdown — nothing to do.
+      }
+    };
+
+    socket.on("close", async () => {
+      socketClosed = true;
+      if (heartbeatInterval) clearInterval(heartbeatInterval);
+      if (serviceRevalidateInterval) clearInterval(serviceRevalidateInterval);
+      await releaseConnectionSlot();
+      for (const tableId of subscriptions) {
+        fastify.socketManager.leaveTable(tableId, socket);
+      }
+      subscriptions.clear();
+    });
+
     let principal: AuthenticatedPrincipal;
     let walletSessionJti: string | null = null;
     try {
@@ -158,16 +194,19 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
     };
 
     // Enforce per-user concurrent connection limit
-    let connectionAccepted = false;
     const connCount = await fastify.redis.hincrby("ws:connections", userId, 1);
     if (connCount > config.WS_MAX_CONNECTIONS_PER_USER) {
       await fastify.redis.hincrby("ws:connections", userId, -1);
       socket.close(1008, "Connection limit exceeded");
       return;
     }
+    userIdForSlot = userId;
     connectionAccepted = true;
-
-    const subscriptions = new Set<string>();
+    if (socketClosed) {
+      // Closed while reserving the slot: the close handler already ran.
+      await releaseConnectionSlot();
+      return;
+    }
 
     /**
      * Helper to send typed messages to client
@@ -182,9 +221,9 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
 
     // Setup heartbeat/ping-pong mechanism to detect dead connections
     let isAlive = true;
-    const heartbeatInterval = setInterval(() => {
+    const heartbeat = setInterval(() => {
       if (!isAlive) {
-        clearInterval(heartbeatInterval);
+        clearInterval(heartbeat);
         socket.terminate();
         return;
       }
@@ -192,6 +231,7 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
       isAlive = false;
       socket.ping();
     }, config.WS_HEARTBEAT_INTERVAL_MS);
+    heartbeatInterval = heartbeat;
 
     socket.on("pong", () => {
       isAlive = true;
@@ -199,7 +239,7 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
 
     // Idle service sockets are revalidated so a revocation cannot leave a live
     // private subscription open indefinitely.
-    const serviceRevalidateInterval = isServiceConnection
+    serviceRevalidateInterval = isServiceConnection
       ? setInterval(() => {
           void serviceCredentialStillValid().then((valid) => {
             if (!valid) socket.close(4001, "Unauthorized");
@@ -365,26 +405,5 @@ export const wsRoutes: FastifyPluginAsync = async (fastify) => {
     for (const queued of queuedMessages.splice(0)) {
       void messageHandler(queued);
     }
-
-    socket.on("close", async () => {
-      clearInterval(heartbeatInterval);
-      if (serviceRevalidateInterval) clearInterval(serviceRevalidateInterval);
-      if (connectionAccepted) {
-        // Best-effort decrement; the Redis connection may already be closing
-        // during shutdown, so swallow connection-closed errors.
-        try {
-          const currentCount = await fastify.redis.hincrby("ws:connections", userId, -1);
-          if (currentCount <= 0) {
-            await fastify.redis.hdel("ws:connections", userId);
-          }
-        } catch {
-          // Connection closed during shutdown — nothing to do.
-        }
-      }
-      for (const tableId of subscriptions) {
-        fastify.socketManager.leaveTable(tableId, socket);
-      }
-      subscriptions.clear();
-    });
   });
 };

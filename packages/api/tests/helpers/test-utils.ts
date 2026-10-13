@@ -493,3 +493,25 @@ export async function waitFor(
   }
   throw new Error(`Condition not met within ${timeoutMs}ms`);
 }
+
+/**
+ * Run `fn` while the app's Redlock gives up after `retryCount` attempts.
+ *
+ * The test environment retries a contended lock thousands of times so normal
+ * concurrent tests never fail spuriously. Tests that deliberately hold a table
+ * lock and expect the contended request to fail need a bounded, load-
+ * independent failure instead of racing the per-test timeout.
+ */
+export async function withBoundedLockRetries<T>(
+  app: FastifyInstance,
+  retryCount: number,
+  fn: () => Promise<T>
+): Promise<T> {
+  const previous = app.redlock.retryCount;
+  app.redlock.retryCount = retryCount;
+  try {
+    return await fn();
+  } finally {
+    app.redlock.retryCount = previous;
+  }
+}

@@ -20,6 +20,7 @@ export const ALLOWED_GAMEPLAY_ACTIONS: readonly ActionType[] = [
   ActionType.MUCK,
   ActionType.TIME_BANK,
   ActionType.STAND,
+  ActionType.SIT_IN,
   ActionType.NEXT_BLIND_LEVEL, // Tournament blind progression
 ] as const;
 

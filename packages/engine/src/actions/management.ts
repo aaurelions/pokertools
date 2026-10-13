@@ -2,6 +2,7 @@ import {
   GameState,
   SitAction,
   StandAction,
+  SitInAction,
   AddChipsAction,
   ReserveSeatAction,
   Player,
@@ -50,6 +51,20 @@ export function handleSit(state: GameState, action: SitAction): GameState {
     initialChips: typeof currentBaseline === "number" ? currentBaseline + action.stack : undefined,
     timestamp: action.timestamp!,
   };
+}
+
+/**
+ * Handle SIT_IN action - clear the sit-out flag. Only the flag changes, so the
+ * current hand is untouched; the player is dealt in from the next DEAL.
+ */
+export function handleSitIn(state: GameState, action: SitInAction): GameState {
+  const result = getPlayerById(state, action.playerId);
+  if (!result) {
+    return state;
+  }
+  const newPlayers = [...state.players];
+  newPlayers[result.seat] = { ...result.player, isSittingOut: false };
+  return { ...state, players: newPlayers, timestamp: action.timestamp! };
 }
 
 /**

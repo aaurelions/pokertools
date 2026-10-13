@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-14
+
+### Added
+
+- `SIT_IN` ("I'm back"): a player marked sitting out — for example by a turn `TIMEOUT` — can now return. Previously nothing could clear the sit-out flag, so in tournaments a single slow turn kept the seat posting forced bets and being dealt in folded for the rest of the event.
+  - `@pokertools/types`: `ActionType.SIT_IN`, `SitInAction`, `SitInActionSchema`; `SIT_IN` is a recognized action family. It is never offered as a canonical legal action.
+  - `@pokertools/engine`: the handler clears only the flag, takes effect from the next `DEAL`, never changes the hand in progress, and is rejected for unseated players or players not sitting out.
+  - API: `POST /tables/:id/sit-in` for the seated principal (same table lock, transaction, event and broadcast path as `/stand`; `400 NOT_SEATED` / `NOT_SITTING_OUT`). Table-bound SERVICE credentials with `table:act` may call it for their own table only. `SIT_IN` does not re-arm the current actor's turn timeout.
+  - `@pokertools/sdk`: `PokerClient.sitIn(tableId)`.
+
+### Fixed
+
+- Antes are now posted before blinds. A short stack covers the dead ante first and posts only the remainder as its live blind; blind posting adds to (instead of overwriting) the chips already invested this hand.
+- A hand whose only remaining live player cannot be contested (for example a heads-up tournament where the opponent is sitting out and dealt in folded) now ends without dealing further community cards.
+- A WebSocket closed while authentication or the per-user connection-slot reservation was still in flight now releases its slot instead of leaking it until the Redis key expired.
+- `PokerSocket` re-joins answered with an observation the client already holds resolve with that observation instead of timing out; a superseded join timeout no longer deletes the newer join's pending entry.
+- Escaped chat bodies are truncated on whole code points, so truncation can no longer leave a partial HTML entity or a lone surrogate.
+
+### Changed
+
+- Internal structure only: table chat hygiene moved to `routes/tables/chat.ts`; competition row mapping, authorization and loading helpers moved to `services/competition-helpers.ts`. No route or behavior change.
+
+### Tests
+
+- A hold'em rules audit (heads-up order, min-raise and incomplete all-in reopening, side pots, odd chips, BB option) and an evaluator reference oracle against an independent 5-card scorer.
+- Lock-contention tests bound Redlock retries for the contended request, so they fail fast instead of racing the per-test timeout under load.
+
+### Notes
+
+- Public package source changes: `@pokertools/types` (new action type and family) and `@pokertools/sdk` (`sitIn`). Existing actions, wire shapes and legal-action menus are unchanged.
+
 ## [2.0.4] - 2026-10-05
 
 ### Fixed

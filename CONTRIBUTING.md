@@ -391,8 +391,8 @@ npm audit --omit=dev
 npm run check:publish
 ```
 
-`check-publish-contents` fails if `dist/.tsbuildinfo` or
-`dist/.nlhe-build-stamp` reappear; the generic `!dist/.*` / `!dist/**/.*`
+`check-publish-contents` fails if `dist/.tsbuildinfo` or any other hidden
+build stamp under `dist/` reappears; the generic `!dist/.*` / `!dist/**/.*`
 exclusions in the publishable workspaces keep them out. Source maps under
 `dist/` remain intentionally public for the SDK.
 

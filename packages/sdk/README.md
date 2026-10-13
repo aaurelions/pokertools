@@ -61,7 +61,7 @@ yarn add @pokertools/sdk @pokertools/types
 pnpm add @pokertools/sdk @pokertools/types
 ```
 
-`@pokertools/sdk` (v2.0.4) depends on `@pokertools/types` (v2.0.4) for shared
+`@pokertools/sdk` (v2.1.0) depends on `@pokertools/types` (v2.1.0) for shared
 TypeScript types. The React hooks require `react >= 19.2.3` as an **optional**
 peer dependency — install `react` and `react-dom` only if you use the React
 integration. The base client targets both browsers and Node.js.
@@ -536,6 +536,7 @@ Obtain it via `new PokerClient(config)` or `usePokerClient()`.
 | `action(tableId, request)`             | `POST /tables/:id/action` — submit a canonical action; returns the stored result with `receipt` + `observation`.                                                                                        |
 | `buyIn(tableId, request)`              | `POST /tables/:id/buy-in`.                                                                                                                                                                              |
 | `addChips(tableId, request)`           | `POST /tables/:id/add-chips`.                                                                                                                                                                           |
+| `sitIn(tableId)`                       | `POST /tables/:id/sit-in` — return from a sit-out (e.g. after a turn timeout); the seat is dealt in from the next hand.                                                                                 |
 | `getChat(tableId, options?)`           | `GET /tables/:id/chat` — bounded, ordered `ChatPage`; `{ limit?, beforeSeq? }`.                                                                                                                         |
 | `sendChat(tableId, body)`              | `POST /tables/:id/chat` — append one server-escaped `ChatMessage`.                                                                                                                                      |
 | `getReplay(tableId, options)`          | `GET /tables/:id/replay` — hash-chained `ReplayFrame` for `{ fromEventSeq, toEventSeq? }` (event log).                                                                                                  |

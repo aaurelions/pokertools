@@ -34,6 +34,7 @@ export const LegalActionFamilySchema = z.enum([
   "MUCK",
   "TIME_BANK",
   "STAND",
+  "SIT_IN",
   "NEXT_BLIND_LEVEL",
 ]);
 export type LegalActionFamily = z.infer<typeof LegalActionFamilySchema>;

@@ -165,66 +165,15 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
     }
   }
 
-  // Post blinds and antes. Reuses blindPositions from line 56:
-  // the mutations to newPlayers between calls (isSittingOut for WAIT_FOR_BB,
-  // hand/status resetting, card dealing) do not affect seat-only position logic.
-  const currentBets = new Map<number, number>();
-
-  if (blindPositions) {
-    const { smallBlindSeat, bigBlindSeat } = blindPositions;
-
-    const sbPlayer = newPlayers[smallBlindSeat];
-    if (sbPlayer && sbPlayer.stack > 0) {
-      const shouldPostSB = isTournament || !sbPlayer.isSittingOut;
-      if (shouldPostSB) {
-        const sbAmount = Math.min(sbPlayer.stack, state.smallBlind);
-        currentBets.set(smallBlindSeat, sbAmount);
-        newPlayers[smallBlindSeat] = {
-          ...sbPlayer,
-          stack: sbPlayer.stack - sbAmount,
-          betThisStreet: sbAmount,
-          totalInvestedThisHand: sbAmount,
-          status:
-            sbAmount === sbPlayer.stack
-              ? PlayerStatus.ALL_IN
-              : sbPlayer.isSittingOut
-                ? PlayerStatus.FOLDED
-                : PlayerStatus.ACTIVE,
-        };
-      }
-    }
-    // Dead Small Blind: sbPlayer is null or (cash game && sitting out).
-
-    const bbPlayer = newPlayers[bigBlindSeat];
-    if (bbPlayer) {
-      // In cash games sitting-out players are skipped by getBlindPositions.
-      // In tournaments sitting-out players MUST post blinds (anti-blinding-off).
-      const shouldPostBB = isTournament || !bbPlayer.isSittingOut;
-
-      if (shouldPostBB) {
-        const bbAmount = Math.min(bbPlayer.stack, state.bigBlind);
-        currentBets.set(bigBlindSeat, bbAmount);
-        newPlayers[bigBlindSeat] = {
-          ...bbPlayer,
-          stack: bbPlayer.stack - bbAmount,
-          betThisStreet: bbAmount,
-          totalInvestedThisHand: bbAmount,
-          status:
-            bbAmount === bbPlayer.stack
-              ? PlayerStatus.ALL_IN
-              : bbPlayer.isSittingOut
-                ? PlayerStatus.FOLDED
-                : PlayerStatus.ACTIVE,
-        };
-      }
-    }
-  }
-
+  // Antes are posted BEFORE blinds (TDA): a short stack's ante is dead money and
+  // only the remainder can be committed to the blind.
   let anteTotal = 0;
   // Antes: tournament — all players with chips (incl. sitting-out); cash — active only.
   if (state.ante > 0) {
     const playersToAnteFrom = isTournament
-      ? state.players.map((p, idx) => (p && p.stack > 0 ? idx : -1)).filter((idx) => idx >= 0)
+      ? newPlayers
+          .map((p, idx) => (p && p.status !== PlayerStatus.RESERVED && p.stack > 0 ? idx : -1))
+          .filter((idx) => idx >= 0)
       : playersToReceive;
 
     for (const seat of playersToAnteFrom) {
@@ -247,6 +196,61 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
               : player.isSittingOut && isTournament
                 ? PlayerStatus.FOLDED
                 : player.status,
+        };
+      }
+    }
+  }
+
+  // Post blinds. Reuses blindPositions from line 56:
+  // the mutations to newPlayers between calls (isSittingOut for WAIT_FOR_BB,
+  // hand/status resetting, card dealing) do not affect seat-only position logic.
+  const currentBets = new Map<number, number>();
+
+  if (blindPositions) {
+    const { smallBlindSeat, bigBlindSeat } = blindPositions;
+
+    const sbPlayer = newPlayers[smallBlindSeat];
+    if (sbPlayer && sbPlayer.stack > 0) {
+      const shouldPostSB = isTournament || !sbPlayer.isSittingOut;
+      if (shouldPostSB) {
+        const sbAmount = Math.min(sbPlayer.stack, state.smallBlind);
+        currentBets.set(smallBlindSeat, sbAmount);
+        newPlayers[smallBlindSeat] = {
+          ...sbPlayer,
+          stack: sbPlayer.stack - sbAmount,
+          betThisStreet: sbAmount,
+          totalInvestedThisHand: sbPlayer.totalInvestedThisHand + sbAmount,
+          status:
+            sbAmount === sbPlayer.stack
+              ? PlayerStatus.ALL_IN
+              : sbPlayer.isSittingOut
+                ? PlayerStatus.FOLDED
+                : PlayerStatus.ACTIVE,
+        };
+      }
+    }
+    // Dead Small Blind: sbPlayer is null or (cash game && sitting out).
+
+    const bbPlayer = newPlayers[bigBlindSeat];
+    if (bbPlayer && bbPlayer.stack > 0) {
+      // In cash games sitting-out players are skipped by getBlindPositions.
+      // In tournaments sitting-out players MUST post blinds (anti-blinding-off).
+      const shouldPostBB = isTournament || !bbPlayer.isSittingOut;
+
+      if (shouldPostBB) {
+        const bbAmount = Math.min(bbPlayer.stack, state.bigBlind);
+        currentBets.set(bigBlindSeat, bbAmount);
+        newPlayers[bigBlindSeat] = {
+          ...bbPlayer,
+          stack: bbPlayer.stack - bbAmount,
+          betThisStreet: bbAmount,
+          totalInvestedThisHand: bbPlayer.totalInvestedThisHand + bbAmount,
+          status:
+            bbAmount === bbPlayer.stack
+              ? PlayerStatus.ALL_IN
+              : bbPlayer.isSittingOut
+                ? PlayerStatus.FOLDED
+                : PlayerStatus.ACTIVE,
         };
       }
     }

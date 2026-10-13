@@ -7,6 +7,7 @@ export enum ActionType {
   // Management
   SIT = "SIT",
   STAND = "STAND",
+  SIT_IN = "SIT_IN",
   ADD_CHIPS = "ADD_CHIPS",
   RESERVE_SEAT = "RESERVE_SEAT",
 
@@ -58,6 +59,14 @@ export interface SitAction extends BaseAction {
  */
 export interface StandAction extends BaseAction {
   readonly type: ActionType.STAND;
+  readonly playerId: string;
+}
+
+/**
+ * Return from a sit-out ("I'm back"). Takes effect from the next DEAL.
+ */
+export interface SitInAction extends BaseAction {
+  readonly type: ActionType.SIT_IN;
   readonly playerId: string;
 }
 
@@ -189,6 +198,7 @@ export interface NextBlindLevelAction extends BaseAction {
 export type Action =
   | SitAction
   | StandAction
+  | SitInAction
   | AddChipsAction
   | ReserveSeatAction
   | DealAction

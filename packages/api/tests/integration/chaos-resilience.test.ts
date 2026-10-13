@@ -14,6 +14,7 @@ import {
   cleanupTestUser,
   createTestUser,
   type TestContext,
+  withBoundedLockRetries,
 } from "../helpers/test-utils.js";
 
 describe("Chaos & Resilience", () => {
@@ -180,11 +181,13 @@ describe("Chaos & Resilience", () => {
 
       try {
         // Try a table operation that requires the lock - must fail
-        const res = await ctx.app.inject({
-          method: "POST",
-          url: `/tables/${tableId}/stand`,
-          headers: { authorization: `Bearer ${player1.token}` },
-        });
+        const res = await withBoundedLockRetries(ctx.app, 25, () =>
+          ctx.app.inject({
+            method: "POST",
+            url: `/tables/${tableId}/stand`,
+            headers: { authorization: `Bearer ${player1.token}` },
+          })
+        );
         // The stand endpoint should fail because it cannot acquire the lock
         expect(res.statusCode).toBeGreaterThanOrEqual(400);
       } finally {

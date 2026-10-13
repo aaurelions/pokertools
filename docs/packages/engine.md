@@ -155,6 +155,17 @@ A timeout folds if the player faces a wager, otherwise checks. Both paths run th
 normal betting handlers, so a timeout fold can award the last live hand immediately.
 Sitting-out players are automatically checked/folded when action reaches them.
 
+A timeout also marks the player sitting out. In tournaments a sitting-out seat keeps posting
+forced bets and is dealt in folded until the player returns with `SIT_IN`, which takes effect
+from the next deal and never changes the hand in progress:
+
+```ts
+engine.act({ type: ActionType.SIT_IN, playerId: "p0" });
+```
+
+A hand whose only remaining live player cannot be contested ends without dealing further
+community cards.
+
 ## View masking
 
 `engine.view(playerId)` returns a public state where:
