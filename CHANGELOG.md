@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Resolve `fast-jwt` to 6.3.4 (GHSA-x937-hj6v-793p: verifier cache accepted expired JWTs without `iat`). The API receives it through `@fastify/jwt`; the e2e harness now requires `^6.3.4` directly. `npm audit --omit=dev` is clean.
+
 ## [2.1.0] - 2026-10-14
 
 ### Added
