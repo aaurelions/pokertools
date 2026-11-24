@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-11-24
+
+### Fixed
+
+- `@pokertools/engine`: betting now closes when exactly one live player has chips, every other live player is all-in, and that player has matched every actual contribution on the street (#5). Previously the engine could still give that player the action — mid-hand after an opponent's fold, or right after `DEAL` when a short all-in blind was already covered — and a fold there threw `Side pot has no eligible players` or ended the hand without a board. The uncalled excess is now returned and the board runs out to showdown. A player facing an unmatched all-in still has to act, and the big blind keeps its option while two players have chips.
+- `@pokertools/engine`: adjacent pot levels with identical eligible seats are merged into one pot (#4). Folded players who had invested different amounts no longer split a tied pot into several fragments whose odd chips all go to the same winner. `state.pots` and `winners` can contain fewer entries, and rake is now computed on the merged pot.
+
 ### Security
 
 - Resolve `fast-jwt` to 6.3.4 (GHSA-x937-hj6v-793p: verifier cache accepted expired JWTs without `iat`). The API receives it through `@fastify/jwt`; the e2e harness now requires `^6.3.4` directly. `npm audit --omit=dev` is clean.
@@ -737,6 +744,11 @@ Given a version number MAJOR.MINOR.PATCH:
 - [NPM: @pokertools/evaluator](https://www.npmjs.com/package/@pokertools/evaluator)
 - [NPM: @pokertools/types](https://www.npmjs.com/package/@pokertools/types)
 
+[Unreleased]: https://github.com/aaurelions/pokertools/compare/v2.1.1...HEAD
+[2.1.1]: https://github.com/aaurelions/pokertools/compare/v2.1.0...v2.1.1
+[2.1.0]: https://github.com/aaurelions/pokertools/compare/v2.0.4...v2.1.0
+[2.0.4]: https://github.com/aaurelions/pokertools/compare/v2.0.3...v2.0.4
+[2.0.3]: https://github.com/aaurelions/pokertools/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/aaurelions/pokertools/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/aaurelions/pokertools/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/aaurelions/pokertools/compare/v1.0.20...v2.0.0
