@@ -321,7 +321,11 @@ describe("sit-out auto-deal settlement (PostgreSQL + Redis, production workers)"
       });
       const dealt = await waitForHand(competition.tableId, handNumber);
       expect(dealt.handId).not.toBe(previousHandId);
-      expect(dealt.street).toBe("PREFLOP");
+      // H3: the agent's last 50 chips go in as an all-in big blind that the
+      // human's small blind already covers. Nobody is left to decide, so the
+      // engine settles the hand as part of the auto-deal (issue #5).
+      const settlesAtDeal = handNumber === 3;
+      expect(dealt.street).toBe(settlesAtDeal ? "SHOWDOWN" : "PREFLOP");
       await waitForOutboxStatus(previousNextKey, "COMPLETED");
 
       // The sitting-out agent is never dealt a live hand: it is folded or all-in
@@ -333,9 +337,13 @@ describe("sit-out auto-deal settlement (PostgreSQL + Redis, production workers)"
       expect(humanPlayer.status).toBe("ACTIVE");
 
       // The human is the only actionable player: shove/call/check it down until
-      // the hand settles.
+      // the hand settles. A hand that settled at the deal offers no turn.
       let settledObservation: SeatObservation | undefined;
-      for (let step = 0; step < 8; step++) {
+      if (settlesAtDeal) {
+        settledObservation = await client.observation(competition.tableId);
+        expect(settledObservation.state.actionTo).toBeNull();
+      }
+      for (let step = 0; step < 8 && !settlesAtDeal; step++) {
         const current = await client.observation(competition.tableId);
         if (
           !current.turnId ||
