@@ -6,7 +6,10 @@ export default defineConfig([
     entry: ["src/index.ts"],
     format: ["cjs", "esm"],
     dts: true,
-    clean: true,
+    // Do not clean here: both configs build in parallel and tsup's clean also
+    // deletes declaration files under dist/react while that entry is emitting
+    // them. The build script removes dist once before tsup starts.
+    clean: false,
     sourcemap: true,
     treeshake: true,
     splitting: false,

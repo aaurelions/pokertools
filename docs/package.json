@@ -1,6 +1,6 @@
 {
   "name": "pokertools-docs",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "private": true,
   "type": "module",
   "description": "VitePress documentation site for the PokerTools monorepo",
@@ -10,9 +10,9 @@
     "docs:preview": "vitepress preview"
   },
   "devDependencies": {
-    "markdown-it": "^15.0.2",
+    "markdown-it": "^15.0.3",
     "vitepress": "^1.6.4",
-    "vue": "^3.5.43"
+    "vue": "^3.5.46"
   },
   "allowScripts": {
     "esbuild@0.21.5": true,

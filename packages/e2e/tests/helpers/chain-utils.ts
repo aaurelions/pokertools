@@ -5,6 +5,7 @@ import {
   http,
   defineChain,
   type Address,
+  type Chain,
   type PublicClient,
   type WalletClient,
 } from "viem";
@@ -22,7 +23,7 @@ export const ANVIL_RPC = `http://127.0.0.1:${ANVIL_PORT}`;
 // Test mnemonic (deterministic, local-only, never used in production)
 export const TEST_MNEMONIC = "test test test test test test test test test test test junk";
 
-export const localChain = defineChain({
+export const localChain: Chain = defineChain({
   id: 31337,
   name: "Anvil Local",
   network: "anvil-local",

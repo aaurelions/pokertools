@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.2] - 2026-11-24
+
+### Security
+
+- `@pokertools/types` now requires `zod` `^4.6.7` (GHSA-mrhx-c7xc-m3w5: memory exhaustion while validating oversized constrained collections, fixed in 4.6.6). Consumers of 2.1.1 and earlier could resolve a vulnerable `zod`.
+- Prisma 7.10.1 exact-pins `effect` 3.20.0 (GHSA-7589-6fvf-x4pw, ReDoS, high). A narrow exact override `@prisma/config@7.10.1` → `effect` 3.22.5 remediates it. The `mysql2` override moves to `prisma@7.10.1` → 3.24.6, and the `deepmerge-ts` override is removed because `@prisma/config@7.10.1` ships the fixed 8.0.2 itself.
+- Transitive `undici`, `vite`, `minimatch` (production tree) and docs `markdown-it` advisories are resolved by the refresh. `npm audit --omit=dev` is clean for the root and docs; the remaining full-tree findings are moderate dev-only Jest 30 `glob`/`minimatch` advisories (see CONTRIBUTING).
+
+### Changed
+
+- Dependencies updated to their latest stable versions: Fastify 5.12.8 and plugins, Prisma 7.10.1, viem 2.58.6, bullmq 6.7.10, ioredis 6.1.0, better-sqlite3 13.2.0, zod 4.6.7, vitest 5.1.1, eslint 10.15.0, typescript-eslint 8.74.0, prettier 3.10.1, playwright 1.65.1, vue 3.5.46 and others.
+- Major updates: `envalid` 9 (API/custody: empty or whitespace-only environment values now count as missing, so a defined default applies and an empty required secret fails at startup), `jsdom` 31, `tsup` 9 (esbuild 0.28) and `@testing-library/jest-dom` 8 (SDK dev tooling).
+- `typescript` stays on 6.0.3 (`typescript-eslint` 8.74.0 still requires `<6.1.0`) and `redlock` on 4.x (5.x is beta), per the dependency policy.
+- Install-script approvals re-pinned to the upgraded exact versions; stale `esbuild@0.27.7` and `unrs-resolver` entries pruned.
+
+### Fixed
+
+- `@pokertools/sdk` build: with tsup 9 the main entry's `clean` could delete `dist/react/*.d.ts` while the parallel React build was emitting them, intermittently publishing without React type declarations. `dist` is now removed once before tsup runs; the tarball contents are unchanged from 2.1.1.
+
 ## [2.1.1] - 2026-11-24
 
 ### Fixed
@@ -744,7 +763,8 @@ Given a version number MAJOR.MINOR.PATCH:
 - [NPM: @pokertools/evaluator](https://www.npmjs.com/package/@pokertools/evaluator)
 - [NPM: @pokertools/types](https://www.npmjs.com/package/@pokertools/types)
 
-[Unreleased]: https://github.com/aaurelions/pokertools/compare/v2.1.1...HEAD
+[Unreleased]: https://github.com/aaurelions/pokertools/compare/v2.1.2...HEAD
+[2.1.2]: https://github.com/aaurelions/pokertools/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/aaurelions/pokertools/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/aaurelions/pokertools/compare/v2.0.4...v2.1.0
 [2.0.4]: https://github.com/aaurelions/pokertools/compare/v2.0.3...v2.0.4

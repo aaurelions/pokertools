@@ -282,12 +282,12 @@ held; do not "fix" them just to clear `npm outdated`:
 
 | Dependency             | Held at | Reason                                                                                                                     |
 | :--------------------- | :------ | :------------------------------------------------------------------------------------------------------------------------- |
-| `typescript`           | 6.0.3   | `typescript-eslint@8.71.0` peers on `typescript >=4.8.4 <6.1.0`, so stable 7.0.2 is out of range; tsup/ts-node target TS6. |
-| `prisma` / `@prisma/*` | 7.10.0  | Stable line; the newer dist-tag is an RC.                                                                                  |
+| `typescript`           | 6.0.3   | `typescript-eslint@8.74.0` peers on `typescript >=4.8.4 <6.1.0`, so stable 7.0.2 is out of range; tsup/ts-node target TS6. |
+| `prisma` / `@prisma/*` | 7.10.1  | Stable line; the newer dist-tag is an RC.                                                                                  |
 | `redlock`              | 4.x     | Stable line; newer dist-tags are beta.                                                                                     |
 
 Every manifest requires Node.js `^24.15.0 || >=26.0.0` and npm `>=12.2.0`.
-The Node range mirrors `jsdom@30.1.1` (`^22.22.2 || ^24.15.0 || >=26.0.0`);
+The Node range mirrors `jsdom@31.0.1` (`^22.22.2 || ^24.15.0 || >=26.0.0`);
 Node 25 and 24.x below 24.15 are unsupported. npm 12.2 is required because
 npm 12 enforces the `allowScripts` policy (npm 11.16 only warns). CI must
 install npm 12.2 before `npm ci`, and Docker builder/runtime images must pin
@@ -298,26 +298,25 @@ solely to clear `outdated`.
 
 #### Security overrides
 
-Prisma 7.10.0 (latest stable 7.x) exact-pins vulnerable transitive packages.
+Prisma 7.10.1 (latest stable 7.x) exact-pins vulnerable transitive packages.
 Two narrow, exact, parent-scoped `overrides` in the root `package.json`
 remediate them without forcing unrelated versions:
 
-| Parent (exact)          | Override             | Fixed advisory                                             |
-| :---------------------- | :------------------- | :--------------------------------------------------------- |
-| `@prisma/config@7.10.0` | `deepmerge-ts` 8.0.2 | GHSA-ggr8-5vv4-36mx (high) — fixed only in major 8         |
-| `prisma@7.10.0`         | `mysql2` 3.24.5      | GHSA-3f6p-5ww8-9rcr (high), GHSA-rgwj-5xj2-c3m3 (moderate) |
+| Parent (exact)          | Override        | Fixed advisory                                             |
+| :---------------------- | :-------------- | :--------------------------------------------------------- |
+| `@prisma/config@7.10.1` | `effect` 3.22.5 | GHSA-7589-6fvf-x4pw (high) — fixed in 3.22.1               |
+| `prisma@7.10.1`         | `mysql2` 3.24.6 | GHSA-3f6p-5ww8-9rcr (high), GHSA-rgwj-5xj2-c3m3 (moderate) |
 
-`@prisma/config` only imports the named `deepmerge` export and passes it to
-`c12` as the config merger. An isolated temp install of `@prisma/config@7.10.0`
-with the override produced identical `loadConfigFromFile` output and identical
-`deepmerge` results versus 7.1.5, and `prisma validate`, `prisma db push`
-(SQLite) and `prisma generate` all pass with the overrides. The root `prisma`
-direct devDependency is pinned to exact `7.10.0` because npm rejects a
-parent-scoped override whose parent is a direct dependency unless the specs
-match exactly.
+Both overrides stay within the pinned major (`effect` 3.20.0 → 3.22.5, `mysql2`
+3.24.4 → 3.24.6). `@prisma/config@7.10.1` now ships the fixed `deepmerge-ts`
+8.0.2 itself, so the former `deepmerge-ts` override was removed. `prisma
+validate`, `prisma generate` (SQLite and PostgreSQL), SQLite `db push` and the
+PostgreSQL migrations all pass with the overrides. The root `prisma` direct
+devDependency is pinned to exact `7.10.1` because npm rejects a parent-scoped
+override whose parent is a direct dependency unless the specs match exactly.
 
 Remove each override entry when the upstream stable Prisma release ships fixed
-`mysql2`/`deepmerge-ts`, then refresh the lockfile. Until then, any Prisma or
+`mysql2`/`effect`, then refresh the lockfile. Until then, any Prisma or
 override change must run the SQLite and PostgreSQL paths:
 
 ```bash
@@ -329,11 +328,13 @@ npm run test:postgres:migrations -w @pokertools/api           # disposable Postg
 
 `npm audit --omit=dev` is clean after these overrides. Docker still prunes the
 CLI graph from the runtime image, and
-`node scripts/test-runtime-dependencies.mjs <image>` verifies its absence. The
-full root audit retains only a low dev-only `esbuild` advisory
-(GHSA-g7r4-m6w7-qqqr, Windows dev-server file read) in tsup's nested 0.27.x;
-latest tsup 8.5.1 still declares `esbuild ^0.27.0`, so the only in-range "fix"
-is a downgrade and it is absent from `--omit=dev`.
+`node scripts/test-runtime-dependencies.mjs <image>` verifies its absence.
+tsup 9 moved to `esbuild ^0.28.2`, which cleared the former dev-only esbuild
+advisory. The full root audit retains only moderate dev-only `glob`/`minimatch`
+advisories reached through Jest 30's coverage stack (`@jest/reporters`,
+`test-exclude`); latest Jest 30.5.x still requires the affected ranges, npm's
+only suggested "fix" is a downgrade to Jest 29, and none of it is in
+`--omit=dev`.
 
 #### Docs dependency class
 
@@ -383,7 +384,7 @@ npm test
 npm --prefix docs run docs:build
 
 # Audit posture: both production trees are clean; the full root audit keeps
-# only the low dev-only esbuild advisory documented above.
+# only the moderate dev-only Jest glob/minimatch advisories documented above.
 npm --prefix docs audit --omit=dev
 npm audit --omit=dev
 
