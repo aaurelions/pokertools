@@ -1,6 +1,7 @@
 import { PokerEngine } from "../../src/engine/poker-engine";
 import { ActionType, Street } from "@pokertools/types";
 import { calculateTotalChips } from "../../src/utils/invariants";
+import { createRiggedRandom } from "../helpers/rigged-random";
 
 describe("oversized blind regression", () => {
   test("the reported consecutive-hand sequence never leaves a hand without action or winners", () => {
@@ -10,6 +11,23 @@ describe("oversized blind regression", () => {
       ante: 0,
       maxPlayers: 3,
       validateIntegrity: true,
+      // First hand: P2 holds A-A against P3's K-K on board 7c 8h 3s 9c Jh.
+      randomProvider: createRiggedRandom([
+        "2d",
+        "As",
+        "Kc",
+        "4h",
+        "Ah",
+        "Kd",
+        "2c",
+        "7c",
+        "8h",
+        "3s",
+        "4d",
+        "9c",
+        "5d",
+        "Jh",
+      ]),
     });
 
     engine.sit(0, "p0", "P1", 100);
@@ -18,9 +36,12 @@ describe("oversized blind regression", () => {
 
     engine.deal();
     engine.act({ type: ActionType.FOLD, playerId: "p0" });
-    engine.act({ type: ActionType.FOLD, playerId: "p2" });
 
-    expect(engine.state.winners).not.toBeNull();
+    // P3's big blind covers P2's all-in small blind and nobody else can act:
+    // no decision is left, the excess is returned and the board runs out.
+    expect(engine.state.actionTo).toBeNull();
+    expect(engine.state.board).toHaveLength(5);
+    expect(engine.state.winners).toEqual([expect.objectContaining({ seat: 1, amount: 200 })]);
     expect(engine.state.players.map((player) => player?.stack)).toEqual([100, 200, 5700]);
 
     engine.deal();
@@ -34,19 +55,37 @@ describe("oversized blind regression", () => {
     expect(calculateTotalChips(engine.state)).toBe(6000);
   });
 
-  test("returns an unmatched folded big blind instead of awarding it to the winner", () => {
+  test("returns the unmatched big blind excess instead of awarding it to the winner", () => {
     const engine = new PokerEngine({
       smallBlind: 2150,
       bigBlind: 4301,
       ante: 0,
       maxPlayers: 2,
       validateIntegrity: true,
+      // P0 holds A-A against P1's K-K on board 7c 8h 3s 9c Jh.
+      randomProvider: createRiggedRandom([
+        "As",
+        "Kc",
+        "Ah",
+        "Kd",
+        "2d",
+        "7c",
+        "8h",
+        "3s",
+        "4d",
+        "9c",
+        "5d",
+        "Jh",
+      ]),
     });
 
     engine.sit(0, "p0", "P0", 100);
     engine.sit(1, "p1", "P1", 5800);
     engine.deal();
-    engine.act({ type: ActionType.FOLD, playerId: "p1" });
+
+    // The big blind covers the all-in small blind, so there is no decision left.
+    expect(engine.state.actionTo).toBeNull();
+    expect(engine.state.board).toHaveLength(5);
 
     expect(engine.state.players.map((player) => player?.stack)).toEqual([200, 5700]);
     expect(engine.state.winners).toEqual([expect.objectContaining({ seat: 0, amount: 200 })]);

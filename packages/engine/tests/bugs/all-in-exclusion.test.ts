@@ -1,6 +1,7 @@
 import { PokerEngine } from "../../src/engine/poker-engine";
 import { ActionType, Street } from "@pokertools/types";
 import { getInitialChips } from "../../src/utils/invariants";
+import { createRiggedRandom } from "../helpers/rigged-random";
 
 describe("All-In Exclusion Bug", () => {
   test("all-in player should not lose equity when active players fold", () => {
@@ -169,6 +170,23 @@ describe("All-In Exclusion Bug", () => {
       smallBlind: 10,
       bigBlind: 20,
       maxPlayers: 3,
+      // P2 holds A-A; board Kc 9s 5h Jd 4c.
+      randomProvider: createRiggedRandom([
+        "2c",
+        "7d",
+        "As",
+        "3h",
+        "8s",
+        "Ah",
+        "Qd",
+        "Kc",
+        "9s",
+        "5h",
+        "Qh",
+        "Jd",
+        "Qs",
+        "4c",
+      ]),
     });
 
     // 3 players: P2 is short stack
@@ -184,28 +202,22 @@ describe("All-In Exclusion Bug", () => {
     expect(engine.state.players[2]?.status).toBe("ALL_IN");
     expect(getInitialChips(engine.state)).toBe(210);
 
-    // Scenario: both other players fold
-    // The all-in player should still win
-    const p0 = engine.state.players[engine.state.actionTo!]!;
+    // Scenario: UTG folds. The small blind has already matched the all-in big
+    // blind and nobody can respond to a raise, so the board runs out.
+    expect(engine.state.actionTo).toBe(0);
     engine.act({
       type: ActionType.FOLD,
-      playerId: p0.id,
+      playerId: "p0",
     });
 
-    expect(getInitialChips(engine.state)).toBe(210);
-
-    const p1 = engine.state.players[engine.state.actionTo!]!;
-    engine.act({
-      type: ActionType.FOLD,
-      playerId: p1.id,
-    });
+    expect(engine.state.actionTo).toBeNull();
+    expect(engine.state.board).toEqual(["Kc", "9s", "5h", "Jd", "4c"]);
 
     // Final chip count should still be 210
     expect(getInitialChips(engine.state)).toBe(210);
 
-    // P2 should have won the pot
-    expect(engine.state.winners).not.toBeNull();
-    const p2Final = engine.state.players[2]!;
-    expect(p2Final.stack).toBeGreaterThan(10);
+    // The all-in player keeps their equity and wins the pot at showdown
+    expect(engine.state.winners).toEqual([expect.objectContaining({ seat: 2, amount: 20 })]);
+    expect(engine.state.players.map((player) => player?.stack)).toEqual([100, 90, 20]);
   });
 });

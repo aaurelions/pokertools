@@ -32,10 +32,11 @@ describe("Chip Conservation Properties", () => {
           expect(engine.state.currentBets.get(0)).toBe(shortStack);
           expect(calculateTotalChips(engine.state)).toBe(initialChips);
 
+          // The big blind now covers the only all-in player, so the action closes
+          // without a pointless option and the uncalled excess is returned.
           engine.act({ type: ActionType.FOLD, playerId: "sb" });
-          expect(calculateTotalChips(engine.state)).toBe(initialChips);
-
-          engine.act({ type: ActionType.CHECK, playerId: "bb" });
+          expect(engine.state.actionTo).toBeNull();
+          expect(engine.state.board).toHaveLength(5);
           expect(engine.state.winners).not.toBeNull();
           expect(engine.state.currentBets.size).toBe(0);
           expect(engine.state.pots).toHaveLength(0);

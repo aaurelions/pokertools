@@ -239,14 +239,15 @@ describe("No-limit hold'em rules audit", () => {
     });
   });
 
-  test("heads-up: short all-in BB still faces SB with the full BB price; excess is returned", () => {
+  test("heads-up: short all-in BB already matched by the SB leaves no decision; board runs out", () => {
     const e = new PokerEngine({ smallBlind: 5, bigBlind: 10, maxPlayers: 2 });
     e.sit(0, "a", "A", 1000);
     e.sit(1, "b", "B", 5);
     e.deal();
     expect(e.state.buttonSeat).toBe(0);
-    expect(e.state.actionTo).toBe(0);
-    act(e, ActionType.CALL);
+    // The SB's 5 already covers the all-in BB and nobody can respond to a raise.
+    expect(e.state.actionTo).toBeNull();
+    expect(e.state.board).toHaveLength(5);
     expect(e.state.winners).not.toBeNull();
     expect(totalWon(e)).toBe(10);
     expect(calculateTotalChips(e.state)).toBe(1005);

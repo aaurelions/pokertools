@@ -2,7 +2,7 @@ import { GameState, Street, PlayerStatus, DealAction, Pot, SitInOption } from "@
 import { createDeck, shuffle, dealCards, getSecureRandom } from "../utils/deck";
 import { cardCodesToStrings } from "../utils/card-utils";
 import { getBlindPositions } from "../rules/blinds";
-import { getFirstToAct } from "../rules/action-order";
+import { getFirstToAct, isActionComplete } from "../rules/action-order";
 import { getNextOccupiedSeat, getNextSeat } from "../utils/positioning";
 
 /**
@@ -306,7 +306,12 @@ export function handleDeal(state: GameState, action: DealAction): GameState {
   // Use the blind positions selected before chips were posted. Recomputing
   // them now skips a blind who posted all-in (their stack is zero), which can
   // rotate action past the only actionable player and leave actionTo null.
-  const firstToAct = getFirstToAct(newState, blindPositions?.bigBlindSeat);
+  // Posting blinds can already close the action (for example, the only player
+  // with chips has covered a short all-in blind). Leave actionTo null so the
+  // reducer returns the uncalled excess and runs out the board.
+  const firstToAct = isActionComplete(newState)
+    ? null
+    : getFirstToAct(newState, blindPositions?.bigBlindSeat);
 
   return {
     ...newState,

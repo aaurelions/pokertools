@@ -173,4 +173,38 @@ describe("Side Pot Calculation", () => {
     expect(pots[0].amount).toBe(300); // All players' chips (including folded)
     expect(pots[0].eligibleSeats).toEqual([1, 2]); // Only active players can win
   });
+
+  test("merges levels created by folded players when eligibility does not change", () => {
+    // Issue #4: folded seats invested 1, 2 and 7; seats 0 and 4 invested 10.
+    const players = [
+      { seat: 0, invested: 10, status: PlayerStatus.ACTIVE },
+      { seat: 1, invested: 1, status: PlayerStatus.FOLDED },
+      { seat: 2, invested: 2, status: PlayerStatus.FOLDED },
+      { seat: 3, invested: 7, status: PlayerStatus.FOLDED },
+      { seat: 4, invested: 10, status: PlayerStatus.ACTIVE },
+    ];
+
+    const pots = calculateSidePots(createTestState(players, new Map()));
+
+    expect(pots).toEqual([{ amount: 30, eligibleSeats: [0, 4], type: "MAIN", capPerPlayer: 10 }]);
+  });
+
+  test("keeps real side pots separate and merges only matching adjacent levels", () => {
+    const players = [
+      { seat: 0, invested: 20, status: PlayerStatus.ALL_IN },
+      { seat: 1, invested: 5, status: PlayerStatus.FOLDED },
+      { seat: 2, invested: 50, status: PlayerStatus.ACTIVE },
+      { seat: 3, invested: 35, status: PlayerStatus.FOLDED },
+      { seat: 4, invested: 50, status: PlayerStatus.ACTIVE },
+    ];
+
+    const pots = calculateSidePots(createTestState(players, new Map()));
+
+    // Levels 5 and 20 are both contested by [0, 2, 4]; levels 35 and 50 by [2, 4].
+    expect(pots).toEqual([
+      { amount: 5 * 5 + 15 * 4, eligibleSeats: [0, 2, 4], type: "MAIN", capPerPlayer: 20 },
+      { amount: 15 * 3 + 15 * 2, eligibleSeats: [2, 4], type: "SIDE", capPerPlayer: 50 },
+    ]);
+    expect(pots.reduce((sum, pot) => sum + pot.amount, 0)).toBe(160);
+  });
 });

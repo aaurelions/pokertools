@@ -175,6 +175,7 @@ export function isActionComplete(state: GameState): boolean {
   let activeCount = 0;
   let actedCount = 0;
   let allInCount = 0;
+  let lastActiveSeat = -1;
 
   for (let seat = 0; seat < state.players.length; seat++) {
     const player = state.players[seat];
@@ -188,6 +189,7 @@ export function isActionComplete(state: GameState): boolean {
     // Count active players who can still act
     if (player.status === PlayerStatus.ACTIVE && player.stack > 0) {
       activeCount++;
+      lastActiveSeat = seat;
 
       const playerBet = state.currentBets.get(seat) ?? 0;
 
@@ -205,6 +207,21 @@ export function isActionComplete(state: GameState): boolean {
     // while multiple players remain all-in from an earlier street. Requiring
     // currentBets here strands that hand instead of running out the board.
     return state.handNumber > 0 && state.winners === null && allInCount > 0;
+  }
+
+  // A lone player with chips facing only all-in opponents has no decision once
+  // they have matched every actual contribution on this street: nobody can
+  // respond to a raise. Compare actual contributions rather than
+  // getCurrentBet(), whose nominal preflop big blind would keep the action open
+  // against a short all-in blind.
+  if (activeCount === 1 && allInCount > 0 && state.handNumber > 0 && state.winners === null) {
+    let highestContribution = 0;
+    for (const bet of state.currentBets.values()) {
+      highestContribution = Math.max(highestContribution, bet);
+    }
+    if ((state.currentBets.get(lastActiveSeat) ?? 0) >= highestContribution) {
+      return true;
+    }
   }
 
   return activeCount > 0 && activeCount === actedCount;

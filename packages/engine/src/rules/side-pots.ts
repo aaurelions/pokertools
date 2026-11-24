@@ -19,6 +19,7 @@ interface Investment {
  * 3. For each player from smallest to largest:
  *    - Create pot = (player investment - previous) × remaining players
  *    - Add player + all higher investors to eligible list
+ *    - Merge into the previous pot when the eligible seats are identical
  * 4. Return pots array (main + sides)
  *
  * @param state Current game state
@@ -81,18 +82,36 @@ export function calculateSidePots(state: GameState): Pot[] {
         );
       }
 
-      pots.push({
-        amount: potAmount,
-        eligibleSeats,
-        type: i === 0 ? "MAIN" : "SIDE",
-        capPerPlayer: current.amount,
-      });
+      // Folded players with different investments create extra levels without
+      // changing who can win. Merge such levels so the chips are split once:
+      // splitting each level separately would award every level's odd chip to
+      // the same player. Eligible lists come from suffixes of one sorted array,
+      // so an ordered comparison is sufficient.
+      const previous = pots[pots.length - 1];
+      if (previous && haveSameSeats(previous.eligibleSeats, eligibleSeats)) {
+        pots[pots.length - 1] = {
+          ...previous,
+          amount: previous.amount + potAmount,
+          capPerPlayer: current.amount,
+        };
+      } else {
+        pots.push({
+          amount: potAmount,
+          eligibleSeats,
+          type: pots.length === 0 ? "MAIN" : "SIDE",
+          capPerPlayer: current.amount,
+        });
+      }
     }
 
     prevAmount = current.amount;
   }
 
   return pots;
+}
+
+function haveSameSeats(a: readonly number[], b: readonly number[]): boolean {
+  return a.length === b.length && a.every((seat, index) => seat === b[index]);
 }
 
 /**

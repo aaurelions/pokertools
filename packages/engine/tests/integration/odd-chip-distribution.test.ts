@@ -1,6 +1,7 @@
 import { PokerEngine } from "../../src/engine/poker-engine";
 import { ActionType } from "@pokertools/types";
 import { getInitialChips } from "../../src/utils/invariants";
+import { createRiggedRandom } from "../helpers/rigged-random";
 
 describe("Odd Chip Distribution", () => {
   test("3-way split of 10 chip pot - odd chips go to players left of button", () => {
@@ -204,5 +205,75 @@ describe("Odd Chip Distribution", () => {
 
     // Verify chip conservation regardless of outcome
     expect(getInitialChips(engine.state)).toBe(400);
+  });
+
+  // Issue #4: folded players with different investments must not fragment a
+  // pot contested by the same players, or every fragment's odd chip goes to
+  // the same winner.
+  test.each([
+    [0, [5, -1, -2, -7, 5], 0],
+    [10, [3, -1, -2, -7, 4], 3],
+  ])("tied pot after uneven folds is split once (rake %i%%)", (rakePercent, expectedNet, rake) => {
+    const stacks = [100, 100, 100, 100, 100];
+    const engine = new PokerEngine({
+      smallBlind: 1,
+      bigBlind: 2,
+      maxPlayers: 5,
+      rakePercent,
+      // Board As Ks Qs Js Ts: seats 0 and 4 both play the royal flush.
+      randomProvider: createRiggedRandom([
+        "2c",
+        "3d",
+        "4c",
+        "5d",
+        "6c",
+        "7d",
+        "8c",
+        "9d",
+        "2d",
+        "3c",
+        "4d",
+        "As",
+        "Ks",
+        "Qs",
+        "5c",
+        "Js",
+        "6d",
+        "Ts",
+      ]),
+    });
+    stacks.forEach((stack, seat) => engine.sit(seat, `p${seat}`, `Player${seat}`, stack));
+    engine.deal();
+
+    const actions: Array<[number, ActionType, number?]> = [
+      [3, ActionType.CALL],
+      [4, ActionType.RAISE, 4],
+      [0, ActionType.CALL],
+      [1, ActionType.FOLD],
+      [2, ActionType.FOLD],
+      [3, ActionType.CALL],
+      [3, ActionType.BET, 3],
+      [4, ActionType.RAISE, 6],
+      [0, ActionType.CALL],
+      [3, ActionType.FOLD],
+      [4, ActionType.CHECK],
+      [0, ActionType.CHECK],
+      [4, ActionType.CHECK],
+      [0, ActionType.CHECK],
+    ];
+    for (const [seat, type, amount] of actions) {
+      engine.act({
+        type,
+        playerId: `p${seat}`,
+        ...(amount === undefined ? {} : { amount }),
+      } as never);
+    }
+
+    expect(engine.state.board).toEqual(["As", "Ks", "Qs", "Js", "Ts"]);
+    expect(engine.state.winners?.map((winner) => winner.seat).sort()).toEqual([0, 4]);
+    expect(engine.state.rakeThisHand).toBe(rake);
+    expect(stacks.map((stack, seat) => engine.state.players[seat]!.stack - stack)).toEqual(
+      expectedNet
+    );
   });
 });
